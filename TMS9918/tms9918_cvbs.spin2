@@ -97,20 +97,20 @@ DAT             orgh
 
 tms_palette     long    $00_00_00_00
                 long    $00_00_00_00
-                long    $20_C0_20_00
-                long    $60_E0_60_00
-                long    $20_20_E0_00
-                long    $40_60_E0_00
-                long    $A0_20_20_00
-                long    $40_C0_E0_00
-                long    $E0_20_20_00
-                long    $E0_60_60_00
-                long    $C0_C0_20_00
-                long    $C0_C0_80_00
-                long    $20_80_20_00
-                long    $C0_40_A0_00
-                long    $A0_A0_A0_00
-                long    $E0_E0_E0_00
+                long    $66_CC_66_00
+                long    $88_EE_88_00
+                long    $44_44_DD_00
+                long    $77_77_FF_00
+                long    $BB_55_55_00
+                long    $77_DD_DD_00
+                long    $DD_66_66_00
+                long    $FF_77_77_00
+                long    $CC_CC_55_00
+                long    $EE_EE_88_00
+                long    $55_AA_55_00
+                long    $BB_55_BB_00
+                long    $CC_CC_CC_00
+                long    $EE_EE_EE_00
 
 DAT             org
 '
@@ -433,6 +433,15 @@ draw_sprite
     if_nz       mergew  sprt
     if_z        shl     sprt, #16
 
+                cmps    x, #0       wc
+    if_c        abs     x
+    if_c        add     ptra, x
+    if_c        sub     ecnt, x
+    if_c        cmps    x, #32      wz
+    if_c_and_z  mov     sprt, #0
+    if_c_and_nz shl     sprt, x
+    if_c        mov     x, #0
+
                 mov     cbuf, sprt
                 mov     cbuf+1, cbuf
 
@@ -456,15 +465,6 @@ draw_sprite
 .c1 if_z        test    0-0, cbuf+1 wz          ' |
                 or      0-0, cbuf+1             ' |
     if_nz       or      stat, #%0010_0000       ' update collision flag
-
-                cmps    x, #0       wc
-    if_c        abs     x
-    if_c        add     ptra, x
-    if_c        sub     ecnt, x
-    if_c        cmps    x, #32      wz
-    if_c_and_z  mov     sprt, #0
-    if_c_and_nz shl     sprt, x
-    if_c        mov     x, #0
 
                 rev     sprt
 
