@@ -80,50 +80,96 @@ cog_6502
 ' Instructions
 '
 
-i_adc_abs       rdbyte  t2, _PC             ' ----- 0
-                incmod  _PC, ram_wrap   wc  '       0
-        if_c    add     _PC, ram_addr       '       0
-                rdbyte  t1, _PC             '       0
-                setbyte t2, t1, #1          '       0
+i_adc_abs       call    #_fetch_abs
+                mov     t2, t1
+                jmp     #_adc
 
-i_adc_zpg       rdbyte  t2, _PC             ' --- 0 1
-                add     t2, ram_addr        '     0 0
-                rdbyte  t2, t2              '     0 0
+i_adc_abs_x     call    #_fetch_abs_x
+                mov     t2, t1
+                jmp     #_adc
 
-i_adc_imm       rdbyte  t2, _PC             ' 0 1 1
-                incmod  _PC, ram_wrap   wc  ' 0 0 0
-        if_c    add     _PC, ram_addr       ' 0 0 0
+i_adc_abs_y     call    #_fetch_abs_y
+                mov     t2, t1
+                jmp     #_adc
 
-                getbyte t1, _A, #0          ' 0 0 0
-                testb   _P, #0           wc ' 0 0 0
+i_adc_ind_x     call    #_fetch_ind_x
+                mov     t2, t1
+                jmp     #_adc
 
-                xor     t2, #$FF            '        SBC 00_00000
-                addx    t1, t2              '        ADC 01_00000
+i_adc_ind_y     call    #_fetch_ind_y
+                mov     t2, t1
+                jmp     #_adc
 
-                xor     t2, _A              ' t2 = A ^ operand
+i_adc_zpg       call    #_fetch_zpg
+                mov     t2, t1
+                jmp     #_adc
+
+i_adc_zpg_x     call    #_fetch_zpg_x
+                mov     t2, t1
+                jmp     #_adc
+
+i_adc_imm       rdbyte  t2, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                jmp     #_adc
+
+i_sbc_abs       call    #_fetch_abs
+                mov     t2, t1
+                jmp     #_sbc
+
+i_sbc_zpg       call    #_fetch_zpg
+                mov     t2, t1
+                jmp     #_sbc
+
+i_sbc_imm       rdbyte  t2, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                jmp     #_sbc
+
+_sbc            xor     t2, #$FF
+_adc            getbyte t1, _A, #0
+                testb   _P, #0          wc
+
+                addx    t1, t2
+
+_adc_flags      xor     t2, _A              ' t2 = A ^ operand
                 xor     t2, #$FF
                 xor     _A, t1              ' _A = A ^ sum
                 and     t2, _A              ' t2 = (A ^ operand) & (A ^ sum)
-                testb   t2, #7           wz
+                testb   t2, #7          wz
                 bitz    _P, #REGP_V
 
-                test    t1, #$100        wz ' affects C
+                test    t1, #$100       wz  ' affects C
                 bitnz   _P, #REGP_C         ' |
 
                 getbyte _A, t1, #0
                 jmp     #_flags
 
-i_bit_abs       rdbyte  t2, _PC             ' - 0
-                incmod  _PC, ram_wrap   wc  '   0
-        if_c    add     _PC, ram_addr       '   0
-                rdbyte  t1, _PC             '   0
-                setbyte t2, t1, #1          '   0
+i_asl           getbyte t1, _A, #0
+                call    #_asl_t1
+                getbyte _A, t1, #0
+                jmp     #_flags
 
-i_bit_zpg       rdbyte  t2, _PC             ' 0 1
-                add     t2, ram_addr        ' 0 0
-                rdbyte  t1, t2              ' 0 0
+i_asl_abs       call    #_fetch_abs
+                call    #_asl_t1
+                wrbyte  t1, t2
+                jmp     #_flags
 
-                test    _A, t1          wz
+i_asl_zpg       call    #_fetch_zpg
+                call    #_asl_t1
+                wrbyte  t1, t2
+                jmp     #_flags
+
+_asl_t1         testb   t1, #7          wz
+                shl     t1, #1
+        _ret_   bitz    _P, #REGP_C
+
+i_bit_abs       call    #_fetch_abs
+                jmp     #_bit
+
+i_bit_zpg       call    #_fetch_zpg
+
+_bit            test    _A, t1          wz
                 bitz    _P, #REGP_Z
                 and     t1, #%11000000
                 and     _P, #%00111111
@@ -165,9 +211,6 @@ i_jsr           rdbyte  t4, _PC
                 mov     _PC, t4
         _ret_   add     _PC, ram_addr
 
-fetch_zpg_t2    rdbyte  t2, _PC             ' --- 0 1
-                add     t2, ram_addr        '     0 0
-
 i_ld_abs        rdbyte  t2, _PC             ' ----- 0
                 incmod  _PC, ram_wrap   wc  '       0
         if_c    add     _PC, ram_addr       '       0
@@ -186,26 +229,90 @@ i_ld_imm        rdbyte  t1, _PC             ' 0 0 1 1
                 mov     _Y, t1              ' Y------
                 jmp     #_flags
 
-i_log_abs       rdbyte  t2, _PC             ' -- 0
-                incmod  _PC, ram_wrap   wc  '    0
-        if_c    add     _PC, ram_addr       '    0
-                rdbyte  t1, _PC             '    0
-                setbyte t2, t1, #1          '    0
+i_and_abs       call    #_fetch_abs
+                jmp     #_and
 
-i_log_zpg       rdbyte  t2, _PC             ' - 0 1
-                add     t2, ram_addr        '   0 0
-                rdbyte  t1, t2              '   0 0
+i_and_abs_x     call    #_fetch_abs_x
+                jmp     #_and
 
-i_log_imm       rdbyte  t1, _PC             ' 0 1 1
-                incmod  _PC, ram_wrap   wc  ' 0 0 0
-        if_c    add     _PC, ram_addr       ' 0 0 0
+i_and_abs_y     call    #_fetch_abs_y
+                jmp     #_and
 
-                and     t1, _A              ' 110 AND
-                or      t1, _A              ' 101 ORA
-                xor     t1, _A              ' 011 EOR
+i_and_zpg       call    #_fetch_zpg
+                jmp     #_and
 
+i_and_zpg_x     call    #_fetch_zpg_x
+                jmp     #_and
+
+_and            and     t1, _A
                 getbyte _A, t1, #0
                 jmp     #_flags
+
+i_ora_abs       call    #_fetch_abs
+                jmp     #_ora
+
+i_ora_abs_x     call    #_fetch_abs_x
+                jmp     #_ora
+
+i_ora_abs_y     call    #_fetch_abs_y
+                jmp     #_ora
+
+i_ora_zpg       call    #_fetch_zpg
+                jmp     #_ora
+
+i_ora_zpg_x     call    #_fetch_zpg_x
+                jmp     #_ora
+
+_ora            or      t1, _A
+                getbyte _A, t1, #0
+                jmp     #_flags
+
+i_eor_abs       call    #_fetch_abs
+                jmp     #_eor
+
+i_eor_abs_x     call    #_fetch_abs_x
+                jmp     #_eor
+
+i_eor_abs_y     call    #_fetch_abs_y
+                jmp     #_eor
+
+i_eor_zpg       call    #_fetch_zpg
+                jmp     #_eor
+
+i_eor_zpg_x     call    #_fetch_zpg_x
+                jmp     #_eor
+
+_eor            xor     t1, _A
+                getbyte _A, t1, #0
+                jmp     #_flags
+
+i_log_imm       rdbyte  t1, _PC             ' 0
+                incmod  _PC, ram_wrap   wc  ' 0
+        if_c    add     _PC, ram_addr       ' 0
+                and     t1, _A              ' AND
+                or      t1, _A              ' ORA
+                xor     t1, _A              ' EOR
+                getbyte _A, t1, #0
+                jmp     #_flags
+
+i_lsr           getbyte t1, _A, #0
+                call    #_lsr_t1
+                getbyte _A, t1, #0
+                jmp     #_flags
+
+i_lsr_abs       call    #_fetch_abs
+                call    #_lsr_t1
+                wrbyte  t1, t2
+                jmp     #_flags
+
+i_lsr_zpg       call    #_fetch_zpg
+                call    #_lsr_t1
+                wrbyte  t1, t2
+                jmp     #_flags
+
+_lsr_t1         testb   t1, #0          wz
+                shr     t1, #1
+        _ret_   bitz    _P, #REGP_C
 
 i_nop           ret
 
@@ -280,6 +387,83 @@ _pop_t1         incmod  _S, #$FF
                 add     t2, ram_addr
         _ret_   rdbyte  t1, t2
 
+_fetch_abs      rdbyte  t2, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                rdbyte  t1, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                setbyte t2, t1, #1
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
+_fetch_abs_x    rdbyte  t2, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                rdbyte  t1, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                setbyte t2, t1, #1
+                add     t2, _X
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
+_fetch_abs_y    rdbyte  t2, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                rdbyte  t1, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                setbyte t2, t1, #1
+                add     t2, _Y
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
+_fetch_zpg      rdbyte  t2, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
+_fetch_zpg_x    rdbyte  t2, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                add     t2, _X
+                and     t2, #$FF
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
+_fetch_ind_x    rdbyte  t3, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                add     t3, _X
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t2, t4
+                add     t3, #1
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t1, t4
+                setbyte t2, t1, #1
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
+_fetch_ind_y    rdbyte  t3, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t2, t4
+                add     t3, #1
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t1, t4
+                setbyte t2, t1, #1
+                add     t2, _Y
+                and     t2, ##$FFFF
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
 '
 '
 ' Initialized
@@ -330,15 +514,15 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 02
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 03
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 04
-                long  i_log_zpg   |            %101_001_000 << 10 | 3 << 28 ' 05 ORA nn
+                long  i_ora_zpg   |                      %0 << 10 | 3 << 28 ' 05 ORA nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 06
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 07
                 long  i_push      |                     %01 << 10 | 3 << 28 ' 08 PHP
                 long  i_log_imm   |                %101_000 << 10 | 2 << 28 ' 09 ORA #nn
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 0A
+                long  i_asl       |                      %0 << 10 | 2 << 28 ' 0A ASL
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 0B
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 0C
-                long  i_log_abs   |      %101_001_001_00000 << 10 | 4 << 28 ' 0D ORA nnnn
+                long  i_ora_abs   |                      %0 << 10 | 4 << 28 ' 0D ORA nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 0E
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 0F
 
@@ -363,16 +547,16 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 21
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 22
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 23
-                long  i_bit_zpg   |                    %000 << 10 | 3 << 28 ' 24 BIT nn
-                long  i_log_zpg   |            %110_001_000 << 10 | 3 << 28 ' 25 AND nn
+                long  i_bit_zpg   |                      %0 << 10 | 3 << 28 ' 24 BIT nn
+                long  i_and_zpg   |                      %0 << 10 | 3 << 28 ' 25 AND nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 26
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 27
                 long  i_plp       |                      %0 << 10 | 4 << 28 ' 28 PLP
                 long  i_log_imm   |                %110_000 << 10 | 2 << 28 ' 29 AND #nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2A
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2B
-                long  i_bit_abs   |              %001_00000 << 10 | 4 << 28 ' 2C BIT nnnn
-                long  i_log_abs   |      %110_001_001_00000 << 10 | 4 << 28 ' 2D AND nnnn
+                long  i_bit_abs   |                      %0 << 10 | 4 << 28 ' 2C BIT nnnn
+                long  i_and_abs   |                      %0 << 10 | 4 << 28 ' 2D AND nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2E
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2F
 
@@ -385,11 +569,11 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 36
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 37
                 long  i_sec       |                      %0 << 10 | 2 << 28 ' 38 SEC
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 39
+                long  i_and_abs_y |                      %0 << 10 | 4 << 28 ' 39 AND $nnnn,Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 3A
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 3B
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 3C
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 3D
+                long  i_and_abs_x |                      %0 << 10 | 4 << 28 ' 3D AND $nnnn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 3E
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 3F
 
@@ -398,15 +582,15 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 42
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 43
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 44
-                long  i_log_zpg   |            %011_001_000 << 10 | 3 << 28 ' 45 EOR nn
+                long  i_eor_zpg   |                      %0 << 10 | 3 << 28 ' 45 EOR nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 46
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 47
                 long  i_push      |                     %10 << 10 | 3 << 28 ' 48 PHA
                 long  i_log_imm   |                %011_000 << 10 | 2 << 28 ' 49 EOR #nn
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 4A
+                long  i_lsr       |                      %0 << 10 | 2 << 28 ' 4A LSR
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 4B
                 long  i_jmp       |                      %0 << 10 | 3 << 28 ' 4C JMP nnnn
-                long  i_log_abs   |      %011_001_001_00000 << 10 | 4 << 28 ' 4D EOR nnnn
+                long  i_eor_abs   |                      %0 << 10 | 4 << 28 ' 4D EOR nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 4E
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 4F
 
@@ -428,36 +612,36 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 5F
 
                 long  i_rts       |                      %0 << 10 | 6 << 28 ' 60 RTS
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 61
+                long  i_adc_ind_x |                      %0 << 10 | 6 << 28 ' 61 ADC ($nn,X)
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 62
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 63
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 64
-                long  i_adc_zpg   |           %01_00000_000 << 10 | 3 << 28 ' 65 ADC #$nn
+                long  i_adc_zpg   |                      %0 << 10 | 3 << 28 ' 65 ADC #$nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 66
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 67
                 long  i_pla       |                      %0 << 10 | 4 << 28 ' 68 PLA
-                long  i_adc_imm   |               %01_00000 << 10 | 2 << 28 ' 69 ADC #$nn
+                long  i_adc_imm   |                      %0 << 10 | 2 << 28 ' 69 ADC #$nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 6A
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 6B
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 6C
-                long  i_adc_abs   |     %01_00000_001_00000 << 10 | 4 << 28 ' 6D ADC $nnnn
+                long  i_adc_abs   |                      %0 << 10 | 4 << 28 ' 6D ADC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 6E
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 6F
 
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 70
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 71
+                long  i_adc_ind_y |                      %0 << 10 | 5 << 28 ' 71 ADC ($nn),Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 72
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 73
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 74
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 75
+                long  i_adc_zpg_x |                      %0 << 10 | 4 << 28 ' 75 ADC $nn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 76
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 77
                 long  i_sei       |                      %0 << 10 | 2 << 28 ' 78 SEI
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 79
+                long  i_adc_abs_y |                      %0 << 10 | 4 << 28 ' 79 AND $nnnn,Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 7A
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 7B
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 7C
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 7D
+                long  i_adc_abs_x |                      %0 << 10 | 4 << 28 ' 7D ADC $nnnn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 7E
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 7F
 
@@ -568,15 +752,15 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E2
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E3
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E4
-                long  i_adc_zpg   |           %00_00000_000 << 10 | 3 << 28 ' E5 SBC #$nn
+                long  i_sbc_zpg   |                      %0 << 10 | 3 << 28 ' E5 SBC #$nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E6
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E7
                 long  i_inde_xy   |               %10_10_10 << 10 | 2 << 28 ' E8 INX
-                long  i_adc_imm   |               %00_00000 << 10 | 2 << 28 ' E9 SBC #$nn
+                long  i_sbc_imm   |                      %0 << 10 | 2 << 28 ' E9 SBC #$nn
                 long  i_nop       |                      %0 << 10 | 2 << 28 ' EA NOP
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' EB
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' EC
-                long  i_adc_abs   |     %00_00000_001_00000 << 10 | 4 << 28 ' 6D SBC $nnnn
+                long  i_sbc_abs   |                      %0 << 10 | 4 << 28 ' 6D SBC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' EE
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' EF
 

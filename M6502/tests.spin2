@@ -26,14 +26,204 @@ PUB main()
     ser.Start(115_200)
     waitms(100)
 
-    test_ld_abs()
-    test_ld_imm()
-    test_adc()
-    test_sbc()
-    test_push_pop()
+    'test_ld_imm()
+    'test_ld_zpg()
+    'test_ld_abs()
+    'test_and()
+
+    'test_adc()
+    'test_sbc()
+    'test_adc_abs()
+    'test_sbc_abs()
+
+    'test_push_pop()
+
+    test_adc_abs()
+    test_adc_zpg()
+    test_adc_imm()
+    test_adc_abs_x()
+    test_adc_abs_y()
+    test_adc_ind_x()
+    test_adc_ind_y()
+    test_adc_zpg_x()
 
     ser.str(string(13, 10, "done!", 13, 10))
 
+PUB test_adc_abs() | addr
+
+    ser.str(string(13, 10, "test_adc_abs", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke($1020, $04)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $6D)   ' ADC $02
+    cpu.poke(addr++, $20)
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($05, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc_zpg() | addr
+
+    ser.str(string(13, 10, "test_adc_zpg", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke($02, $03)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $65)   ' ADC $02
+    cpu.poke(addr++, $02)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($04, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc_imm() | addr
+
+    ser.str(string(13, 10, "test_adc_imm", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $69)   ' ADC #$02
+    cpu.poke(addr++, $02)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($03, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc_abs_x() | addr
+
+    ser.str(string(13, 10, "test_adc_abs_x", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke($1035, $05)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $A2)   ' LDX #$35
+    cpu.poke(addr++, $35)
+    cpu.poke(addr++, $7D)   ' ADC $1000,X
+    cpu.poke(addr++, $00)
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($06, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc_abs_y() | addr
+
+    ser.str(string(13, 10, "test_adc_abs_y", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke($1045, $06)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $A0)   ' LDY #$45
+    cpu.poke(addr++, $45)
+    cpu.poke(addr++, $79)   ' ADC $1000,Y
+    cpu.poke(addr++, $00)
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($07, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc_ind_x() | addr
+
+    ser.str(string(13, 10, "test_adc_ind_x", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.pokew($50, $2010)
+    cpu.poke($2010, $08)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $A2)   ' LDX #$10
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $61)   ' ADC ($40,X)
+    cpu.poke(addr++, $40)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($09, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc_ind_y() | addr
+
+    ser.str(string(13, 10, "test_adc_ind_x", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.pokew($40, $2020)
+    cpu.poke($2030, $09)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $A0)   ' LDY #$10
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $71)   ' ADC ($40),Y
+    cpu.poke(addr++, $40)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($0A, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc_zpg_x() | addr
+
+    ser.str(string(13, 10, "test_adc_zpg", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke($15, $0A)
+
+    cpu.poke(addr++, $A9)   ' LDA #$01
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $A2)   ' LDX #$05
+    cpu.poke(addr++, $05)
+    cpu.poke(addr++, $75)   ' ADC $10,X
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($0B, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+
+{
 PUB test_ld_imm() | addr
 
     ser.str(string(13, 10, "test_ld_imm", 13, 10))
@@ -53,6 +243,31 @@ PUB test_ld_imm() | addr
     assertEquals($1A, REG_A)
     assertEquals($2B, REG_X)
     assertEquals($3C, REG_Y)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_ld_zpg() | addr
+
+    ser.str(string(13, 10, "test_ld_zpg", 13, 10))
+
+    cpu.poke($11, $21)
+    cpu.poke($12, $22)
+    cpu.poke($13, $23)
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+    cpu.poke(addr++, $A5)   ' LDA $11
+    cpu.poke(addr++, $11)
+    cpu.poke(addr++, $A6)   ' LDX $12
+    cpu.poke(addr++, $12)
+    cpu.poke(addr++, $A4)   ' LDY $13
+    cpu.poke(addr++, $13)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($21, REG_A)
+    assertEquals($22, REG_X)
+    assertEquals($23, REG_Y)
     ser.str(string("Ok", 13, 10))
 
 PUB test_ld_abs() | addr
@@ -125,6 +340,72 @@ PUB test_sbc() | addr
     assertEquals($FE, REG_A)
     ser.str(string("Ok", 13, 10))
 
+PUB test_adc_abs() | addr
+
+    ser.str(string(13, 10, "test_adc_abs", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke($1020, $01)
+    cpu.poke($1021, $7F)
+    cpu.poke($1022, $80)
+
+    cpu.poke(addr++, $A9)   ' LDA #$00
+    cpu.poke(addr++, $00)
+
+    cpu.poke(addr++, $6D)   ' ADC $1020
+    cpu.poke(addr++, $20)
+    cpu.poke(addr++, $10)
+
+    cpu.poke(addr++, $6D)   ' ADC $1021
+    cpu.poke(addr++, $21)
+    cpu.poke(addr++, $10)
+
+    cpu.poke(addr++, $6D)   ' ADC $1022
+    cpu.poke(addr++, $22)
+    cpu.poke(addr++, $10)
+
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($00, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_sbc_abs() | addr
+
+    ser.str(string(13, 10, "test_sbc_abs", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.pokew($1020, $01)
+    cpu.pokew($1021, $7F)
+    cpu.pokew($1022, $80)
+
+    cpu.poke(addr++, $A9)   ' LDA #$00
+    cpu.poke(addr++, $00)
+
+    cpu.poke(addr++, $ED)   ' SBC $1020
+    cpu.poke(addr++, $20)
+    cpu.poke(addr++, $10)
+
+    cpu.poke(addr++, $ED)   ' SBC $1021
+    cpu.poke(addr++, $21)
+    cpu.poke(addr++, $10)
+
+    cpu.poke(addr++, $ED)   ' SBC $1022
+    cpu.poke(addr++, $22)
+    cpu.poke(addr++, $10)
+
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($FE, REG_A)
+    ser.str(string("Ok", 13, 10))
+
 PUB test_push_pop() | addr
 
     ser.str(string(13, 10, "test_push_pop", 13, 10))
@@ -152,6 +433,25 @@ PUB test_push_pop() | addr
     assertEquals($22, cpu.peek($100 + $FF))
     assertEquals($1A, cpu.peek($100 + $FE))
     ser.str(string("Ok", 13, 10))
+
+PUB test_and() | addr
+
+    ser.str(string(13, 10, "test_and"))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+
+    cpu.poke(addr++, $A9) ' LDA #$9F
+    cpu.poke(addr++, $9F)
+    cpu.poke(addr++, $29) ' AND #$3C
+    cpu.poke(addr++, $3C)
+    cpu.poke(addr++, $FF) ' HALT
+
+    run()
+
+    assertEquals($1C, REG_A)
+    ser.str(string("Ok", 13, 10))
+}
 
 PRI run() | cog
 
@@ -199,14 +499,22 @@ PRI disassemble()
     ser.str(string("    "))
     case cpu.peek(REG_PC)
 
-        $6D: ser.fstr2(string("ADC $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $65: ser.fstr1(string("ADC $%2.2x"), cpu.peek(REG_PC+1))
-        $69: ser.fstr1(string("ADC #$%2.2x"), cpu.peek(REG_PC+1))
-        $7D: ser.fstr2(string("ADC $%2.2x%2.2x,X"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $79: ser.fstr2(string("ADC $%2.2x%2.2x,Y"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $61: ser.fstr1(string("ADC ($%2.2x,X)"), cpu.peek(REG_PC+1))
-        $71: ser.fstr1(string("ADC ($%2.2x),Y"), cpu.peek(REG_PC+1))
-        $75: ser.fstr1(string("ADC $%2.2x,X"), cpu.peek(REG_PC+1))
+        $6D: dump(REG_PC, 3)
+             ser.fstr2(string("ADC $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $65: dump(REG_PC, 2)
+             ser.fstr1(string("ADC $%2.2x"), cpu.peek(REG_PC+1))
+        $69: dump(REG_PC, 2)
+             ser.fstr1(string("ADC #$%2.2x"), cpu.peek(REG_PC+1))
+        $7D: dump(REG_PC, 3)
+             ser.fstr2(string("ADC $%2.2x%2.2x,X"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $79: dump(REG_PC, 3)
+             ser.fstr2(string("ADC $%2.2x%2.2x,Y"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $61: dump(REG_PC, 2)
+             ser.fstr1(string("ADC ($%2.2x,X)"), cpu.peek(REG_PC+1))
+        $71: dump(REG_PC, 2)
+             ser.fstr1(string("ADC ($%2.2x),Y"), cpu.peek(REG_PC+1))
+        $75: dump(REG_PC, 2)
+             ser.fstr1(string("ADC $%2.2x,X"), cpu.peek(REG_PC+1))
 
         $2D: ser.fstr2(string("AND $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
         $25: ser.fstr1(string("AND $%2.2x"), cpu.peek(REG_PC+1))
@@ -297,26 +605,44 @@ PRI disassemble()
 
         $20: ser.fstr2(string("JSR #$%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
 
-        $AD: ser.fstr2(string("LDA $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $A5: ser.fstr1(string("LDA $%2.2x"), cpu.peek(REG_PC+1))
-        $A9: ser.fstr1(string("LDA #$%2.2x"), cpu.peek(REG_PC+1))
-        $BD: ser.fstr2(string("LDA $%2.2x%2.2x,X"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $B9: ser.fstr2(string("LDA $%2.2x%2.2x,Y"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $A1: ser.fstr1(string("LDA ($%2.2x,X)"), cpu.peek(REG_PC+1))
-        $B1: ser.fstr1(string("LDA ($%2.2x),Y"), cpu.peek(REG_PC+1))
-        $B5: ser.fstr1(string("LDA $%2.2x,X"), cpu.peek(REG_PC+1))
+        $AD: dump(REG_PC, 3)
+             ser.fstr2(string("LDA $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $A5: dump(REG_PC, 2)
+             ser.fstr1(string("LDA $%2.2x"), cpu.peek(REG_PC+1))
+        $A9: dump(REG_PC, 2)
+             ser.fstr1(string("LDA #$%2.2x"), cpu.peek(REG_PC+1))
+        $BD: dump(REG_PC, 3)
+             ser.fstr2(string("LDA $%2.2x%2.2x,X"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $B9: dump(REG_PC, 3)
+             ser.fstr2(string("LDA $%2.2x%2.2x,Y"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $A1: dump(REG_PC, 2)
+             ser.fstr1(string("LDA ($%2.2x,X)"), cpu.peek(REG_PC+1))
+        $B1: dump(REG_PC, 2)
+             ser.fstr1(string("LDA ($%2.2x),Y"), cpu.peek(REG_PC+1))
+        $B5: dump(REG_PC, 2)
+             ser.fstr1(string("LDA $%2.2x,X"), cpu.peek(REG_PC+1))
 
-        $AE: ser.fstr2(string("LDX $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $A6: ser.fstr1(string("LDX $%2.2x"), cpu.peek(REG_PC+1))
-        $A2: ser.fstr1(string("LDX #$%2.2x"), cpu.peek(REG_PC+1))
-        $BE: ser.fstr2(string("LDX $%2.2x%2.2x,Y"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $B6: ser.fstr1(string("LDX $%2.2x,Y"), cpu.peek(REG_PC+1))
+        $AE: dump(REG_PC, 3)
+             ser.fstr2(string("LDX $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $A6: dump(REG_PC, 2)
+             ser.fstr1(string("LDX $%2.2x"), cpu.peek(REG_PC+1))
+        $A2: dump(REG_PC, 2)
+             ser.fstr1(string("LDX #$%2.2x"), cpu.peek(REG_PC+1))
+        $BE: dump(REG_PC, 3)
+             ser.fstr2(string("LDX $%2.2x%2.2x,Y"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $B6: dump(REG_PC, 2)
+             ser.fstr1(string("LDX $%2.2x,Y"), cpu.peek(REG_PC+1))
 
-        $AC: ser.fstr2(string("LDY $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $A4: ser.fstr1(string("LDY $%2.2x"), cpu.peek(REG_PC+1))
-        $A0: ser.fstr1(string("LDY #$%2.2x"), cpu.peek(REG_PC+1))
-        $BC: ser.fstr2(string("LDY $%2.2x%2.2x,X"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
-        $B4: ser.fstr1(string("LDY $%2.2x,X"), cpu.peek(REG_PC+1))
+        $AC: dump(REG_PC, 3)
+             ser.fstr2(string("LDY $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $A4: dump(REG_PC, 2)
+             ser.fstr1(string("LDY $%2.2x"), cpu.peek(REG_PC+1))
+        $A0: dump(REG_PC, 2)
+             ser.fstr1(string("LDY #$%2.2x"), cpu.peek(REG_PC+1))
+        $BC: dump(REG_PC, 3)
+             ser.fstr2(string("LDY $%2.2x%2.2x,X"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $B4: dump(REG_PC, 2)
+             ser.fstr1(string("LDY $%2.2x,X"), cpu.peek(REG_PC+1))
 
         $4A: ser.fstr0(string("LSR"))
         $4E: ser.fstr2(string("LSR $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
@@ -391,8 +717,16 @@ PRI disassemble()
         $9A: ser.fstr0(string("TXS"))
         $98: ser.fstr0(string("TIA"))
 
-        other: ser.fstr3(string("$%2.2x $%2.2x $%2.2x"), cpu.peek(REG_PC), cpu.peek(REG_PC+1), cpu.peek(REG_PC+2))
+        other: dump(REG_PC, 3)
     ser.str(string(13, 10))
+
+PRI dump(addr, count)
+
+    repeat count
+        ser.fstr1(string("$%2.2x "), cpu.peek(addr++))
+    if count < 3
+        repeat 3 - count
+             ser.str(string("    "))
 
 PRI signed(n) : rc
 
