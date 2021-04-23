@@ -26,7 +26,11 @@ PUB main()
     ser.Start(115_200)
     waitms(100)
 
+    test_ld_abs()
     test_ld_imm()
+    test_adc()
+    test_sbc()
+    test_push_pop()
 
     ser.str(string(13, 10, "done!", 13, 10))
 
@@ -49,6 +53,104 @@ PUB test_ld_imm() | addr
     assertEquals($1A, REG_A)
     assertEquals($2B, REG_X)
     assertEquals($3C, REG_Y)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_ld_abs() | addr
+
+    ser.str(string(13, 10, "test_ld_abs", 13, 10))
+
+    cpu.poke($1011, $2A)
+    cpu.poke($1012, $2B)
+    cpu.poke($1013, $2C)
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+    cpu.poke(addr++, $AD)   ' LDA $1011
+    cpu.poke(addr++, $11)
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $AE)   ' LDX $1012
+    cpu.poke(addr++, $12)
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $AC)   ' LDY $1013
+    cpu.poke(addr++, $13)
+    cpu.poke(addr++, $10)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($2A, REG_A)
+    assertEquals($2B, REG_X)
+    assertEquals($2C, REG_Y)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_adc() | addr
+
+    ser.str(string(13, 10, "test_adc", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+    cpu.poke(addr++, $A9)   ' LDA #$1A
+    cpu.poke(addr++, $00)
+    cpu.poke(addr++, $69)   ' ADC #$1A
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $69)   ' ADC #$7F
+    cpu.poke(addr++, $7F)
+    cpu.poke(addr++, $69)   ' ADC #$1A
+    cpu.poke(addr++, $80)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($00, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_sbc() | addr
+
+    ser.str(string(13, 10, "test_sbc", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+    cpu.poke(addr++, $A9)   ' LDA #$1A
+    cpu.poke(addr++, $00)
+    cpu.poke(addr++, $E9)   ' SBC #$1A
+    cpu.poke(addr++, $01)
+    cpu.poke(addr++, $E9)   ' SBC #$7F
+    cpu.poke(addr++, $7F)
+    cpu.poke(addr++, $E9)   ' SBC #$1A
+    cpu.poke(addr++, $80)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($FE, REG_A)
+    ser.str(string("Ok", 13, 10))
+
+PUB test_push_pop() | addr
+
+    ser.str(string(13, 10, "test_push_pop", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+    cpu.poke(addr++, $A9)   ' LDA #$00
+    cpu.poke(addr++, $00)
+    cpu.poke(addr++, $08)   ' PHP
+    cpu.poke(addr++, $A9)   ' LDA #$1A
+    cpu.poke(addr++, $1A)
+    cpu.poke(addr++, $48)   ' PHA
+
+    cpu.poke(addr++, $A9)   ' LDA #$11
+    cpu.poke(addr++, $11)
+
+    cpu.poke(addr++, $68)   ' PLA
+    cpu.poke(addr++, $28)   ' PLP
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($1A, REG_A)
+    assertEquals($22, REG_P)
+    assertEquals($22, cpu.peek($100 + $FF))
+    assertEquals($1A, cpu.peek($100 + $FE))
     ser.str(string("Ok", 13, 10))
 
 PRI run() | cog
