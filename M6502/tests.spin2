@@ -1,0 +1,121 @@
+{
+    MOS6502 Emulator Tests
+    Written by Marco Maccaferri <macca@maccasoft.com>
+}
+
+CON
+    _CLKFREQ = 160_000_000
+
+VAR
+
+    long REG_A  ' 8-bit working registers
+    long REG_X
+    long REG_Y
+    long REG_S  ' 8-bit stack pointer
+    long REG_P  ' 8-bit flag register
+    long REG_PC ' 16-bit program counter
+    long CPU_T  ' cpu cycles
+
+OBJ
+
+    cpu : "m6502"
+    ser : "com.serial"
+
+PUB main()
+
+    ser.Start(115_200)
+    waitms(100)
+
+    test_ld_imm()
+
+    ser.str(string(13, 10, "done!", 13, 10))
+
+PUB test_ld_imm() | addr
+
+    ser.str(string(13, 10, "test_ld_imm", 13, 10))
+
+    addr := $0200
+    cpu.pokew($FFFC, addr)
+    cpu.poke(addr++, $A9)   ' LDA #$1A
+    cpu.poke(addr++, $1A)
+    cpu.poke(addr++, $A2)   ' LDX #$2B
+    cpu.poke(addr++, $2B)
+    cpu.poke(addr++, $A0)   ' LDY #$3C
+    cpu.poke(addr++, $3C)
+    cpu.poke(addr++, $FF)   ' HALT
+
+    run()
+
+    assertEquals($1A, REG_A)
+    assertEquals($2B, REG_X)
+    assertEquals($3C, REG_Y)
+    ser.str(string("Ok", 13, 10))
+
+PRI run() | cog
+
+    cog := cpu.start(@REG_A)
+    repeat while cogchk(cog)
+        if pollatn()
+            disassemble()
+            cogatn(1 << cog)
+        waitms(1)
+
+PRI assertEquals(expected, actual)
+
+    if expected <> actual
+        ser.fstr2(string("Assertion failed, expected=%2.2x, actual=%2.2x", 13, 10), expected, actual)
+        abort(0)
+
+PRI assertBinEquals(expected, actual)
+
+    if expected <> actual
+        ser.fstr2(string("Assertion failed, expected=%8.8b, actual=%8.8b", 13, 10), expected, actual)
+        abort(0)
+
+PRI disassemble()
+
+    ser.fstr1(string("PC: $%4.4x"), REG_PC)
+    ser.fstr1(string(" A: $%2.2x"), REG_A)
+    ser.fstr1(string(" X: $%2.2x"), REG_X)
+    ser.fstr1(string(" Y: $%2.2x"), REG_Y)
+    ser.fstr1(string(" S: $%2.2x"), REG_S)
+    ser.str(string(" P: "))
+    ser.tx((REG_P & $80) <> 0 ? "N" : "-")
+    ser.tx((REG_P & $40) <> 0 ? "V" : "-")
+    ser.tx((REG_P & $20) <> 0 ? "-" : "-")
+    ser.tx((REG_P & $10) <> 0 ? "B" : "-")
+    ser.tx((REG_P & $08) <> 0 ? "D" : "-")
+    ser.tx((REG_P & $04) <> 0 ? "I" : "-")
+    ser.tx((REG_P & $02) <> 0 ? "Z" : "-")
+    ser.tx((REG_P & $01) <> 0 ? "C" : "-")
+    ser.fstr1(string(" T: %d"), CPU_T)
+    ser.str(string(13, 10))
+
+    ser.str(string("    "))
+    case cpu.peek(REG_PC)
+        $20: ser.fstr2(string("JSR #$%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $25: ser.fstr1(string("AND $%2.2x"), cpu.peek(REG_PC+1))
+        $29: ser.fstr1(string("AND #$%2.2x"), cpu.peek(REG_PC+1))
+        $4C: ser.fstr2(string("JMP #$%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $60: ser.fstr0(string("RTS"))
+        $84: ser.fstr1(string("STY $%2.2x"), cpu.peek(REG_PC+1))
+        $85: ser.fstr1(string("STA $%2.2x"), cpu.peek(REG_PC+1))
+        $86: ser.fstr1(string("STX $%2.2x"), cpu.peek(REG_PC+1))
+        $88: ser.fstr0(string("DEY"))
+        $8C: ser.fstr2(string("STY $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $8D: ser.fstr2(string("STA $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $8E: ser.fstr2(string("STX $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $A0: ser.fstr1(string("LDY #$%2.2x"), cpu.peek(REG_PC+1))
+        $A2: ser.fstr1(string("LDX #$%2.2x"), cpu.peek(REG_PC+1))
+        $A4: ser.fstr1(string("LDY $%2.2x"), cpu.peek(REG_PC+1))
+        $A5: ser.fstr1(string("LDA $%2.2x"), cpu.peek(REG_PC+1))
+        $A6: ser.fstr1(string("LDX $%2.2x"), cpu.peek(REG_PC+1))
+        $A9: ser.fstr1(string("LDA #$%2.2x"), cpu.peek(REG_PC+1))
+        $AC: ser.fstr2(string("LDY $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $AD: ser.fstr2(string("LDA $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $AE: ser.fstr2(string("LDX $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+        $C8: ser.fstr0(string("INY"))
+        $CA: ser.fstr0(string("DEX"))
+        $E8: ser.fstr0(string("INX"))
+        other: ser.fstr3(string("$%2.2x $%2.2x $%2.2x"), cpu.peek(REG_PC), cpu.peek(REG_PC+1), cpu.peek(REG_PC+2))
+    ser.str(string(13, 10))
