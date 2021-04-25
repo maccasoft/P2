@@ -21,7 +21,7 @@ OBJ
     cpu : "m6502"
     ser : "com.serial"
 
-PUB main()
+PUB main() | cog, prevPC
 
     ser.start(115_200)
     ser.rx()
@@ -29,18 +29,244 @@ PUB main()
     cpu.pokew($FFFC, $200)
     cpu.start(@REG_A)
 
+    test_lda()
+    test_ldx()
+    test_ldy()
+
+    test_zpg_addressing()
+    test_abs_addressing()
+    test_abs_x_addressing()
+    test_abs_y_addressing()
+    test_ind_x_addressing()
+    test_ind_y_addressing()
+    test_zpg_x_addressing()
+
     test_adc()
     test_adc_dec()
     test_sbc()
     test_sbc_dec()
-    test_lda()
-    test_sta()
+
+    test_and()
+    test_ora()
+    test_eor()
+    test_bit()
+
+    test_asl()
     test_rol()
-    test_push()
+
+    test_pha()
+    test_php()
+
+    test_bcc()
+    test_bcs()
+    test_beq()
+    test_bne()
+    test_bmi()
+    test_bpl()
+    test_bvc()
+    test_bvs()
+
+    test_clear_flags()
+    test_set_flags()
+
+    test_jsr()
+    test_brk()
+
+    test_stx_all()
 
     ser.str(string("done!", 13, 10))
     repeat
         waitct(0)
+
+PUB test_lda()
+
+    ser.str(string("test_lda ... "))
+
+    REG_P := %00000000
+    REG_A := REG_X := REG_Y := $00
+    exec2($A9, $1A) ' LDA #$1A
+    if \assertEquals($1A, REG_A) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($A9, $00) ' LDA #$00
+    if \assertEquals($00, REG_A) or \assertBinEquals(%00000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($A9, $8A) ' LDA #$8A
+    if \assertEquals($8A, REG_A) or \assertBinEquals(%10000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_ldx()
+
+    ser.str(string("test_ldx ... "))
+
+    REG_P := %00000000
+    REG_A := REG_X := REG_Y := $00
+    exec2($A2, $1A) ' LDX #$1A
+    if \assertEquals($1A, REG_X) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($A2, $00) ' LDX #$00
+    if \assertEquals($00, REG_X) or \assertBinEquals(%00000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($A2, $8A) ' LDX #$8A
+    if \assertEquals($8A, REG_X) or \assertBinEquals(%10000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_ldy()
+
+    ser.str(string("test_ldy ... "))
+
+    REG_P := %00000000
+    REG_A := REG_X := REG_Y := $00
+    exec2($A0, $1A) ' LDY #$1A
+    if \assertEquals($1A, REG_Y) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($A0, $00) ' LDY #$00
+    if \assertEquals($00, REG_Y) or \assertBinEquals(%00000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($A0, $8A) ' LDY #$8A
+    if \assertEquals($8A, REG_Y) or \assertBinEquals(%10000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_zpg_addressing() | addr
+
+    ser.str(string("test_zpg_addressing ... "))
+
+    REG_A := $00
+    cpu.poke($14, $1A)
+
+    exec2($A5, $14) ' LDA $14
+    if \assertEquals($1A, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_abs_addressing() | addr
+
+    ser.str(string("test_abs_addressing ... "))
+
+    REG_A := $00
+    cpu.poke($2010, $1B)
+
+    exec3($AD, $10, $20) ' LDA $2010
+    if \assertEquals($1B, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_abs_x_addressing() | addr
+
+    ser.str(string("test_abs_x_addressing ... "))
+
+    REG_A := REG_Y := $00
+    REG_X := $05
+    cpu.poke($2010 + REG_X, $1C)
+
+    exec3($BD, $10, $20) ' LDA $2010,X
+    if \assertEquals($1C, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_abs_y_addressing() | addr
+
+    ser.str(string("test_abs_y_addressing ... "))
+
+    REG_A := REG_X := $00
+    REG_Y := $06
+    cpu.poke($2010 + REG_Y, $1D)
+
+    exec3($B9, $10, $20) ' LDA $2010,Y
+    if \assertEquals($1D, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_ind_x_addressing() | addr
+
+    ser.str(string("test_ind_x_addressing ... "))
+
+    REG_A := REG_Y := $00
+    REG_X := $15
+    cpu.pokew(REG_X + $10, $2080)
+    cpu.poke($2080, $1D)
+
+    exec2($A1, $10) ' LDA ($10,X)
+    if \assertEquals($1D, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_ind_y_addressing() | addr
+
+    ser.str(string("test_ind_y_addressing ... "))
+
+    REG_A := REG_X := $00
+    REG_Y := $16
+    cpu.pokew($20, $2090 - REG_Y)
+    cpu.poke($2090, $1E)
+
+    exec2($B1, $20) ' LDA ($20),Y
+    if \assertEquals($1E, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_zpg_x_addressing() | addr
+
+    ser.str(string("test_zpg_x_addressing ... "))
+
+    REG_A := REG_Y := $00
+    REG_X := $15
+    cpu.poke($20 + REG_X, $1F)
+
+    exec2($B5, $20) ' LDA $20,X
+    if \assertEquals($1F, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
 
 PUB test_adc()
 
@@ -65,54 +291,6 @@ PUB test_adc()
         disassemble()
         registers()
         abort(0)
-
-{
-    REG_P := $01
-    REG_A := $1F
-    exec2($69, $01) ' ADC #$01
-    if \assertEquals($21, REG_A)
-        disassemble()
-        registers()
-        abort(0)
-
-    REG_P := $00
-    REG_A := $10
-    cpu.poke($2010, $02)
-    exec3($6D, $10, $20) ' ADC $2010
-    if \assertEquals($12, REG_A)
-        disassemble()
-        registers()
-        abort(0)
-
-    REG_P := $00
-    REG_A := $10
-    cpu.poke($20, $03)
-    exec2($65, $20) ' ADC $20
-    if \assertEquals($13, REG_A)
-        disassemble()
-        registers()
-        abort(0)
-
-    REG_P := $00
-    REG_A := $10
-    REG_X := $05
-    cpu.poke($2010 + REG_X, $04)
-    exec3($7D, $10, $20) ' ADC $2010,X
-    if \assertEquals($14, REG_A)
-        disassemble()
-        registers()
-        abort(0)
-
-    REG_P := $00
-    REG_A := $10
-    REG_Y := $06
-    cpu.poke($2010 + REG_Y, $05)
-    exec3($79, $10, $20) ' ADC $2010,Y
-    if \assertEquals($15, REG_A)
-        disassemble()
-        registers()
-        abort(0)
-}
 
     ser.str(string("Ok", 13, 10))
 
@@ -194,27 +372,136 @@ PUB test_sbc_dec()
 
     ser.str(string("Ok", 13, 10))
 
-PUB test_lda()
+PUB test_and()
 
-    ser.str(string("test_lda ... "))
+    ser.str(string("test_and ... "))
 
-    REG_A := $00
-    exec2($A9, $01) ' LDA #$01
-    if \assertEquals($01, REG_A)
+    REG_P := $00
+    REG_A := %01010101
+    exec2($29, %01100110) ' AND
+    if \assertBinEquals(%01000100, REG_A) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_A := %11111111
+    exec2($29, %00000000) ' AND
+    if \assertBinEquals(%00000000, REG_A) or \assertBinEquals(%00000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_A := %11111111
+    exec2($29, %10000000) ' AND
+    if \assertBinEquals(%10000000, REG_A) or \assertBinEquals(%10000000, REG_P)
         disassemble()
         registers()
         abort(0)
 
     ser.str(string("Ok", 13, 10))
 
-PUB test_sta()
+PUB test_ora()
 
-    ser.str(string("test_sta ... "))
+    ser.str(string("test_ora ... "))
 
-    REG_A := $10
-    cpu.poke($1020, $01)
-    exec3($8D, $20, $10) ' STA #$1020
-    if \assertEquals(REG_A, cpu.peek($1020))
+    REG_P := $00
+    REG_A := %01010101
+    exec2($09, %01100110) ' ORA
+    if \assertBinEquals(%01110111, REG_A) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_A := %00000000
+    exec2($09, %00000000) ' ORA
+    if \assertBinEquals(%00000000, REG_A) or \assertBinEquals(%00000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_A := %00000000
+    exec2($09, %10000000) ' ORA
+    if \assertBinEquals(%10000000, REG_A) or \assertBinEquals(%10000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_eor()
+
+    ser.str(string("test_eor ... "))
+
+    REG_P := $00
+    REG_A :=   %01010101
+    exec2($49, %01100110) ' EOR
+    if \assertBinEquals(%0011_0011, REG_A) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_A :=   %10000000
+    exec2($49, %10000000) ' EOR
+    if \assertBinEquals(%00000000, REG_A) or \assertBinEquals(%00000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_A :=   %00000001
+    exec2($49, %10000001) ' EOR
+    if \assertBinEquals(%10000000, REG_A) or \assertBinEquals(%10000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bit()
+
+    ser.str(string("test_bit ... "))
+
+    REG_P := $00
+    REG_A := %11010101
+
+    cpu.poke($10, %00100110)
+    exec2($24, $10) ' BIT
+    if \assertBinEquals(%11010101, REG_A) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    cpu.poke($10, %00001010)
+    exec2($24, $10) ' BIT
+    if \assertBinEquals(%11010101, REG_A) or \assertBinEquals(%00000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    cpu.poke($10, %11001010)
+    exec2($24, $10) ' BIT
+    if \assertBinEquals(%11010101, REG_A) or \assertBinEquals(%11000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_asl()
+
+    ser.str(string("test_asl ... "))
+
+    REG_P := %00000000
+    REG_A := %10000010
+    exec1($0A) ' ASL
+    if \assertEquals(%00000100, REG_A) or \assertBinEquals(%00000001, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_P := %00000001
+    REG_A := %00000010
+    exec1($0A) ' ASL
+    if \assertEquals(%00000100, REG_A) or \assertBinEquals(%00000000, REG_P)
         disassemble()
         registers()
         abort(0)
@@ -225,33 +512,404 @@ PUB test_rol()
 
     ser.str(string("test_rol ... "))
 
-    REG_A := $83
+    REG_P := %00000000
+    REG_A := %10000010
     exec1($2A) ' ROL
-    if \assertEquals($06, REG_A)
+    if \assertEquals(%00000100, REG_A) or \assertBinEquals(%00000001, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_P := %00000001
+    REG_A := %00000010
+    exec1($2A) ' ROL
+    if \assertEquals(%00000101, REG_A) or \assertBinEquals(%00000000, REG_P)
         disassemble()
         registers()
         abort(0)
 
     ser.str(string("Ok", 13, 10))
 
-PUB test_push() | addr
+PUB test_pha() | addr
 
-    ser.str(string("test_push ... "))
+    ser.str(string("test_pha ... "))
 
     REG_A := $83
     REG_S := $FF
-    REG_PC := $200
     exec1($48) ' PHA
-    if \assertEquals(cpu.peek($1FF), REG_A)
+    if \assertEquals(cpu.peek($1FF), REG_A) or \assertEquals($FE, REG_S)
         disassemble()
         registers()
         abort(0)
 
-    REG_P := $11
+    REG_A := $00
+    exec1($68) ' PLA
+    if \assertEquals(cpu.peek($1FF), REG_A) or \assertEquals($FF, REG_S)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_php() | addr
+
+    ser.str(string("test_php ... "))
+
+    REG_P := $C1
     REG_S := $FF
-    REG_PC := $200
     exec1($08) ' PHP
-    if \assertEquals(cpu.peek($1FF), REG_P)
+    if \assertEquals(cpu.peek($1FF), REG_P) or \assertEquals($FE, REG_S)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_P := $00
+    exec1($28) ' PLP
+    if \assertEquals(cpu.peek($1FF) | %00110000, REG_P) or \assertEquals($FF, REG_S)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bcc() | addr
+
+    ser.str(string("test_bcc ... "))
+
+    REG_P := %00000000
+
+    REG_PC := $0200
+    cpu.exec2($90, $10) ' BCC
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($B0, $10) ' BCS
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bcs() | addr
+
+    ser.str(string("test_bcs ... "))
+
+    REG_P := %00000001
+
+    REG_PC := $0200
+    cpu.exec2($90, $10) ' BCC
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($B0, $10) ' BCS
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_beq() | addr
+
+    ser.str(string("test_beq ... "))
+
+    REG_P := %00000010
+
+    REG_PC := $0200
+    cpu.exec2($F0, $10) ' BEQ
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($D0, $10) ' BNE
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bne() | addr
+
+    ser.str(string("test_bne ... "))
+
+    REG_P := %00000000
+
+    REG_PC := $0200
+    cpu.exec2($F0, $10) ' BEQ
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($D0, $10) ' BNE
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bmi() | addr
+
+    ser.str(string("test_bmi ... "))
+
+    REG_P := %10000000
+
+    REG_PC := $0200
+    cpu.exec2($30, $10) ' BMI
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($10, $10) ' BPL
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bpl() | addr
+
+    ser.str(string("test_bpl ... "))
+
+    REG_P := %00000000
+
+    REG_PC := $0200
+    cpu.exec2($30, $10) ' BMI
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($10, $10) ' BPL
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bvc() | addr
+
+    ser.str(string("test_bvc ... "))
+
+    REG_P := %00000000
+
+    REG_PC := $0200
+    cpu.exec2($50, $10) ' BVC
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($70, $10) ' BVS
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_bvs() | addr
+
+    ser.str(string("test_bvs ... "))
+
+    REG_P := %01000000
+
+    REG_PC := $0200
+    cpu.exec2($50, $10) ' BVC
+    if \assertWordEquals($0202, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_PC := $0200
+    cpu.exec2($70, $10) ' BVS
+    if \assertWordEquals($0202 + $10, REG_PC)
+        REG_PC := $0200
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_clear_flags() | addr
+
+    ser.str(string("test_clear_flags ... "))
+
+    REG_P := %11111111
+    exec1($18) ' CLC
+    if \assertBinEquals(%11111110, REG_P)
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_P := %11111111
+    exec1($D8) ' CLD
+    if \assertBinEquals(%11110111, REG_P)
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_P := %11111111
+    exec1($58) ' CLI
+    if \assertBinEquals(%11111011, REG_P)
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_P := %11111111
+    exec1($B8) ' CLV
+    if \assertBinEquals(%10111111, REG_P)
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_set_flags() | addr
+
+    ser.str(string("test_set_flags ... "))
+
+    REG_P := %00000000
+    exec1($38) ' SEC
+    if \assertBinEquals(%00000001, REG_P)
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_P := %00000000
+    exec1($F8) ' SED
+    if \assertBinEquals(%00001000, REG_P)
+        registers()
+        disassemble()
+        abort(0)
+
+    REG_P := %00000000
+    exec1($78) ' SEI
+    if \assertBinEquals(%00000100, REG_P)
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_jsr() | addr
+
+    ser.str(string("test_jsr ... "))
+
+    REG_PC := $210
+    REG_S := $FF
+    cpu.exec3($20, $30, $40) ' JSR $4030
+    if \assertWordEquals($4030, REG_PC) or \assertWordEquals($0212, cpu.peekw($1FE)) or \assertEquals($FD, REG_S)
+        REG_PC := $0210
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("rts ... "))
+
+    cpu.exec1($60) ' RTS
+    if \assertWordEquals($213, REG_PC) or \assertEquals($FF, REG_S)
+        REG_PC := $4030
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_brk() | addr
+
+    ser.str(string("test_brk ... "))
+
+    REG_PC := $210
+    REG_S := $FF
+    REG_P := $81
+    cpu.pokew($FFFE, $1250)
+    cpu.exec1($00) ' BRK
+    if \assertWordEquals($1250, REG_PC) or \assertEquals($81 + $10, cpu.peek($1FD)) or \assertWordEquals(cpu.peekw($1FE), $0212) or \assertEquals($FC, REG_S)
+        REG_PC := $0210
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("rti ... "))
+
+    REG_P := $00
+    cpu.exec1($40) ' RTI
+    if \assertEquals($81 + $10, REG_P) or \assertWordEquals($0212, REG_PC) or \assertEquals($FF, REG_S)
+        REG_PC := $1250
+        registers()
+        disassemble()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_stx_all()
+
+    ser.str(string("test_stx ... "))
+
+    REG_Y := $05
+    REG_X := $1C
+    cpu.poke($1020, $00)
+
+    exec3($8E, $20, $10) ' STX $1020
+    if \assertEquals(REG_X, cpu.peek($1020))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("zpg ... "))
+
+    REG_Y := $05
+    REG_X := $1C
+    cpu.poke($10, $00)
+
+    exec2($86, $10) ' STX $10
+    if \assertEquals(REG_X, cpu.peek($10))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("zpg,y ... "))
+
+    REG_Y := $05
+    REG_X := $1C
+    cpu.poke($10 + REG_Y, $00)
+
+    exec2($96, $10) ' STX $10,Y
+    if \assertEquals(REG_X, cpu.peek($10 + REG_Y))
         disassemble()
         registers()
         abort(0)
@@ -275,696 +933,6 @@ PRI exec3(b1, b2, b3) | pc
     pc := REG_PC
     cpu.exec3(b1, b2, b3)
     REG_PC := pc
-
-{
-    test_and()
-
-    test_adc()
-    test_sbc()
-    test_adc_abs()
-    test_sbc_abs()
-
-    ' OK ----
-    test_adc_abs()
-    test_adc_zpg()
-    test_adc_imm()
-    test_adc_abs_x()
-    test_adc_abs_y()
-    test_adc_ind_x()
-    test_adc_ind_y()
-    test_adc_zpg_x()
-
-    test_asl()
-    test_asl_abs()
-
-    test_bcc()
-
-    test_cmp()
-    test_cmp_zpg()
-    test_cpx()
-    test_cpy()
-
-    test_ld_imm()
-    test_ld_zpg()
-    test_ld_abs()
-
-    test_push_pop()
-}
-
-{
-PUB test_cmp() | addr, cog
-
-    ser.str(string(13, 10, "test_cmp", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $C9)   ' CMP #$40
-    cpu.poke(addr++, $40)
-    cpu.poke(addr++, $C9)   ' CMP #$10
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $C9)   ' CMP #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $C9)   ' CMP #$A0
-    cpu.poke(addr++, $A0)
-    cpu.poke(addr++, $FF)   ' HALT
-
-
-    cog := cpu.start(@REG_A)
-
-    repeat 3
-        waitatn()
-        registers()
-        disassemble()
-        cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100011, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100001, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    ser.str(string("Ok", 13, 10))
-
-PUB test_cmp_zpg() | addr, cog
-
-    ser.str(string(13, 10, "test_cmp_zpg", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke($10, $40)
-    cpu.poke($11, $10)
-    cpu.poke($12, $01)
-    cpu.poke($13, $A0)
-
-    cpu.poke(addr++, $A9)   ' LDA #$10
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $C5)   ' CMP $10
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $C5)   ' CMP $11
-    cpu.poke(addr++, $11)
-    cpu.poke(addr++, $C5)   ' CMP $12
-    cpu.poke(addr++, $12)
-    cpu.poke(addr++, $C5)   ' CMP $13
-    cpu.poke(addr++, $13)
-    cpu.poke(addr++, $FF)   ' HALT
-
-
-    cog := cpu.start(@REG_A)
-
-    repeat 3
-        waitatn()
-        registers()
-        disassemble()
-        cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100011, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100001, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    ser.str(string("Ok", 13, 10))
-
-PUB test_cpx() | addr, cog
-
-    ser.str(string(13, 10, "test_cpx", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke(addr++, $A2)   ' LDX #$01
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $E0)   ' CPX #$40
-    cpu.poke(addr++, $40)
-    cpu.poke(addr++, $E0)   ' CPX #$10
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $E0)   ' CPX #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $E0)   ' CPX #$A0
-    cpu.poke(addr++, $A0)
-    cpu.poke(addr++, $FF)   ' HALT
-
-
-    cog := cpu.start(@REG_A)
-
-    repeat 3
-        waitatn()
-        registers()
-        disassemble()
-        cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100011, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100001, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    ser.str(string("Ok", 13, 10))
-
-PUB test_cpy() | addr, cog
-
-    ser.str(string(13, 10, "test_cpy", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke(addr++, $A0)   ' LDY #$01
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $C0)   ' CPY #$40
-    cpu.poke(addr++, $40)
-    cpu.poke(addr++, $C0)   ' CPY #$10
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $C0)   ' CPY #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $C0)   ' CPY #$A0
-    cpu.poke(addr++, $A0)
-    cpu.poke(addr++, $FF)   ' HALT
-
-
-    cog := cpu.start(@REG_A)
-
-    repeat 3
-        waitatn()
-        registers()
-        disassemble()
-        cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100011, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%00100001, REG_P)
-
-    waitatn()
-    registers()
-    disassemble()
-    cogatn(1 << cog)
-    assertBinEquals(%10100000, REG_P)
-
-    ser.str(string("Ok", 13, 10))
-
-PUB test_bcc() | addr, cog
-
-    ser.str(string(13, 10, "test_bcc", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke(addr++, $EA)   ' NOP
-    cpu.poke(addr++, $EA)   ' NOP
-    cpu.poke(addr++, $90)   ' BCC +2
-    cpu.poke(addr++, $02)   ' NOP
-    cpu.poke(addr++, $EA)   ' NOP
-    cpu.poke(addr++, $EA)   ' NOP
-    cpu.poke(addr++, $90)   ' BCC -8
-    cpu.poke(addr++, $F8)   ' NOP
-    cpu.poke(addr++, $FF)   ' NOP
-
-    cog := cpu.start(@REG_A)
-
-    repeat 4
-        waitatn()
-        registers()
-        disassemble()
-        cogatn(1 << cog)
-    assertWordEquals($0206, REG_PC)
-
-    repeat 1
-        waitatn()
-        registers()
-        disassemble()
-        cogatn(1 << cog)
-    assertWordEquals($0200, REG_PC)
-
-    cogstop(cog)
-
-    ser.str(string("Ok", 13, 10))
-
-PUB test_ld_imm() | addr
-
-    ser.str(string(13, 10, "test_ld_imm", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-    cpu.poke(addr++, $A9)   ' LDA #$1A
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $A2)   ' LDX #$2B
-    cpu.poke(addr++, $02)
-    cpu.poke(addr++, $A0)   ' LDY #$3C
-    cpu.poke(addr++, $03)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($01, REG_A)
-    assertEquals($02, REG_X)
-    assertEquals($03, REG_Y)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_ld_zpg() | addr
-
-    ser.str(string(13, 10, "test_ld_zpg", 13, 10))
-
-    cpu.poke($14, $04)
-    cpu.poke($15, $05)
-    cpu.poke($16, $06)
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-    cpu.poke(addr++, $A5)   ' LDA $14
-    cpu.poke(addr++, $14)
-    cpu.poke(addr++, $A6)   ' LDX $15
-    cpu.poke(addr++, $15)
-    cpu.poke(addr++, $A4)   ' LDY $16
-    cpu.poke(addr++, $16)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($04, REG_A)
-    assertEquals($05, REG_X)
-    assertEquals($06, REG_Y)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_ld_abs() | addr
-
-    ser.str(string(13, 10, "test_ld_abs", 13, 10))
-
-    cpu.poke($1017, $07)
-    cpu.poke($1018, $08)
-    cpu.poke($1019, $09)
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-    cpu.poke(addr++, $AD)   ' LDA $1017
-    cpu.poke(addr++, $17)
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $AE)   ' LDX $1018
-    cpu.poke(addr++, $18)
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $AC)   ' LDY $1019
-    cpu.poke(addr++, $19)
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($07, REG_A)
-    assertEquals($08, REG_X)
-    assertEquals($09, REG_Y)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_abs() | addr
-
-    ser.str(string(13, 10, "test_adc_abs", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke($1020, $04)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $6D)   ' ADC $02
-    cpu.poke(addr++, $20)
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($05, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_zpg() | addr
-
-    ser.str(string(13, 10, "test_adc_zpg", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke($02, $03)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $65)   ' ADC $02
-    cpu.poke(addr++, $02)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($04, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_imm() | addr
-
-    ser.str(string(13, 10, "test_adc_imm", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $69)   ' ADC #$02
-    cpu.poke(addr++, $02)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($03, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_abs_x() | addr
-
-    ser.str(string(13, 10, "test_adc_abs_x", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke($1035, $05)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $A2)   ' LDX #$35
-    cpu.poke(addr++, $35)
-    cpu.poke(addr++, $7D)   ' ADC $1000,X
-    cpu.poke(addr++, $00)
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($06, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_abs_y() | addr
-
-    ser.str(string(13, 10, "test_adc_abs_y", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke($1045, $06)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $A0)   ' LDY #$45
-    cpu.poke(addr++, $45)
-    cpu.poke(addr++, $79)   ' ADC $1000,Y
-    cpu.poke(addr++, $00)
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($07, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_ind_x() | addr
-
-    ser.str(string(13, 10, "test_adc_ind_x", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.pokew($50, $2010)
-    cpu.poke($2010, $08)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $A2)   ' LDX #$10
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $61)   ' ADC ($40,X)
-    cpu.poke(addr++, $40)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($09, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_ind_y() | addr
-
-    ser.str(string(13, 10, "test_adc_ind_x", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.pokew($40, $2020)
-    cpu.poke($2030, $09)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $A0)   ' LDY #$10
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $71)   ' ADC ($40),Y
-    cpu.poke(addr++, $40)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($0A, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc_zpg_x() | addr
-
-    ser.str(string(13, 10, "test_adc_zpg", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke($15, $0A)
-
-    cpu.poke(addr++, $A9)   ' LDA #$01
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $A2)   ' LDX #$05
-    cpu.poke(addr++, $05)
-    cpu.poke(addr++, $75)   ' ADC $10,X
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($0B, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_asl() | addr
-
-    ser.str(string(13, 10, "test_asl", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke(addr++, $A9)   ' LDA #$C3
-    cpu.poke(addr++, $C3)
-    cpu.poke(addr++, $0A)   ' ASL
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($86, REG_A)
-    assertBinEquals(%10100001, REG_P)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_asl_abs() | addr
-
-    ser.str(string(13, 10, "test_asl", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke($1020, $C3)
-    cpu.poke(addr++, $0E)   ' ASL $1020
-    cpu.poke(addr++, $20)
-    cpu.poke(addr++, $10)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($86, cpu.peek($1020))
-    assertBinEquals(%10100001, REG_P)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_adc() | addr
-
-    ser.str(string(13, 10, "test_adc", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-    cpu.poke(addr++, $A9)   ' LDA #$1A
-    cpu.poke(addr++, $00)
-    cpu.poke(addr++, $69)   ' ADC #$1A
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $69)   ' ADC #$7F
-    cpu.poke(addr++, $7F)
-    cpu.poke(addr++, $69)   ' ADC #$1A
-    cpu.poke(addr++, $80)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($00, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_sbc() | addr
-
-    ser.str(string(13, 10, "test_sbc", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-    cpu.poke(addr++, $A9)   ' LDA #$1A
-    cpu.poke(addr++, $00)
-    cpu.poke(addr++, $E9)   ' SBC #$1A
-    cpu.poke(addr++, $01)
-    cpu.poke(addr++, $E9)   ' SBC #$7F
-    cpu.poke(addr++, $7F)
-    cpu.poke(addr++, $E9)   ' SBC #$1A
-    cpu.poke(addr++, $80)
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($FE, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_sbc_abs() | addr
-
-    ser.str(string(13, 10, "test_sbc_abs", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.pokew($1020, $01)
-    cpu.pokew($1021, $7F)
-    cpu.pokew($1022, $80)
-
-    cpu.poke(addr++, $A9)   ' LDA #$00
-    cpu.poke(addr++, $00)
-
-    cpu.poke(addr++, $ED)   ' SBC $1020
-    cpu.poke(addr++, $20)
-    cpu.poke(addr++, $10)
-
-    cpu.poke(addr++, $ED)   ' SBC $1021
-    cpu.poke(addr++, $21)
-    cpu.poke(addr++, $10)
-
-    cpu.poke(addr++, $ED)   ' SBC $1022
-    cpu.poke(addr++, $22)
-    cpu.poke(addr++, $10)
-
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($FE, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PUB test_push_pop() | addr
-
-    ser.str(string(13, 10, "test_push_pop", 13, 10))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-    cpu.poke(addr++, $A9)   ' LDA #$00
-    cpu.poke(addr++, $00)
-    cpu.poke(addr++, $08)   ' PHP
-    cpu.poke(addr++, $A9)   ' LDA #$1A
-    cpu.poke(addr++, $1A)
-    cpu.poke(addr++, $48)   ' PHA
-
-    cpu.poke(addr++, $A9)   ' LDA #$11
-    cpu.poke(addr++, $11)
-
-    cpu.poke(addr++, $68)   ' PLA
-    cpu.poke(addr++, $28)   ' PLP
-    cpu.poke(addr++, $FF)   ' HALT
-
-    run()
-
-    assertEquals($1A, REG_A)
-    assertEquals($22, REG_P)
-    assertEquals($22, cpu.peek($100 + $FF))
-    assertEquals($1A, cpu.peek($100 + $FE))
-    ser.str(string("Ok", 13, 10))
-
-PUB test_and() | addr
-
-    ser.str(string(13, 10, "test_and"))
-
-    addr := $0200
-    cpu.pokew($FFFC, addr)
-
-    cpu.poke(addr++, $A9) ' LDA #$9F
-    cpu.poke(addr++, $9F)
-    cpu.poke(addr++, $29) ' AND #$3C
-    cpu.poke(addr++, $3C)
-    cpu.poke(addr++, $FF) ' HALT
-
-    run()
-
-    assertEquals($1C, REG_A)
-    ser.str(string("Ok", 13, 10))
-
-PRI run() | cog
-
-    cog := cpu.start(@REG_A)
-    repeat while cogchk(cog)
-        if pollatn()
-            registers()
-            disassemble()
-            cogatn(1 << cog)
-        waitms(1)
-}
 
 PRI assertEquals(expected, actual)
 
@@ -1329,14 +1297,14 @@ PRI disassemble()
         $86: dump(REG_PC, 2)
              ser.fstr1(string("STX $%2.2x"), cpu.peek(REG_PC+1))
         $9E: dump(REG_PC, 2)
-             ser.fstr1(string("STX ($%2.2x),Y"), cpu.peek(REG_PC+1))
+             ser.fstr1(string("STX $%2.2x,Y"), cpu.peek(REG_PC+1))
 
         $8C: dump(REG_PC, 3)
              ser.fstr2(string("STY $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
         $84: dump(REG_PC, 2)
              ser.fstr1(string("STY $%2.2x"), cpu.peek(REG_PC+1))
         $94: dump(REG_PC, 2)
-             ser.fstr1(string("STY ($%2.2x),X"), cpu.peek(REG_PC+1))
+             ser.fstr1(string("STY $%2.2x,X"), cpu.peek(REG_PC+1))
 
         $AA: dump(REG_PC, 1)
              ser.fstr0(string("TAX"))
