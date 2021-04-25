@@ -19,12 +19,12 @@ VAR
     long cog_mbox
     byte ram_6502[65536]
 
-PUB start(mbox)
+PUB start(mbox) : rc
 
     ram_addr := @ram_6502
     ram_wrap := ram_addr + $FFFF
 
-    cog := coginit(16, @cog_6502, mbox)
+    rc := cog := coginit(16, @cog_6502, mbox)
     cog_mbox := mbox
 
     waitatn()
@@ -62,6 +62,10 @@ PUB peek(addr) : rc
 
    rc := ram_6502[addr & $FFFF]
 
+PUB peekw(addr) : rc
+
+   rc := ram_6502[addr & $FFFF] | (ram_6502[(addr + 1) & $FFFF] << 8)
+
 PUB poke(addr, val)
 
    ram_6502[addr & $FFFF] := val
@@ -71,6 +75,9 @@ PUB pokew(addr, val)
    ram_6502[addr & $FFFF] := val
    ram_6502[(addr + 1) & $FFFF] := val >> 8
 
+PUB copymem(data, addr, length)
+
+    bytemove(@ram_6502 + addr, data, length)
 
 DAT             org     $000
 
@@ -78,6 +85,8 @@ cog_6502
                 add     ptrb, ##@lut_6502 - @cog_6502
                 setq2   #$200-1
                 rdlong  0, ptrb
+
+                mov     _P, #%00110000
 
                 mov     _PC, ##$FFFC
                 add     _PC, ram_addr
@@ -87,7 +96,8 @@ cog_6502
                 rep     @.loop, #8          ' ready to single-step
                 push    #.loop
 
-.loop
+.loop           nop
+                nop
                 add     _T, _I
 
                 sub     _PC, ram_addr       ' update cpu status
@@ -175,18 +185,19 @@ _asl_t1         testb   t1, #7          wz
                 shl     t1, #1
         _ret_   bitz    _P, #REGP_C
 
+i_bit
 i_bit_abs       call    #_fetch_abs
-                jmp     #_bit
-
 i_bit_zpg       call    #_fetch_zpg
-
-_bit            test    _A, t1          wz
+                test    _A, t1          wz
                 bitz    _P, #REGP_Z
                 and     t1, #%11000000
                 and     _P, #%00111111
         _ret_   or      _P, t1
 
-i_brk           sub     _PC, ram_addr
+i_brk           incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+
+                sub     _PC, ram_addr
                 getbyte t1, _PC, #1         ' PCH -> (S)
                 call    #_push_t1
                 getbyte t1, _PC, #0         ' PCL -> (S)
@@ -195,9 +206,12 @@ i_brk           sub     _PC, ram_addr
                 bith    t1, #REGP_B         ' B=1
                 call    #_push_t1
 
+                bith    _P, #REGP_I         ' I=1
+
                 mov     t2, ##$FFFE
                 add     t2, ram_addr
-        _ret_   mov     _PC, t2
+                rdword  _PC, t2
+        _ret_   add     _PC, ram_addr
 
 i_cmp_abs       call    #_fetch_abs
                 jmp     #_cmp
@@ -420,7 +434,8 @@ i_pla           call    #_pop_t1
                 jmp     #_flags
 
 i_plp           call    #_pop_t1
-        _ret_   getbyte _P, t1, #0
+                getbyte _P, t1, #0
+        _ret_   or      _P, #%00110000  ' always on flags
 
 i_rol           getbyte t1, _A, #0
                 call    #_rol_t1
@@ -607,6 +622,18 @@ _fetch_ind_y    rdbyte  t3, _PC
                 and     t2, ##$FFFF
                 add     t2, ram_addr
         _ret_   rdbyte  t1, t2
+
+_push_t1        getbyte t2, _S, #0
+                add     t2, #$100
+                add     t2, ram_addr
+                wrbyte  t1, t2
+        _ret_   decmod  _S, #$FF
+
+_pop_t1         incmod  _S, #$FF
+                getbyte t2, _S, #0
+                add     t2, #$100
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
 '
 '
 ' Initialized
@@ -691,7 +718,7 @@ lut_6502
                 long  i_and_ind_x |                      %0 << 10 | 6 << 28 ' 21 AND ($nn,X)
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 22
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 23
-                long  i_bit_zpg   |                      %0 << 10 | 3 << 28 ' 24 BIT $nn
+                long  i_bit       |                     %01 << 10 | 3 << 28 ' 24 BIT $nn
                 long  i_and_zpg   |                      %0 << 10 | 3 << 28 ' 25 AND $nn
                 long  i_rol_zpg   |                      %0 << 10 | 5 << 28 ' 26 ROL $nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 27
@@ -699,7 +726,7 @@ lut_6502
                 long  i_and_imm   |                      %0 << 10 | 2 << 28 ' 29 AND #$nn
                 long  i_rol       |                      %0 << 10 | 2 << 28 ' 2A ROL
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2B
-                long  i_bit_abs   |                      %0 << 10 | 4 << 28 ' 2C BIT $nnnn
+                long  i_bit       |                     %10 << 10 | 4 << 28 ' 2C BIT $nnnn
                 long  i_and_abs   |                      %0 << 10 | 4 << 28 ' 2D AND $nnnn
                 long  i_rol_abs   |                      %0 << 10 | 4 << 28 ' 2E ROL $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2F
@@ -721,7 +748,7 @@ lut_6502
                 long  i_rol_abs_x |                      %0 << 10 | 7 << 28 ' 3E ROL $nnnn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 3F
 
-                long  i_rti       |                %1000000 << 10 | 6 << 28 ' 40 RTI
+                long  i_rti       |               %11000000 << 10 | 6 << 28 ' 40 RTI
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 41
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 42
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 43
@@ -816,7 +843,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 97
                 long  i_taxya     |              %1110_1011 << 10 | 2 << 28 ' 98 TYA
                 long  i_st_abs_y  |                 %110_00 << 10 | 5 << 28 ' 99 STA $nnnn,Y
-                long  i_taxya     |              %0111_1101 << 10 | 2 << 28 ' 9A TXS
+                long  i_taxya     |            %1_0111_1101 << 10 | 2 << 28 ' 9A TXS
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 9B
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 9C
                 long  i_st_abs_x  |                 %110_00 << 10 | 5 << 28 ' 9D STA $nnnn,X
@@ -848,7 +875,7 @@ lut_6502
                 long  i_lda_zpg_x |                      %0 << 10 | 4 << 28 ' B5 LDA $nn,X
                 long  i_ldx_zpg_y |                      %0 << 10 | 4 << 28 ' B6 LDX $nn,Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' B7
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' B8
+                long  i_clv       |                      %0 << 10 | 2 << 28 ' B8 CLV
                 long  i_lda_abs_y |                      %0 << 10 | 4 << 28 ' B9 LDA $nnnn,Y
                 long  i_taxya     |              %1101_0111 << 10 | 2 << 28 ' BA TSX
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' BB
@@ -1039,6 +1066,7 @@ i_branch        rdbyte  t1, _PC             ' BCC: %10_1110_000
 i_clc   _ret_   bitl    _P, #REGP_C
 i_cld   _ret_   bitl    _P, #REGP_D
 i_cli   _ret_   bitl    _P, #REGP_I
+i_clv   _ret_   bitl    _P, #REGP_V
 
 i_jmp           rdbyte  t2, _PC             ' 0 0
                 incmod  _PC, ram_wrap   wc  ' 0 0
@@ -1142,7 +1170,8 @@ i_taxya         getbyte t1, _A, #0          '  0   0   1   1   1   1
                 getbyte _X, t1, #0          '  0   1   0   1   1   1
                 getbyte _Y, t1, #0          '  1   0   1   1   1   1
                 getbyte _S, t1, #0          '  1   1   1   1   0   1
-                jmp     #_flags
+                jmp     #_flags             '                  1
+                ret
 
 i_nop           ret
 
@@ -1162,7 +1191,9 @@ i_jsr           rdbyte  t4, _PC
         _ret_   add     _PC, ram_addr
 
 i_rti           call    #_pop_t1            ' (S) -> P
+                'testb   _P, #REGP_I     wz
                 mov     _P, t1
+                'bitz    _P, #REGP_I
                 ' fall-through
 i_rts           call    #_pop_t1            ' (S) -> PCL
                 getbyte _PC, t1, #0         ' |
@@ -1170,18 +1201,6 @@ i_rts           call    #_pop_t1            ' (S) -> PCL
                 setbyte _PC, t1, #1         ' |
                 incmod  _PC, ##$FFFF        ' PC = PC + 1 (skip if RTI)
         _ret_   add     _PC, ram_addr
-
-_push_t1        getbyte t2, _S, #0
-                add     t2, #$100
-                add     t2, ram_addr
-                wrbyte  t1, t2
-        _ret_   decmod  _S, #$FF
-
-_pop_t1         incmod  _S, #$FF
-                getbyte t2, _S, #0
-                add     t2, #$100
-                add     t2, ram_addr
-        _ret_   rdbyte  t1, t2
 
 i_halt          cogid   t1
                 cogstop t1
