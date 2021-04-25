@@ -118,83 +118,6 @@ cog_6502
 ' Instructions
 '
 
-_adc            mov     t2, t1
-                testb   _P, #REGP_C     wc
-
-                testb   _P, #REGP_D     wz
-    if_z        jmp     #_adc_dec
-
-                addx    t1, _A
-
-                test    t1, #$100       wz  ' affects C
-                bitnz   _P, #REGP_C         ' |
-                jmp     #_adc_flags
-
-_adc_dec        getnib  t1, _A, #0
-                getnib  t3, t2, #0
-                addx    t1, t3
-                cmpsub  t1, #10         wc
-                setnib  _A, t1, #0
-
-                getnib  t1, _A, #1
-                getnib  t3, t2, #1
-                addx    t1, t3
-                cmpsub  t1, #10         wc  ' affects C
-                bitc    _P, #REGP_C         ' |
-                setnib  _A, t1, #1
-
-                mov     t1, _A
-                jmp     #_flags
-
-_adc_flags      xor     t2, _A              ' t2 = ~(A ^ operand)
-                xor     t2, #$FF
-                xor     _A, t1              ' _A = A ^ sum
-                and     t2, _A              ' t2 = ~(A ^ operand) & (A ^ sum)
-                testb   t2, #7          wz
-                bitz    _P, #REGP_V
-
-                getbyte _A, t1, #0
-                jmp     #_flags
-
-_sbc            mov     t2, t1
-                testbn  _P, #REGP_C     wc
-
-                testb   _P, #REGP_D     wz
-    if_z        jmp     #_sbc_dec
-
-                getbyte t1, _A, #0
-                subx    t1, t2
-
-                testb   t1, #8          wz  ' affects C
-                bitnz   _P, #REGP_C         ' |
-
-                jmp     #_sbc_flags
-
-_sbc_dec        getnib  t1, _A, #0
-                getnib  t3, t2, #0
-                subx    t1, t3          wc
-        if_c    add     t1, #$0A
-                setnib  _A, t1, #0
-
-                getnib  t1, _A, #1
-                getnib  t3, t2, #1
-                subx    t1, t3          wc  ' affects C
-                bitc    _P, #REGP_C         ' |
-        if_c    add     t1, #$0A
-                setnib  _A, t1, #1
-
-                mov     t1, _A
-                jmp     #_flags
-
-_sbc_flags      xor     t2, _A              ' t2 = (A ^ operand)
-                xor     _A, t1              ' _A = A ^ sum
-                and     t2, _A              ' t2 = (A ^ operand) & (A ^ sum)
-                testb   t2, #7          wz
-                bitz    _P, #REGP_V
-
-                getbyte _A, t1, #0
-                jmp     #_flags
-
 i_and_abs       call    #_fetch_abs
                 jmp     #_and
 
@@ -561,32 +484,6 @@ _ror_t1         testb   _P, #REGP_C     wc
                 bitc    t1, #7
         _ret_   bitz    _P, #REGP_C
 
-i_sbc_abs       call    #_fetch_abs
-                jmp     #_sbc
-
-i_sbc_abs_x     call    #_fetch_abs_x
-                jmp     #_sbc
-
-i_sbc_abs_y     call    #_fetch_abs_y
-                jmp     #_sbc
-
-i_sbc_ind_x     call    #_fetch_ind_x
-                jmp     #_sbc
-
-i_sbc_ind_y     call    #_fetch_ind_y
-                jmp     #_sbc
-
-i_sbc_zpg       call    #_fetch_zpg
-                jmp     #_sbc
-
-i_sbc_zpg_x     call    #_fetch_zpg_x
-                jmp     #_sbc
-
-i_sbc_imm       rdbyte  t1, _PC
-                incmod  _PC, ram_wrap   wc
-        if_c    add     _PC, ram_addr
-                jmp     #_sbc
-
 i_st_abs        call    #_fetch_abs
                 jmp     #_st
 
@@ -710,7 +607,6 @@ _fetch_ind_y    rdbyte  t3, _PC
                 and     t2, ##$FFFF
                 add     t2, ram_addr
         _ret_   rdbyte  t1, t2
-
 '
 '
 ' Initialized
@@ -749,6 +645,7 @@ t1              res     1
 t2              res     1
 t3              res     1
 t4              res     1
+t5              res     1
 
 DAT             org     $200
 
@@ -1053,6 +950,73 @@ i_adc_imm       rdbyte  t1, _PC
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
                 jmp     #_adc
+
+_adc            testb   _P, #REGP_C     wc
+
+                testb   _P, #REGP_D     wz
+        if_z    jmp     #_adc_dec
+
+                getbyte t3, _A, #0          ' t3 = sum
+                addx    t3, t1              ' |
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t2, _A, #0          ' t2 = ~(A ^ operand)
+                xor     t2, t1              ' |
+                xor     t2, #$FF            ' |
+                getbyte t4, _A, #0          ' t4 = A ^ sum
+                xor     t4, t3
+                and     t2, t4              ' t2 = ~(A ^ operand) & (A ^ sum)
+                testb   t2, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                testb   t3, #8          wz  ' affects C
+                bitz    _P, #REGP_C         ' |
+
+                getbyte _A, t3, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+_adc_dec        mov     t2, _A              ' t2 = lo
+                and     t2, #$0F
+                mov     t4, t1
+                and     t4, #$0F
+                addx    t2, t4
+
+                mov     t3, _A              ' t3 = hi
+                and     t3, #$F0
+                mov     t4, t1
+                and     t4, #$F0
+                add     t3, t4
+
+                cmp     t2, #$09        wcz
+        if_a    add     t2, #$06
+        if_a    add     t3, #$10
+
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t5, _A, #0          ' t5 = ~(A ^ operand)
+                xor     t5, t1              ' |
+                xor     t5, #$FF            ' |
+                getbyte t4, _A, #0          ' t4 = A ^ hi
+                xor     t4, t3
+                and     t5, t4              ' t5 = ~(A ^ operand) & (A ^ hi)
+                testb   t5, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                cmp     t3, #$90        wcz
+        if_a    add     t3, #$60
+
+                testb   t3, #8          wz  ' affects C
+                bitz    _P, #REGP_C         ' |
+
+                getnib  _A, t2, #0
+                add     _A, t3
+
+                and     _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
                                             '       SC NVZC
 i_branch        rdbyte  t1, _PC             ' BCC: %10_1110_000
                 incmod  _PC, ram_wrap   wc  ' BCS: %01_1110_000
@@ -1085,6 +1049,86 @@ i_jmp           rdbyte  t2, _PC             ' 0 0
                 rdword  t2, t2              ' 1 0
                 add     t2, ram_addr        ' 1 0
         _ret_   mov     _PC, t2
+
+i_sbc_abs       call    #_fetch_abs
+                jmp     #_sbc
+
+i_sbc_abs_x     call    #_fetch_abs_x
+                jmp     #_sbc
+
+i_sbc_abs_y     call    #_fetch_abs_y
+                jmp     #_sbc
+
+i_sbc_ind_x     call    #_fetch_ind_x
+                jmp     #_sbc
+
+i_sbc_ind_y     call    #_fetch_ind_y
+                jmp     #_sbc
+
+i_sbc_zpg       call    #_fetch_zpg
+                jmp     #_sbc
+
+i_sbc_zpg_x     call    #_fetch_zpg_x
+                jmp     #_sbc
+
+i_sbc_imm       rdbyte  t1, _PC
+                incmod  _PC, ram_wrap   wc
+        if_c    add     _PC, ram_addr
+                jmp     #_sbc
+
+_sbc            testbn  _P, #REGP_C     wc
+
+                getbyte t3, _A, #0          ' t3 = sum
+                subx    t3, t1              ' |
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t2, _A, #0          ' t2 = (A ^ operand)
+                xor     t2, t1              ' |
+                getbyte t4, _A, #0          ' t4 = A ^ sum
+                xor     t4, t3
+                and     t2, t4              ' t2 = (A ^ operand) & (A ^ sum)
+                testb   t2, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                testb   t3, #8          wz  ' affects C
+                bitnz   _P, #REGP_C         ' |
+
+                test    t3, #$FF        wz  ' affects Z
+                bitz    _P, #REGP_Z         ' |
+
+                testb   _P, #REGP_D     wz
+        if_z    jmp     #_sbc_dec
+
+                getbyte _A, t3, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+_sbc_dec        mov     t2, _A              ' t2 = lo
+                and     t2, #$0F
+                mov     t4, t1
+                and     t4, #$0F
+                subx    t2, t4
+
+                mov     t3, _A              ' t3 = hi
+                and     t3, #$F0
+                mov     t4, t1
+                and     t4, #$F0
+                sub     t3, t4
+
+                test    t2, #$10        wz
+        if_nz   sub     t2, #$06
+        if_nz   sub     t3, #$01
+
+                test    t3, #$100       wz
+        if_nz   sub     t3, #$60
+
+                getbyte _A, t3, #0
+                setnib  _A, t2, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
 
 i_sec   _ret_   bith    _P, #REGP_C
 i_sed   _ret_   bith    _P, #REGP_D

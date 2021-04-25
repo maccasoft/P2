@@ -120,18 +120,22 @@ PUB test_adc_dec()
 
     ser.str(string("test_adc_dec ... "))
 
-    REG_A := $09
     REG_P := $08
-    exec2($69, $03) ' ADC #$03
-    if \assertEquals($12, REG_A)
+    REG_A := $08
+    exec2($69, $12) ' ADC #$12
+    if \assertEquals($20, REG_A) or \assertBinEquals(%00001000, REG_P)
         disassemble()
         registers()
         abort(0)
 
-    REG_A := $09
-    REG_P := $09
-    exec2($69, $03) ' ADC #$03
-    if \assertEquals($13, REG_A)
+    exec2($69, $49) ' ADC #$49
+    if \assertEquals($69, REG_A) or \assertBinEquals(%00001000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($69, $50) ' ADC #$50
+    if \assertEquals($19, REG_A) or \assertBinEquals(%11001001, REG_P)
         disassemble()
         registers()
         abort(0)
@@ -168,18 +172,22 @@ PUB test_sbc_dec()
 
     ser.str(string("test_sbc_dec ... "))
 
-    REG_A := $20
-    REG_P := $08
-    exec2($E9, $03) ' SBC #$03
-    if \assertEquals($16, REG_A)
+    REG_A := $09
+    REG_P := $09
+    exec2($E9, $20) ' SBC #$20
+    if \assertEquals($89, REG_A) or \assertBinEquals(%10001000, REG_P)
         disassemble()
         registers()
         abort(0)
 
-    REG_A := $20
-    REG_P := $09
-    exec2($E9, $03) ' SBC #$03
-    if \assertEquals($17, REG_A)
+    exec2($E9, $49) ' SBC #$49
+    if \assertEquals($39, REG_A) or \assertBinEquals(%01001001, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    exec2($E9, $50) ' SBC #$50
+    if \assertEquals($89, REG_A) or \assertBinEquals(%10001000, REG_P)
         disassemble()
         registers()
         abort(0)
