@@ -185,10 +185,10 @@ _asl_t1         testb   t1, #7          wz
                 shl     t1, #1
         _ret_   bitz    _P, #REGP_C
 
-i_bit
 i_bit_abs       call    #_fetch_abs
+                jmp     #_bit
 i_bit_zpg       call    #_fetch_zpg
-                test    _A, t1          wz
+_bit            test    _A, t1          wz
                 bitz    _P, #REGP_Z
                 and     t1, #%11000000
                 and     _P, #%00111111
@@ -238,16 +238,14 @@ i_cmp_imm       rdbyte  t1, _PC
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
 
-_cmp            signx   t1, #7
-                mov     t2, _A              ' CMP: 110_0000
-                mov     t2, _X              ' CPX: 101_0000
-                mov     t2, _Y              ' CPY: 011_0000
-                signx   t2, #7
-                cmp     t2, t1          wcz
-        if_b    bith    _P, #REGP_N
-        if_ae   bitl    _P, #REGP_N
-                bitz    _P, #REGP_Z
-        _ret_   bitnc   _P, #REGP_C
+_cmp            mov     t2, t1
+                getbyte t1, _A, #0          ' CMP: 110_0000
+                getbyte t1, _X, #0          ' CPX: 101_0000
+                getbyte t1, _Y, #0          ' CPY: 011_0000
+                sub     t1, t2
+                testb   t1, #8          wz
+                bitnz   _P, #REGP_C
+                jmp     #_flags
 
 i_dec_zpg       call    #_fetch_zpg
                 jmp     #_dec
@@ -259,6 +257,7 @@ i_dec_zpg_x     call    #_fetch_zpg_x
                 jmp     #_dec
 
 i_dec_abs       call    #_fetch_abs
+                jmp     #_dec
 
 _dec            sub     t1, #1
                 add     t1, #1
@@ -275,6 +274,12 @@ i_eor_abs_y     call    #_fetch_abs_y
                 jmp     #_eor
 
 i_eor_zpg       call    #_fetch_zpg
+                jmp     #_eor
+
+i_eor_ind_x     call    #_fetch_ind_x
+                jmp     #_eor
+
+i_eor_ind_y     call    #_fetch_ind_y
                 jmp     #_eor
 
 i_eor_zpg_x     call    #_fetch_zpg_x
@@ -344,7 +349,7 @@ i_ldx_imm       rdbyte  t1, _PC
                 mov     _X, t1
                 jmp     #_flags
 
-i_ldx_abs_x     call    #_fetch_abs_x
+i_ldx_abs_y     call    #_fetch_abs_y
                 mov     _X, t1
                 jmp     #_flags
 
@@ -370,7 +375,7 @@ i_ldy_abs_x     call    #_fetch_abs_x
                 mov     _Y, t1
                 jmp     #_flags
 
-i_ldy_zpg_y     call    #_fetch_zpg_y
+i_ldy_zpg_x     call    #_fetch_zpg_x
                 mov     _Y, t1
                 jmp     #_flags
 
@@ -413,6 +418,12 @@ i_ora_abs_y     call    #_fetch_abs_y
                 jmp     #_ora
 
 i_ora_zpg       call    #_fetch_zpg
+                jmp     #_ora
+
+i_ora_ind_x     call    #_fetch_ind_x
+                jmp     #_ora
+
+i_ora_ind_y     call    #_fetch_ind_y
                 jmp     #_ora
 
 i_ora_zpg_x     call    #_fetch_zpg_x
@@ -681,7 +692,7 @@ lut_6502
 ' instruction         snippet                  skip pattern         cycles    encoding
 '--------------------------------------------------------------------------------------------
                 long  i_brk       |                      %0 << 10 | 7 << 28 ' 00 BRK
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 01
+                long  i_ora_ind_x |                      %0 << 10 | 2 << 28 ' 01 ORA ($nn,X)
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 02
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 03
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 04
@@ -698,19 +709,19 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 0F
 
                 long  i_branch    |            %10_0111_000 << 10 | 3 << 28 ' 10 BPL $nn
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 11
+                long  i_ora_ind_y |                      %0 << 10 | 2 << 28 ' 11 ORA ($nn),Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 12
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 13
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 14
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 15
+                long  i_ora_zpg_x |                      %0 << 10 | 2 << 28 ' 15 ORA $nn,X
                 long  i_asl_zpg_x |                      %0 << 10 | 6 << 28 ' 16 ASL $nn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 17
                 long  i_clc       |                      %0 << 10 | 2 << 28 ' 18 CLC
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 19
+                long  i_ora_abs_y |                      %0 << 10 | 2 << 28 ' 19 ORA $nnnn,Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 1A
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 1B
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 1C
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 1D
+                long  i_ora_abs_x |                      %0 << 10 | 2 << 28 ' 1D ORA $nnnn,X
                 long  i_asl_abs_x |                      %0 << 10 | 7 << 28 ' 1E ASL $nnnn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 1F
 
@@ -718,7 +729,7 @@ lut_6502
                 long  i_and_ind_x |                      %0 << 10 | 6 << 28 ' 21 AND ($nn,X)
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 22
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 23
-                long  i_bit       |                     %01 << 10 | 3 << 28 ' 24 BIT $nn
+                long  i_bit_zpg   |                      %0 << 10 | 3 << 28 ' 24 BIT $nn
                 long  i_and_zpg   |                      %0 << 10 | 3 << 28 ' 25 AND $nn
                 long  i_rol_zpg   |                      %0 << 10 | 5 << 28 ' 26 ROL $nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 27
@@ -726,7 +737,7 @@ lut_6502
                 long  i_and_imm   |                      %0 << 10 | 2 << 28 ' 29 AND #$nn
                 long  i_rol       |                      %0 << 10 | 2 << 28 ' 2A ROL
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2B
-                long  i_bit       |                     %10 << 10 | 4 << 28 ' 2C BIT $nnnn
+                long  i_bit_abs   |                      %0 << 10 | 4 << 28 ' 2C BIT $nnnn
                 long  i_and_abs   |                      %0 << 10 | 4 << 28 ' 2D AND $nnnn
                 long  i_rol_abs   |                      %0 << 10 | 4 << 28 ' 2E ROL $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 2F
@@ -749,13 +760,13 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 3F
 
                 long  i_rti       |               %11000000 << 10 | 6 << 28 ' 40 RTI
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 41
+                long  i_eor_ind_x |                      %0 << 10 | 2 << 28 ' 41 EOR ($nn,X)
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 42
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 43
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 44
                 long  i_eor_zpg   |                      %0 << 10 | 3 << 28 ' 45 EOR $nn
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 46
-                long  i_lsr_zpg   |                      %0 << 10 | 5 << 28 ' 47 LSR $nn
+                long  i_lsr_zpg   |                      %0 << 10 | 2 << 28 ' 46 LSR $nn
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' 47
                 long  i_push      |                     %10 << 10 | 3 << 28 ' 48 PHA
                 long  i_eor_imm   |                      %0 << 10 | 2 << 28 ' 49 EOR #$nn
                 long  i_lsr       |                      %0 << 10 | 2 << 28 ' 4A LSR
@@ -766,19 +777,19 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 4F
 
                 long  i_branch    |            %10_1011_000 << 10 | 3 << 28 ' 50 BVC $nn
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 51
+                long  i_eor_ind_y |                      %0 << 10 | 2 << 28 ' 51 EOR ($nn),Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 52
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 53
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 54
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 55
+                long  i_eor_zpg_x |                      %0 << 10 | 2 << 28 ' 55 EOR $nn,X
                 long  i_lsr_zpg_x |                      %0 << 10 | 6 << 28 ' 56 LSR $nn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 57
                 long  i_cli       |                      %0 << 10 | 2 << 28 ' 58 CLI
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 59
+                long  i_eor_abs_y |                      %0 << 10 | 2 << 28 ' 59 EOR $nnnn,Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 5A
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 5B
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 5C
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' 5D
+                long  i_eor_abs_x |                      %0 << 10 | 2 << 28 ' 5D EOR $nnnn,X
                 long  i_lsr_abs_x |                      %0 << 10 | 7 << 28 ' 5E LSR $nnnn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' 5F
 
@@ -871,7 +882,7 @@ lut_6502
                 long  i_lda_ind_y |                      %0 << 10 | 5 << 28 ' B1 LDA ($nn),Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' B2
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' B3
-                long  i_ldy_zpg_y |                      %0 << 10 | 4 << 28 ' B4 LDY $nn,Y
+                long  i_ldy_zpg_x |                      %0 << 10 | 4 << 28 ' B4 LDY $nn,Y
                 long  i_lda_zpg_x |                      %0 << 10 | 4 << 28 ' B5 LDA $nn,X
                 long  i_ldx_zpg_y |                      %0 << 10 | 4 << 28 ' B6 LDX $nn,Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' B7
@@ -881,14 +892,14 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' BB
                 long  i_ldy_abs_x |                      %0 << 10 | 4 << 28 ' BC LDY $nnnn,X
                 long  i_lda_abs_x |                      %0 << 10 | 4 << 28 ' BD LDA $nnnn,X
-                long  i_ldx_abs_x |                      %0 << 10 | 4 << 28 ' BE LDX $nnnn,Y
+                long  i_ldx_abs_y |                      %0 << 10 | 4 << 28 ' BE LDX $nnnn,Y
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' BF
 
                 long  i_cmp_imm   |               %011_0000 << 10 | 2 << 28 ' C0 CPY #$nn
                 long  i_cmp_ind_x |                %110_000 << 10 | 6 << 28 ' C1 CMP ($nn,X)
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' C2
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' C3
-                long  i_cmp_zpg   |                %101_000 << 10 | 3 << 28 ' C4 CPY $nn
+                long  i_cmp_zpg   |                %011_000 << 10 | 3 << 28 ' C4 CPY $nn
                 long  i_cmp_zpg   |                %110_000 << 10 | 3 << 28 ' C5 CMP $nn
                 long  i_dec_zpg   |                  %10_00 << 10 | 5 << 28 ' C6 DEC $nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' C7
@@ -896,9 +907,9 @@ lut_6502
                 long  i_cmp_imm   |               %110_0000 << 10 | 2 << 28 ' C9 CMP #$nn
                 long  i_inde_xy   |               %10_01_10 << 10 | 2 << 28 ' CA DEX
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' CB
-                long  i_cmp_abs   |                %101_000 << 10 | 4 << 28 ' CC CPY $nnnn
+                long  i_cmp_abs   |                %011_000 << 10 | 4 << 28 ' CC CPY $nnnn
                 long  i_cmp_abs   |                %110_000 << 10 | 4 << 28 ' CD CMP $nnnn
-                long  i_dec_abs   |                   %10_0 << 10 | 6 << 28 ' CE DEC $nnnn
+                long  i_dec_abs   |                  %10_00 << 10 | 6 << 28 ' CE DEC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' CF
 
                 long  i_branch    |            %10_1101_000 << 10 | 3 << 28 ' D0 BNE $mm
@@ -922,17 +933,17 @@ lut_6502
                 long  i_sbc_ind_x |                      %0 << 10 | 6 << 28 ' E1 SBC ($nn,X)
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E2
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E3
-                long  i_cmp_zpg   |                %101_000 << 10 | 3 << 28 ' E4 CPY $nn
+                long  i_cmp_zpg   |                %101_000 << 10 | 3 << 28 ' E4 CPX $nn
                 long  i_sbc_zpg   |                      %0 << 10 | 3 << 28 ' E5 SBC #$nn
                 long  i_dec_zpg   |                  %01_00 << 10 | 5 << 28 ' E6 INC $nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E7
                 long  i_inde_xy   |               %10_10_10 << 10 | 2 << 28 ' E8 INX
                 long  i_sbc_imm   |                      %0 << 10 | 2 << 28 ' E9 SBC #$nn
                 long  i_nop       |                      %0 << 10 | 2 << 28 ' EA NOP
-                long  i_cmp_abs   |                %101_000 << 10 | 4 << 28 ' EB
-                long  i_halt      |                      %0 << 10 | 2 << 28 ' EC CPX $nnnn
+                long  i_halt      |                      %0 << 10 | 4 << 28 ' EB
+                long  i_cmp_abs   |                %101_000 << 10 | 2 << 28 ' EC CPX $nnnn
                 long  i_sbc_abs   |                      %0 << 10 | 4 << 28 ' ED SBC $nnnn
-                long  i_dec_abs   |                   %01_0 << 10 | 6 << 28 ' EE INC $nnnn
+                long  i_dec_abs   |                  %01_00 << 10 | 6 << 28 ' EE INC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' EF
 
                 long  i_branch    |            %01_1101_000 << 10 | 3 << 28 ' F0 BEQ $nn
@@ -941,7 +952,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' F3
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' F4
                 long  i_sbc_zpg_x |                      %0 << 10 | 4 << 28 ' F5 SBC $nn,X
-                long  i_dec_zpg_x |                  %10_00 << 10 | 6 << 28 ' F6 INC $nn,X
+                long  i_dec_zpg_x |                  %01_00 << 10 | 6 << 28 ' F6 INC $nn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' F7
                 long  i_sed       |                      %0 << 10 | 2 << 28 ' F8 SED
                 long  i_sbc_abs_y |                      %0 << 10 | 4 << 28 ' F9 SBC $nnnn,Y
@@ -949,7 +960,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' FB
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' FC
                 long  i_sbc_abs_x |                      %0 << 10 | 4 << 28 ' FD SBC $nnnn,X
-                long  i_dec_abs   |                   %01_0 << 10 | 7 << 28 ' FE INC $nnnn
+                long  i_dec_abs_x |                  %01_00 << 10 | 7 << 28 ' FE INC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' FF
 
 i_adc_abs       call    #_fetch_abs

@@ -46,10 +46,14 @@ PUB main() | cog, prevPC
     test_sbc()
     test_sbc_dec()
 
+    test_inc()
+    test_dec()
+
     test_and()
     test_ora()
     test_eor()
     test_bit()
+    test_cmp()
 
     test_asl()
     test_rol()
@@ -372,6 +376,98 @@ PUB test_sbc_dec()
 
     ser.str(string("Ok", 13, 10))
 
+PUB test_inc()
+
+    ser.str(string("test_inc abs ... "))
+
+    REG_P := $00
+    cpu.poke($1020, $10)
+    exec3($EE, $20, $10)
+    if \assertEquals($11, cpu.peek($1020))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("zpg ... "))
+
+    REG_P := $00
+    cpu.poke($10, $10)
+    exec2($E6, $10)
+    if \assertEquals($11, cpu.peek($10))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("abs_x ... "))
+
+    REG_P := $00
+    REG_X := $05
+    cpu.poke($1020 + REG_X, $10)
+    exec3($FE, $20, $10)
+    if \assertEquals($11, cpu.peek($1020 + REG_X))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("zpg_x ... "))
+
+    REG_P := $00
+    REG_X := $05
+    cpu.poke($10 + REG_X, $10)
+    exec2($F6, $10)
+    if \assertEquals($11, cpu.peek($10 + REG_X))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_dec()
+
+    ser.str(string("test_dec abs ... "))
+
+    REG_P := $00
+    cpu.poke($1020, $10)
+    exec3($CE, $20, $10)
+    if \assertEquals($0F, cpu.peek($1020))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("zpg ... "))
+
+    REG_P := $00
+    cpu.poke($10, $10)
+    exec2($C6, $10)
+    if \assertEquals($0F, cpu.peek($10))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("abs_x ... "))
+
+    REG_P := $00
+    REG_X := $05
+    cpu.poke($1020 + REG_X, $10)
+    exec3($DE, $20, $10)
+    if \assertEquals($0F, cpu.peek($1020 + REG_X))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("zpg_x ... "))
+
+    REG_P := $00
+    REG_X := $05
+    cpu.poke($10 + REG_X, $10)
+    exec2($D6, $10)
+    if \assertEquals($0F, cpu.peek($10 + REG_X))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
 PUB test_and()
 
     ser.str(string("test_and ... "))
@@ -458,28 +554,83 @@ PUB test_eor()
 
 PUB test_bit()
 
-    ser.str(string("test_bit ... "))
+    ser.str(string("test_bit zpg ... "))
 
     REG_P := $00
-    REG_A := %11010101
+    REG_A := $01
 
-    cpu.poke($10, %00100110)
+    cpu.poke($10, $01)
     exec2($24, $10) ' BIT
-    if \assertBinEquals(%11010101, REG_A) or \assertBinEquals(%00000000, REG_P)
+    if \assertEquals($01, REG_A) or \assertBinEquals(%00000000, REG_P)
         disassemble()
         registers()
         abort(0)
 
-    cpu.poke($10, %00001010)
+    cpu.poke($10, $80)
     exec2($24, $10) ' BIT
-    if \assertBinEquals(%11010101, REG_A) or \assertBinEquals(%00000010, REG_P)
+    if \assertEquals($01, REG_A) or \assertBinEquals(%10000010, REG_P)
         disassemble()
         registers()
         abort(0)
 
-    cpu.poke($10, %11001010)
+    cpu.poke($10, $40)
     exec2($24, $10) ' BIT
-    if \assertBinEquals(%11010101, REG_A) or \assertBinEquals(%11000000, REG_P)
+    if \assertEquals($01, REG_A) or \assertBinEquals(%01000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("abs ... "))
+
+    REG_P := $00
+    REG_A := $02
+
+    cpu.poke($1020, $02)
+    exec3($2C, $20, $10) ' BIT
+    if \assertEquals($02, REG_A) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    cpu.poke($1020, $80)
+    exec3($2C, $20, $10) ' BIT
+    if \assertEquals($02, REG_A) or \assertBinEquals(%10000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    cpu.poke($1020, $40)
+    exec3($2C, $20, $10) ' BIT
+    if \assertEquals($02, REG_A) or \assertBinEquals(%01000010, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+PUB test_cmp()
+
+    ser.str(string("test_cmp ... "))
+
+    REG_A := $10
+
+    REG_P := $00
+    exec2($C9, $00) ' CMP #$00
+    if \assertEquals($10, REG_A) or \assertBinEquals(%00000001, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_P := $00
+    exec2($C9, $10) ' CMP #$10
+    if \assertEquals($10, REG_A) or \assertBinEquals(%00000011, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    REG_P := $00
+    exec2($C9, $20) ' CMP #$20
+    if \assertEquals($10, REG_A) or \assertBinEquals(%10000000, REG_P)
         disassemble()
         registers()
         abort(0)
@@ -1031,6 +1182,7 @@ PRI disassemble()
 
         $2C: dump(REG_PC, 3)
              ser.fstr2(string("BIT $%2.2x%2.2x"), cpu.peek(REG_PC+2), cpu.peek(REG_PC+1))
+             ser.fstr1(string(" ($%2.2x)"), cpu.peek((cpu.peek(REG_PC+2) << 8) | cpu.peek(REG_PC+1)))
         $24: dump(REG_PC, 2)
              ser.fstr1(string("BIT $%2.2x"), cpu.peek(REG_PC+1))
 
@@ -1309,7 +1461,7 @@ PRI disassemble()
         $AA: dump(REG_PC, 1)
              ser.fstr0(string("TAX"))
         $A8: dump(REG_PC, 1)
-             ser.fstr0(string("TAI"))
+             ser.fstr0(string("TAY"))
         $BA: dump(REG_PC, 1)
              ser.fstr0(string("TSX"))
         $8A: dump(REG_PC, 1)
