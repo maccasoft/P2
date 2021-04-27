@@ -559,15 +559,21 @@ _fetch_abs      rdbyte  t2, _PC
                 add     t2, ram_addr
         _ret_   rdbyte  t1, t2
 
-_fetch_abs_x    rdbyte  t2, _PC
+_fetch_abs_x    rdbyte  t2, _PC             ' t2 = low
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
-                rdbyte  t1, _PC
+                rdbyte  t1, _PC             ' t1 = high
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
-                setbyte t2, t1, #1
+
                 add     t2, _X
+                cmp     t2, #$100       wc  ' page boundary
+        if_nc   add     _I, #1              ' add 1 cycle
+
+                shl     t1, #8
+                add     t2, t1
                 add     t2, ram_addr
+
         _ret_   rdbyte  t1, t2
 
 _fetch_abs_y    rdbyte  t2, _PC
@@ -576,9 +582,15 @@ _fetch_abs_y    rdbyte  t2, _PC
                 rdbyte  t1, _PC
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
-                setbyte t2, t1, #1
+
                 add     t2, _Y
+                cmp     t2, #$100       wc  ' page boundary
+        if_nc   add     _I, #1              ' add 1 cycle
+
+                shl     t1, #8
+                add     t2, t1
                 add     t2, ram_addr
+
         _ret_   rdbyte  t1, t2
 
 _fetch_zpg      rdbyte  t2, _PC
@@ -621,17 +633,25 @@ _fetch_ind_x    rdbyte  t3, _PC
 _fetch_ind_y    rdbyte  t3, _PC
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
+
                 getbyte t4, t3, #0
                 add     t4, ram_addr
-                rdbyte  t2, t4
+                rdbyte  t2, t4              ' t2 = low
                 add     t3, #1
+
                 getbyte t4, t3, #0
                 add     t4, ram_addr
-                rdbyte  t1, t4
-                setbyte t2, t1, #1
+                rdbyte  t1, t4              ' t1 = high
+
                 add     t2, _Y
+                cmp     t2, #$100       wc  ' page boundary
+        if_nc   add     _I, #1              ' add 1 cycle
+
+                shl     t1, #8
+                add     t2, t1
                 and     t2, ##$FFFF
                 add     t2, ram_addr
+
         _ret_   rdbyte  t1, t2
 
 _push_t1        getbyte t2, _S, #0
