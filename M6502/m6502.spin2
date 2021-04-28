@@ -110,6 +110,20 @@ cog_6502
 
 '
 '
+' I/O Routines
+'
+
+_read           getword t5, t2, #0
+                add     t5, ram_addr
+        _ret_   rdbyte  t1, t5
+
+
+_write          getword t5, t2, #0
+                add     t5, ram_addr
+        _ret_   wrbyte  t1, t5
+
+'
+'
 ' Instructions
 '
 
@@ -138,7 +152,7 @@ i_asl           getbyte t1, _A, #0          ' %10_000_0
                 bitz    _P, #REGP_C
 
                 getbyte _A, t1, #0
-                wrbyte  t1, t2
+                call    #\_write
                 jmp     #_flags
 
 
@@ -202,7 +216,7 @@ i_dec_abs       call    #_fetch_abs
 
 _dec            sub     t1, #1
                 add     t1, #1
-                wrbyte  t1, t2
+                call    #\_write
                 jmp     #_flags
 
 i_eor_abs       call    #\_fetch_abs        ' %111_1111110
@@ -255,7 +269,7 @@ i_lsr           getbyte t1, _A, #0          ' %10_000_0
                 bitz    _P, #REGP_C
 
                 getbyte _A, t1, #0
-                wrbyte  t1, t2
+                call    #\_write
                 jmp     #_flags
 
 
@@ -298,7 +312,7 @@ i_rol           getbyte t1, _A, #0          ' %10_00000_0
                 bitz    _P, #REGP_C
 
                 getbyte _A, t1, #0
-                wrbyte  t1, t2
+                call    #\_write
 
                 jmp     #_flags
 
@@ -316,7 +330,7 @@ i_ror           getbyte t1, _A, #0          ' %10_00000_0
                 bitz    _P, #REGP_C
 
                 getbyte _A, t1, #0
-                wrbyte  t1, t2
+                call    #\_write
 
                 jmp     #_flags
 
@@ -331,7 +345,7 @@ i_st_ind_y      call    #\_fetch_ind_y      ' %xxx_0
 _st             mov     t1, _A              '  110 A
                 mov     t1, _X              '  101 X
                 mov     t1, _Y              '  011 Y
-        _ret_   wrbyte  t1, t2
+                jmp     #\_write
 
 '
 '
@@ -343,15 +357,15 @@ _flags          test    t1, #$FF       wz   ' affects Z
                 testb   t1, #7         wz   ' affects N
         _ret_   bitz    _P, #REGP_N         ' |
 
-_fetch_abs      rdbyte  t2, _PC
+_fetch_abs      rdbyte  t2, _PC             ' t2 = low
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
-                rdbyte  t1, _PC
+                rdbyte  t1, _PC             ' t1 = high
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
+
                 setbyte t2, t1, #1
-                add     t2, ram_addr
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _fetch_abs_x    rdbyte  t2, _PC             ' t2 = low
                 incmod  _PC, ram_wrap   wc
@@ -366,14 +380,12 @@ _fetch_abs_x    rdbyte  t2, _PC             ' t2 = low
 
                 shl     t1, #8
                 add     t2, t1
-                add     t2, ram_addr
-
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _fetch_abs_y    rdbyte  t2, _PC
-                incmod  _PC, ram_wrap   wc
+                incmod  _PC, ram_wrap   wc  ' t2 = low
         if_c    add     _PC, ram_addr
-                rdbyte  t1, _PC
+                rdbyte  t1, _PC             ' t1 = high
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
 
@@ -383,31 +395,26 @@ _fetch_abs_y    rdbyte  t2, _PC
 
                 shl     t1, #8
                 add     t2, t1
-                add     t2, ram_addr
-
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _fetch_zpg      rdbyte  t2, _PC
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
-                add     t2, ram_addr
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _fetch_zpg_x    rdbyte  t2, _PC
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
                 add     t2, _X
                 and     t2, #$FF
-                add     t2, ram_addr
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _fetch_zpg_y    rdbyte  t2, _PC
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
                 add     t2, _Y
                 and     t2, #$FF
-                add     t2, ram_addr
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _fetch_ind_x    rdbyte  t3, _PC
                 incmod  _PC, ram_wrap   wc
@@ -421,8 +428,7 @@ _fetch_ind_x    rdbyte  t3, _PC
                 add     t4, ram_addr
                 rdbyte  t1, t4
                 setbyte t2, t1, #1
-                add     t2, ram_addr
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _fetch_ind_y    rdbyte  t3, _PC
                 incmod  _PC, ram_wrap   wc
@@ -444,9 +450,7 @@ _fetch_ind_y    rdbyte  t3, _PC
                 shl     t1, #8
                 add     t2, t1
                 and     t2, ##$FFFF
-                add     t2, ram_addr
-
-        _ret_   rdbyte  t1, t2
+                jmp     #\_read
 
 _push_t1        getbyte t2, _S, #0
                 add     t2, #$100

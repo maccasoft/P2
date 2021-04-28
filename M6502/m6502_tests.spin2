@@ -188,6 +188,17 @@ PUB test_zpg_addressing() | addr
         registers()
         abort(0)
 
+    ser.str(string("sta ... "))
+
+    REG_A := $F3
+    cpu.poke($14, $1F)
+
+    exec($85, $14, $FF) ' STA $14
+    if \assertEquals(REG_A, cpu.peek($14))
+        disassemble()
+        registers()
+        abort(0)
+
     ser.str(string("Ok", 13, 10))
 
 PUB test_abs_addressing() | addr
@@ -234,7 +245,7 @@ PUB test_abs_x_addressing() | addr
 
 PUB test_abs_y_addressing() | addr
 
-    ser.str(string("test_abs_y_addressing ... "))
+    ser.str(string("test_abs_y_addressing lda ... "))
 
     REG_A := REG_X := $00
     REG_Y := $06
@@ -242,6 +253,19 @@ PUB test_abs_y_addressing() | addr
 
     exec($B9, $10, $20) ' LDA $2010,Y
     if \assertEquals($1D, REG_A)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("sta ... "))
+
+    REG_A := $1F
+    REG_X := $00
+    REG_Y := $06
+    cpu.poke($2010 + REG_Y, $00)
+
+    exec($99, $10, $20) ' STA $2010,Y
+    if \assertEquals(REG_A, cpu.peek($2010 + REG_Y))
         disassemble()
         registers()
         abort(0)
@@ -692,6 +716,16 @@ PUB test_asl()
     REG_A := %00000010
     exec($0A, $FF, $FF) ' ASL
     if \assertEquals(%00000100, REG_A) or \assertBinEquals(%00000000, REG_P)
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("zpg ... "))
+
+    REG_P := %00000000
+    cpu.poke($22, %10000010)
+    exec($26, $22, $FF) ' ASL $22
+    if \assertEquals(%00000100, cpu.peek($22)) or \assertBinEquals(%00000001, REG_P)
         disassemble()
         registers()
         abort(0)

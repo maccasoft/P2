@@ -45,14 +45,12 @@ PUB main() | cog, prevPC
 
     if not cogchk(cog)
         ser.str(string("unsupported instruction!", 13, 10))
-        registers()
-        disassemble()
     elseif REG_PC == $400 or REG_PC == $3469
         ser.str(string("success!", 13, 10))
     else
         ser.str(string("failure!", 13, 10))
-        registers()
-        disassemble()
+    registers()
+    disassemble()
 
     repeat
         waitct(0)
