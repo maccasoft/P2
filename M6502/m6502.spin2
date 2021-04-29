@@ -202,20 +202,12 @@ i_cmp_imm       rdbyte  t1, _PC
                 bitnz   _P, #REGP_C
                 jmp     #_flags
 
-i_dec_zpg       call    #_fetch_zpg
-                jmp     #_dec
-
-i_dec_abs_x     call    #_fetch_abs_x
-                jmp     #_dec
-
-i_dec_zpg_x     call    #_fetch_zpg_x
-                jmp     #_dec
-
-i_dec_abs       call    #_fetch_abs
-                jmp     #_dec
-
-_dec            sub     t1, #1
-                add     t1, #1
+i_dec_zpg       call    #\_fetch_zpg        ' %xx_1110
+i_dec_abs_x     call    #\_fetch_abs_x      ' %xx_110
+i_dec_zpg_x     call    #\_fetch_zpg_x      ' %xx_10
+i_dec_abs       call    #\_fetch_abs        ' %xx_0
+                sub     t1, #1              '  10 DEC
+                add     t1, #1              '  01 INC
                 call    #\_write
                 jmp     #_flags
 
@@ -253,9 +245,9 @@ i_ld_ind_y      call    #\_fetch_ind_y      ' %xxx_111_0
 i_ld_imm        rdbyte  t1, _PC             ' %xxx_000
                 incmod  _PC, ram_wrap   wc
         if_c    add     _PC, ram_addr
-                mov     _A, t1              ' 110 A
-                mov     _X, t1              ' 101 X
-                mov     _Y, t1              ' 011 Y
+                mov     _A, t1              '  110 A
+                mov     _X, t1              '  101 X
+                mov     _Y, t1              '  011 Y
                 jmp     #_flags
 
 i_lsr_abs       call    #\_fetch_abs        ' %01_000_1_1110
@@ -719,7 +711,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' C3
                 long  i_cmp_zpg   |           %011_0_111_10 << 10 | 3 << 28 ' C4 CPY $nn
                 long  i_cmp_zpg   |           %110_0_111_10 << 10 | 3 << 28 ' C5 CMP $nn
-                long  i_dec_zpg   |                  %10_00 << 10 | 5 << 28 ' C6 DEC $nn
+                long  i_dec_zpg   |                %10_1110 << 10 | 5 << 28 ' C6 DEC $nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' C7
                 long  i_inde_xy   |               %01_10_01 << 10 | 2 << 28 ' C8 INY
                 long  i_cmp_imm   |               %110_0000 << 10 | 2 << 28 ' C9 CMP #$nn
@@ -727,7 +719,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' CB
                 long  i_cmp_abs   |      %011_0_111_1111110 << 10 | 4 << 28 ' CC CPY $nnnn
                 long  i_cmp_abs   |      %110_0_111_1111110 << 10 | 4 << 28 ' CD CMP $nnnn
-                long  i_dec_abs   |                  %10_00 << 10 | 6 << 28 ' CE DEC $nnnn
+                long  i_dec_abs   |                   %10_0 << 10 | 6 << 28 ' CE DEC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' CF
 
                 long  i_branch    |            %10_1101_000 << 10 | 3 << 28 ' D0 BNE $mm
@@ -736,7 +728,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' D3
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' D4
                 long  i_cmp_zpg_x |            %110_0_111_0 << 10 | 2 << 28 ' D5 CMP $nn,X
-                long  i_dec_zpg_x |                  %10_00 << 10 | 6 << 28 ' D6 DEC $nn,X
+                long  i_dec_zpg_x |                  %10_10 << 10 | 6 << 28 ' D6 DEC $nn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' D7
                 long  i_cld       |                      %0 << 10 | 2 << 28 ' D8 CLD
                 long  i_cmp_abs_y |        %110_0_111_11110 << 10 | 4 << 28 ' D9 CMP $nnnn,Y
@@ -744,7 +736,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' DB
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' DC
                 long  i_cmp_abs_x |       %110_0_111_111110 << 10 | 4 << 28 ' DD CMP $nnnn,X
-                long  i_dec_abs_x |                  %10_00 << 10 | 7 << 28 ' DE DEC $nnnn,X
+                long  i_dec_abs_x |                 %10_110 << 10 | 7 << 28 ' DE DEC $nnnn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' DF
 
                 long  i_cmp_imm   |               %101_0000 << 10 | 2 << 28 ' E0 CPX #$nn
@@ -753,7 +745,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E3
                 long  i_cmp_zpg   |           %101_0_111_10 << 10 | 3 << 28 ' E4 CPX $nn
                 long  i_sbc_zpg   |                 %111_10 << 10 | 3 << 28 ' E5 SBC #$nn
-                long  i_dec_zpg   |                  %01_00 << 10 | 5 << 28 ' E6 INC $nn
+                long  i_dec_zpg   |                %01_1110 << 10 | 5 << 28 ' E6 INC $nn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' E7
                 long  i_inde_xy   |               %10_10_10 << 10 | 2 << 28 ' E8 INX
                 long  i_sbc_imm   |                      %0 << 10 | 2 << 28 ' E9 SBC #$nn
@@ -761,7 +753,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 4 << 28 ' EB
                 long  i_cmp_abs   |      %101_0_111_1111110 << 10 | 2 << 28 ' EC CPX $nnnn
                 long  i_sbc_abs   |            %111_1111110 << 10 | 4 << 28 ' ED SBC $nnnn
-                long  i_dec_abs   |                  %01_00 << 10 | 6 << 28 ' EE INC $nnnn
+                long  i_dec_abs   |                   %01_0 << 10 | 6 << 28 ' EE INC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' EF
 
                 long  i_branch    |            %01_1101_000 << 10 | 3 << 28 ' F0 BEQ $nn
@@ -770,7 +762,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' F3
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' F4
                 long  i_sbc_zpg_x |                  %111_0 << 10 | 4 << 28 ' F5 SBC $nn,X
-                long  i_dec_zpg_x |                  %01_00 << 10 | 6 << 28 ' F6 INC $nn,X
+                long  i_dec_zpg_x |                  %01_10 << 10 | 6 << 28 ' F6 INC $nn,X
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' F7
                 long  i_sed       |                      %0 << 10 | 2 << 28 ' F8 SED
                 long  i_sbc_abs_y |              %111_11110 << 10 | 4 << 28 ' F9 SBC $nnnn,Y
@@ -778,7 +770,7 @@ lut_6502
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' FB
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' FC
                 long  i_sbc_abs_x |             %111_111110 << 10 | 4 << 28 ' FD SBC $nnnn,X
-                long  i_dec_abs_x |                  %01_00 << 10 | 7 << 28 ' FE INC $nnnn
+                long  i_dec_abs_x |                 %01_110 << 10 | 7 << 28 ' FE INC $nnnn
                 long  i_halt      |                      %0 << 10 | 2 << 28 ' FF
 
 i_adc_abs       call    #\_fetch_abs
