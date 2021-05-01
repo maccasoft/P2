@@ -1083,17 +1083,17 @@ blank           xcont   _as, #0             ' do before-visible part of scan lin
                 xzero   _ds, #1             ' do sync part of scan line
         _ret_   djnz    pa, #blank          ' loop if more blanks needed
 
-fifo_write      cmp     _ch, #13        wz
-        if_z    mov     _ch, #$20
-                test    _ch, #%01000000 wc
-                muxnc   _ch, #%00100000
+fifo_write      cmp     _ch, #$20       wc
+        if_c    mov     _ch, #$20
+                test    _ch, #%01000000 wz
+                muxz    _ch, #%00100000
                 and     _ch, #$3F
 
 .l1             altsb   _fifo_tail, #_fifo
                 setbyte 0-0, _ch, #0
                 incmod  _fifo_tail, ##(24 * 40)-1
-                incmod  _fifo_x, #40-1  wc
-  if_z_and_nc   jmp     #.l1
+                incmod  _fifo_x, #40-1  wz
+  if_c_and_nz   jmp     #.l1
 
                 cmp     _fifo_tail, _fifo_head  wz
         if_nz   ret
@@ -1143,7 +1143,7 @@ _fifo_x         long    0
 _fifo_head      long    0
 _fifo_tail      long    0
 
-_fifo           res     24 * 40 / 4
+_fifo           byte    $20[24 * 40]
 
 DAT             org     $200
 
