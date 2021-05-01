@@ -6,7 +6,11 @@
 
 CON
 
-    _CLKFREQ = 160_000_000
+    _CLKFREQ      = 160_000_000
+
+    VGA_PIN       = 8
+    VGA_FPIX      = 12_500_000
+    VGA_INTENSITY = 80    '0..128
 
     REGP_N = 7
     REGP_V = 6
@@ -24,6 +28,8 @@ DAT             org     $000
 
 cog_6502
                 asmclk
+
+                coginit #16, ##@vga_driver
 
                 add     ptrb, ##@lut_6502 - @cog_6502
                 setq2   #$200-1
@@ -900,21 +906,21 @@ _read
                 add     t5, ram_addr
         _ret_   rdbyte  t1, t5
 
-.kbd            mov     t1, #0
-                testpn  #UART_RX        wz
-        if_nz   rdpin   t1, #UART_RX
-        if_nz   bith    t1, #31
-        _ret_   shr     t1, #24
+.kbd            rdpin   t1, #UART_RX
+                shr     t1, #24
+                cmp     t1, #"a"        wc
+        if_nc   cmpr    t1, #"z"        wc
+        if_nc   xor     t1, #%00100000
+        _ret_   or      t1, #%10000000
 
 .kbdcr          mov     t1, #0
                 testp   #UART_RX        wz
         _ret_   bitz    t1, #7
 
-.dsp            mov     t1, #0
-                rdpin   t3, #UART_TX    wc
-        _ret_   bitc    t1, #7
-
-.dspcr  _ret_   mov     t1, #0
+.dspcr
+.dsp            getword t5, t2, #0
+                add     t5, ram_addr
+        _ret_   rdbyte  t1, t5
 '
 _write
                 cmp     t2, ##$D010     wz
@@ -933,19 +939,354 @@ _write
                 add     t5, ram_addr
         _ret_   wrbyte  t1, t5
 
-.kbd    _ret_   ret
-
-.kbdcr  _ret_   ret
-
-.dsp            rdpin   t3, #UART_TX    wc
-        if_c    jmp     #$-1
-                and     t1, #$7F
-        _ret_   wypin   t1, #UART_TX
-
+.kbd
+.kbdcr
 .dspcr  _ret_   ret
+
+.dsp            getword t5, t2, #0
+                add     t5, ram_addr
+        _ret_   wrbyte  t1, t5
 
 i_halt          ret
 
+
+'
+'
+' VGA Driver
+'
+DAT             org     $000
+
+vga_driver
+                add     ptrb, ##@vga_lut - @vga_driver
+                setq2   #(@vga_lut_end - @vga_lut) / 4 -1   ' load chr rom and palette into lut
+                rdlong  0, ptrb
+
+                mov     pa, ##_CLKFREQ      ' calculate streamer frequency
+                qfrac   ##VGA_FPIX, pa
+                getqx   pa
+                shr     pa, #1
+                setxfrq pa
+
+                setcy   ##VGA_INTENSITY << 24   ' r set colorspace for rgb
+                setci   ##VGA_INTENSITY << 16   ' g
+                setcq   ##VGA_INTENSITY << 08   ' b
+
+                setcmod #%01_0_000_0        ' enable colorspace conversion
+
+                cogid   _vx                 ' insert cogid into dac modes
+                setnib  dacmode_s, _vx, #2
+                setnib  dacmode_c, _vx, #2
+
+                wrpin   dacmode_s, _pn      ' enable 123-ohm 3.3V dac mode in pin +0
+
+                xor     _pn, #2 << 6 | 1    ' enable 75-ohm 2.0V dac mode in pins +1..3
+                wrpin   dacmode_c,_pn
+
+                xor     _pn,#3<<6 ^(2<<6|1) ' make pins +0..3 outputs
+                drvl    _pn
+
+                xor     _pn,#4|(3<<6)       ' leave av_base pointing to pin +4 (vertical sync)
+
+                mov     ijmp1, #field       ' set up streamer-empty interrupt
+                setint1 #10
+                xcont   #10, #0             ' do streamer instruction to start interrupt sequence
+
+'
+'
+' Field loop
+'
+
+field           callpa  #24, #border
+
+                mov     _sl, #0
+                mov     _vy, #192           ' visible lines
+                mov     _lb, _fifo_head
+
+.line           call    #line
+                call    #line
+                incmod  _sl, #7         wc
+        if_c    add     _lb, #40
+                cmpsub  _lb, ##24 * 40
+
+                djnz    _vy, #.line
+
+                callpa  #24, #border
+
+                ' first blank line done here to use visible
+                ' pixels time to update the fifo
+
+                xcont   _as, #0             ' do before-visible part of scan line
+                xcont   _vi, #0             ' do visible part of scan line (blank)
+
+                incmod  _fc, #60-1
+                cmp     _fc, #30        wc
+        if_c    mov     _ch, #"@"
+        if_nc   mov     _ch, #$00
+
+                altsb   _fifo_tail, #_fifo
+                setbyte 0-0, _ch, #0
+
+                rdbyte  _ch, dsp
+                test    _ch, #$80       wz
+        if_nz   and     _ch, #$7F
+        if_nz   wrbyte  _ch, dsp
+        if_nz   call    #fifo_write         ' |
+
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+
+                callpa  #10-1, #blank       ' remaining blank lines
+
+                drvnot  _pn                 ' vertical sync on
+                callpa  #2, #blank
+                drvnot  _pn                 ' vertical sync off
+
+                callpa  #33, #blank
+
+                jmp     #field              ' loop
+
+line            xcont   _as,#0              ' do before-visible part of scan line
+                xcont   _bv, #0             ' do left border
+
+                mov     _vx, #0
+.l1             mov     _cp, _lb
+                add     _cp, _vx
+                altgb   _cp, #_fifo
+                getbyte _cp, _fifo, #0
+                and     _cp, #$7F
+
+                shl     _cp, #1             ' get bitmap from lut
+                rdlut   _cb+0, _cp          ' |
+                add     _cp, #1             ' |
+                rdlut   _cb+1, _cp          ' |
+                altgb   _sl, #_cb           ' |
+                getbyte _cp, _cb, #0        ' |
+
+                xcont   _dv, _cp
+                incmod  _vx, #40-1      wc
+        if_nc   jmp     #.l1
+
+                xcont   _av, #0             ' do right border
+                xcont   _bs,#0              ' do before-sync part of scan line
+        _ret_   xzero   _ds,#1              ' do sync part of scan line
+
+border          xcont   _as, #0             ' do before-visible part of scan line
+                xcont   _vi, #0             ' do visible part of scan line (blank)
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+
+                xcont   _as, #0             ' do before-visible part of scan line
+                xcont   _vi, #0             ' do visible part of scan line (blank)
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+        _ret_   djnz    pa, #border
+
+blank           xcont   _as, #0             ' do before-visible part of scan line
+                xcont   _vi, #0             ' do visible part of scan line (blank)
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+        _ret_   djnz    pa, #blank          ' loop if more blanks needed
+
+fifo_write      cmp     _ch, #13        wz
+        if_z    mov     _ch, #$20
+                cmp     _ch, #$20       wc
+        if_c    ret
+
+.l1             altsb   _fifo_tail, #_fifo
+                setbyte 0-0, _ch, #0
+                incmod  _fifo_tail, ##(24 * 40)-1
+                incmod  _fifo_x, #40-1  wc
+  if_z_and_nc   jmp     #.l1
+
+                cmp     _fifo_tail, _fifo_head  wz
+        if_nz   ret
+
+.l2             altsb   _fifo_tail, #_fifo
+                setbyte 0-0, #$20, #0
+                add     _fifo_tail, #1
+                incmod  _fifo_x, #40-1  wc
+        if_nc   jmp     #.l2
+                sub     _fifo_tail, #40
+
+                add     _fifo_head, #40
+                cmpsub  _fifo_head, ##24 * 40
+
+                ret
+
+'
+'
+' Data
+'
+dacmode_s       long    %0000_0000_000_1011000000000_01_00000_0 ' hsync is 123-ohm, 3.3V
+dacmode_c       long    %0000_0000_000_1011100000000_01_00000_0 ' R/G/B are 75-ohm, 2.0V
+
+dsp             long    ram_6502 + $D012
+dspcr           long    ram_6502 + $D013
+
+_vx             long    0
+_vy             long    0
+
+_bs             long    $7F010000+8         ' streamer command: before-sync
+_ds             long    $7F010000+48        ' streamer command: during-sync
+_as             long    $7F010000+24        ' streamer command: after sync
+_vi             long    $0F080000+320       ' streamer command: visible
+_bv             long    $0F080000+40        ' streamer command: before visible
+_dv             long    $0F080000+6         ' streamer command: during visible
+_av             long    $0F080000+40        ' streamer command: after visible
+_pn             long    VGA_PIN & $38       ' base pin
+
+_sl             long    0                   ' scanline counter
+_lb             long    0                   ' line buffer pointer
+_cp             long    0                   ' character pointer
+_cb             long    0[2]                ' character bitmap
+
+_li             long    0                   ' line index
+
+_ch             long    0
+_fc             long    0
+
+_fifo_x         long    0
+_fifo_head      long    0
+_fifo_tail      long    0
+
+_fifo           res     24 * 40 / 4
+
+DAT             org     $200
+
+vga_lut
+chr_rom         byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $7E, $7E, $7E, $7E, $7E, $7E, $7E, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $08, $08, $08, $08, $08, $00, $08, $00
+                byte    $14, $14, $14, $00, $00, $00, $00, $00
+                byte    $14, $14, $3E, $14, $3E, $14, $14, $00
+                byte    $08, $3C, $0A, $1C, $28, $1E, $08, $00
+                byte    $06, $26, $10, $08, $04, $32, $30, $00
+                byte    $04, $0A, $0A, $04, $2A, $12, $2C, $00
+                byte    $08, $08, $08, $00, $00, $00, $00, $00
+                byte    $08, $04, $02, $02, $02, $04, $08, $00
+                byte    $08, $10, $20, $20, $20, $10, $08, $00
+                byte    $08, $2A, $1C, $08, $1C, $2A, $08, $00
+                byte    $00, $08, $08, $3E, $08, $08, $00, $00
+                byte    $00, $00, $00, $00, $08, $08, $04, $00
+                byte    $00, $00, $00, $3E, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $08, $00
+                byte    $00, $20, $10, $08, $04, $02, $00, $00
+                byte    $1C, $22, $32, $2A, $26, $22, $1C, $00
+                byte    $08, $0C, $08, $08, $08, $08, $1C, $00
+                byte    $1C, $22, $20, $18, $04, $02, $3E, $00
+                byte    $3E, $20, $10, $18, $20, $22, $1C, $00
+                byte    $10, $18, $14, $12, $3E, $10, $10, $00
+                byte    $3E, $02, $1E, $20, $20, $22, $1C, $00
+                byte    $38, $04, $02, $1E, $22, $22, $1C, $00
+                byte    $3E, $20, $10, $08, $04, $04, $04, $00
+                byte    $1C, $22, $22, $1C, $22, $22, $1C, $00
+                byte    $1C, $22, $22, $3C, $20, $10, $0E, $00
+                byte    $00, $08, $08, $00, $00, $08, $08, $00
+                byte    $00, $00, $08, $00, $08, $08, $04, $00
+                byte    $10, $08, $04, $02, $04, $08, $10, $00
+                byte    $00, $00, $3E, $00, $3E, $00, $00, $00
+                byte    $04, $08, $10, $20, $10, $08, $04, $00
+                byte    $1C, $22, $10, $08, $08, $00, $08, $00
+                byte    $1C, $22, $2C, $2A, $2A, $2A, $1C, $00
+                byte    $08, $14, $22, $22, $3E, $22, $22, $00
+                byte    $1E, $22, $22, $1E, $22, $22, $1E, $00
+                byte    $1C, $22, $02, $02, $02, $22, $1C, $00
+                byte    $1E, $22, $22, $22, $22, $22, $1E, $00
+                byte    $3E, $02, $02, $1E, $02, $02, $3E, $00
+                byte    $3E, $02, $02, $1E, $02, $02, $02, $00
+                byte    $1C, $22, $02, $3A, $22, $22, $1C, $00
+                byte    $22, $22, $22, $3E, $22, $22, $22, $00
+                byte    $1C, $08, $08, $08, $08, $08, $1C, $00
+                byte    $38, $10, $10, $10, $10, $12, $0C, $00
+                byte    $22, $12, $0A, $06, $0A, $12, $22, $00
+                byte    $02, $02, $02, $02, $02, $02, $3E, $00
+                byte    $22, $36, $2A, $2A, $22, $22, $22, $00
+                byte    $22, $22, $26, $2A, $32, $22, $22, $00
+                byte    $1C, $22, $22, $22, $22, $22, $1C, $00
+                byte    $1E, $22, $22, $1E, $02, $02, $02, $00
+                byte    $1C, $22, $22, $22, $2A, $12, $2C, $00
+                byte    $1E, $22, $22, $1E, $22, $22, $22, $00
+                byte    $1C, $22, $02, $1C, $20, $22, $1C, $00
+                byte    $3E, $08, $08, $08, $08, $08, $08, $00
+                byte    $22, $22, $22, $22, $22, $22, $1C, $00
+                byte    $22, $22, $22, $22, $22, $14, $08, $00
+                byte    $22, $22, $22, $2A, $2A, $2A, $14, $00
+                byte    $22, $22, $14, $08, $14, $22, $22, $00
+                byte    $22, $22, $22, $14, $08, $08, $08, $00
+                byte    $3E, $20, $10, $08, $04, $02, $3E, $00
+                byte    $3E, $06, $06, $06, $06, $06, $3E, $00
+                byte    $00, $02, $04, $08, $10, $20, $00, $00
+                byte    $3E, $30, $30, $30, $30, $30, $3E, $00
+                byte    $00, $00, $08, $14, $22, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+                byte    $1C, $22, $2C, $2A, $2A, $2A, $1C, $00
+                byte    $08, $14, $22, $22, $3E, $22, $22, $00
+                byte    $1E, $22, $22, $1E, $22, $22, $1E, $00
+                byte    $1C, $22, $02, $02, $02, $22, $1C, $00
+                byte    $1E, $22, $22, $22, $22, $22, $1E, $00
+                byte    $3E, $02, $02, $1E, $02, $02, $3E, $00
+                byte    $3E, $02, $02, $1E, $02, $02, $02, $00
+                byte    $1C, $22, $02, $3A, $22, $22, $1C, $00
+                byte    $22, $22, $22, $3E, $22, $22, $22, $00
+                byte    $1C, $08, $08, $08, $08, $08, $1C, $00
+                byte    $38, $10, $10, $10, $10, $12, $0C, $00
+                byte    $22, $12, $0A, $06, $0A, $12, $22, $00
+                byte    $02, $02, $02, $02, $02, $02, $3E, $00
+                byte    $22, $36, $2A, $2A, $22, $22, $22, $00
+                byte    $22, $22, $26, $2A, $32, $22, $22, $00
+                byte    $1C, $22, $22, $22, $22, $22, $1C, $00
+                byte    $1E, $22, $22, $1E, $02, $02, $02, $00
+                byte    $1C, $22, $22, $22, $2A, $12, $2C, $00
+                byte    $1E, $22, $22, $1E, $22, $22, $22, $00
+                byte    $1C, $22, $02, $1C, $20, $22, $1C, $00
+                byte    $3E, $08, $08, $08, $08, $08, $08, $00
+                byte    $22, $22, $22, $22, $22, $22, $1C, $00
+                byte    $22, $22, $22, $22, $22, $14, $08, $00
+                byte    $22, $22, $22, $2A, $2A, $2A, $14, $00
+                byte    $22, $22, $14, $08, $14, $22, $22, $00
+                byte    $22, $22, $22, $14, $08, $08, $08, $00
+                byte    $3E, $20, $10, $08, $04, $02, $3E, $00
+                byte    $3E, $06, $06, $06, $06, $06, $3E, $00
+                byte    $00, $02, $04, $08, $10, $20, $00, $00
+                byte    $3E, $30, $30, $30, $30, $30, $3E, $00
+                byte    $00, $00, $08, $14, $22, $00, $00, $00
+                byte    $00, $00, $00, $00, $00, $00, $00, $00
+
+vga_palette     long    $00_00_00_00        ' background
+                long    $00_F0_00_00        ' foreground
+
+vga_lut_end
 
 DAT             orgh
 
