@@ -1126,7 +1126,7 @@ _as             long    $7F010000+24        ' streamer command: after sync
 _vi             long    $0F040000+320       ' streamer command: visible
 _bv             long    $0F040000+40        ' streamer command: before visible
 _dv             long    $0F040000+6         ' streamer command: during visible
-_av             long    $0F080000+40        ' streamer command: after visible
+_av             long    $0F040000+40        ' streamer command: after visible
 _pn             long    VGA_PIN & $38       ' base pin
 
 _sl             long    0                   ' scanline counter
