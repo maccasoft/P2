@@ -12,6 +12,9 @@ CON
     VGA_FPIX      = 12_500_000
     VGA_INTENSITY = 80    '0..128
 
+    PS2_DATA      = 25
+    PS2_CLOCK     = 24
+
     REGP_N = 7
     REGP_V = 6
     REGP_B = 4
@@ -20,9 +23,7 @@ CON
     REGP_Z = 1
     REGP_C = 0
 
-    UART_RX   = 63  { I }
-    UART_TX   = 62  { O }
-    UART_BAUD = 115_200
+    PIA_LUT_OFFSET = $CE14
 
 DAT             org     $000
 
@@ -30,37 +31,12 @@ cog_6502
                 asmclk
 
                 add     ptrb, ##@lut_6502 - @cog_6502
-                setq2   #$200-1
+                setq2   #(@lut_6502_end - @lut_6502) / 4 -1
                 rdlong  0, ptrb
 
                 coginit #1, ##@vga_driver   ' start video driver on cog #1
                 waitatn                     ' wait for init complete
                 setluts #1                  ' enable lut sharing
-
-                mov     t1, ##_CLKFREQ      ' z
-                mov     t2, ##$1_0000       ' y
-                mov     t3, ##UART_BAUD     ' x
-
-                qmul    t1, t2              ' z * y
-                getqx   t2
-                getqy   t1
-
-                setq    t1
-                qdiv    t2, t3
-                getqx   t3
-
-                and     t3, ##$FFFFFC00     ' bit timing
-                add     t3, #8-1            ' 8 bits
-
-                fltl    #UART_RX            ' configure rx smart pin
-                wrpin   ##P_ASYNC_RX, #UART_RX
-                wxpin   t3, #UART_RX
-                drvl    #UART_RX
-
-                fltl    #UART_TX            ' configure tx smart pin
-                wrpin   ##(P_ASYNC_TX | P_OE), #UART_TX
-                wxpin   t3, #UART_TX
-                drvl    #UART_TX
 
                 getct   ts
                 mov     _I, #4              ' reset cycles
@@ -896,10 +872,8 @@ lut_6502
 
 _read
                 cmp     t2, ##$D010     wz
-        if_z    jmp     #.kbd
-                cmp     t2, ##$D011     wz
-        if_z    jmp     #.kbdcr
-                cmp     t2, ##$D012     wz
+        if_nz   cmp     t2, ##$D011     wz
+        if_nz   cmp     t2, ##$D012     wz
         if_nz   cmp     t2, ##$D013     wz
         if_z    jmp     #.pia
 
@@ -907,20 +881,12 @@ _read
                 add     t5, ram_addr
         _ret_   rdbyte  t1, t5
 
-.kbd            rdpin   t1, #UART_RX
-                shr     t1, #24
-                cmp     t1, #"a"        wc
-        if_nc   cmpr    t1, #"z"        wc
-        if_nc   xor     t1, #%00100000
-        _ret_   or      t1, #%10000000
-
-.kbdcr          mov     t1, #0
-                testp   #UART_RX        wz
-        _ret_   bitz    t1, #7
-
 .pia            mov     t5, t2
-                sub     t5, ##$CE14
-        _ret_   rdlut   t1, t5
+                sub     t5, ##PIA_LUT_OFFSET
+                rdlut   t1, t5
+                cmp     t2, ##$D011     wz
+        if_z    wrlut   #$00, t5
+                ret
 
 _write
                 cmp     t2, ##$D010     wz
@@ -937,11 +903,12 @@ _write
         _ret_   wrbyte  t1, t5
 
 .pia            mov     t5, t2
-                sub     t5, ##$CE14
+                sub     t5, ##PIA_LUT_OFFSET
         _ret_   wrlut   t1, t5
 
 i_halt          ret
 
+lut_6502_end
 
 '
 '
@@ -950,6 +917,9 @@ i_halt          ret
 DAT             org     $000
 
 vga_driver
+                fltl    #PS2_CLOCK
+                fltl    #PS2_DATA
+
                 add     ptrb, ##@vga_lut - @vga_driver
                 setq2   #(@vga_lut_end - @vga_lut) / 4 -1   ' load chr rom and palette into lut
                 rdlong  0, ptrb
@@ -983,9 +953,106 @@ vga_driver
 
                 xor     _pn,#4|(3<<6)       ' leave av_base pointing to pin +4 (vertical sync)
 
+                wrlut   #0, pia_kbd         ' clear kbd locations
+                wrlut   #0, pia_kbdcr
+
                 mov     ijmp1, #field       ' set up streamer-empty interrupt
                 setint1 #10
                 xcont   #10, #0             ' do streamer instruction to start interrupt sequence
+
+'
+'
+' Keyboard loop
+'
+
+newkey          mov     code, #0
+
+receive         testpn  #PS2_CLOCK      wz  ' wait for initial clock low
+        if_nz   jmp     #receive
+
+                getct   ct                  ' setup timeout
+                addct1  ct, ##_CLKFREQ / 10
+
+                mov     bits, #11
+.l1             pollct1                 wc  ' poll timeout
+        if_c    jmp     #newkey             ' reset if expired
+                testpn  #PS2_CLOCK      wz  ' wait until clock low
+        if_nz   jmp     #.l1
+                testp   #PS2_DATA       wc  ' sample data
+                rcr     data, #1
+.l2             pollct1                 wc  ' poll timeout
+        if_c    jmp     #newkey             ' reset if expired
+                testpn  #PS2_CLOCK      wz  ' wait until clock high
+        if_z    jmp     #.l2
+                djnz    bits, #.l1          ' another bit?
+
+                shr     data, #22           ' align byte
+                and     data, #$FF
+
+                cmp     data, #$F0      wz  ' release
+        if_z    setbyte code, data, #3
+        if_z    jmp     #receive
+
+                getbyte ct, code, #0        ' swap scancode bytes
+                setbyte code, data, #0
+                setbyte code, ct, #1
+
+                cmp     data, #$E0      wz
+        if_z    setbyte code, data, #2
+        if_z    andn    code, #$FF
+        if_z    jmp     #receive
+
+                cmp     data, #$E1      wz
+        if_z    setbyte code, data, #2
+        if_z    mov     bytes, #1
+        if_z    andn    code, #$FF
+        if_z    jmp     #receive
+
+                cmpsub  bytes, #1       wc
+        if_c    jmp     #receive
+
+                cmp     code, ##$F0_000012  wz  ' left-shift
+        if_nz   cmp     code, ##$F0_000059  wz  ' right-shift
+        if_nz   cmp     code, ##$F0_E00011  wz  ' alt-gr
+        if_z    andn    shift, #$0001
+        if_z    jmp     #newkey
+
+                test    code, ##$FF_000000   wz ' release ?
+        if_nz   jmp     #newkey
+
+                cmp     code, #$12      wz  ' left-shift
+        if_nz   cmp     code, #$59      wz  ' right-shift
+        if_nz   cmp     code, ##$E00011 wz  ' alt-gr
+        if_z    or      shift, #$0001
+        if_z    jmp     #newkey
+
+                getbyte ct, code, #2
+                cmp     ct, #$E0        wz  ' extended
+        if_z    jmp     #newkey
+
+                getbyte key, code, #0
+                test    shift, #%0001   wc  ' shift
+                rcl     key, #1
+
+                add     key, ##ps2_table
+                rdbyte  key, key
+
+                cmp     key, #0         wz
+        if_z    jmp     #newkey
+
+                or      key, #$80
+                wrlut   key, pia_kbd
+                wrlut   #$80, pia_kbdcr
+
+                jmp     #newkey
+
+ct              long    0
+bits            long    0
+bytes           long    0
+data            long    0
+code            long    0
+shift           long    0
+key             long    0
 
 '
 '
@@ -1012,6 +1079,7 @@ field           callpa  #24, #border
                 ' pixels time to update the fifo
 
                 xcont   _as, #0             ' do before-visible part of scan line
+                resi1
                 xcont   _vi, #0             ' do visible part of scan line (blank)
 
                 incmod  _fc, #60-1          ' cursor blink timer
@@ -1021,15 +1089,16 @@ field           callpa  #24, #border
                 altsb   _fifo_tail, #_fifo  ' |
                 setbyte 0-0, _ch, #0        ' |
 
-                mov     _vy, #$1FE          ' get character to display
-                rdlut   _ch, _vy            '   from shared lut
+                rdlut   _ch, pia_dsp         'get character to display from shared lut
                 test    _ch, #$80       wz  ' test if valid
         if_nz   and     _ch, #$7F           ' mask bit 7
-        if_nz   wrlut   _ch, _vy            ' ack character received
+        if_nz   wrlut   _ch, pia_dsp        ' ack character received
         if_nz   call    #fifo_write         ' insert into fifo
 
                 xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
                 xzero   _ds, #1             ' do sync part of scan line
+                resi1
 
                 callpa  #10-1, #blank       ' remaining blank lines
 
@@ -1042,6 +1111,7 @@ field           callpa  #24, #border
                 jmp     #field              ' loop
 
 line            xcont   _as,#0              ' do before-visible part of scan line
+                resi1
                 xcont   _bv, #0             ' do left border
 
                 mov     _vx, #0
@@ -1058,29 +1128,45 @@ line            xcont   _as,#0              ' do before-visible part of scan lin
                 altgb   _sl, #_cb           ' |
                 getbyte _cp, _cb, #0        ' |
 
+                resi1
                 xcont   _dv, _cp
                 incmod  _vx, #40-1      wc
         if_nc   jmp     #.l1
 
+                resi1
                 xcont   _av, #0             ' do right border
+                resi1
                 xcont   _bs,#0              ' do before-sync part of scan line
+                resi1
         _ret_   xzero   _ds,#1              ' do sync part of scan line
 
 border          xcont   _as, #0             ' do before-visible part of scan line
+                resi1
                 xcont   _vi, #0             ' do visible part of scan line (blank)
+                resi1
                 xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
                 xzero   _ds, #1             ' do sync part of scan line
+                resi1
 
                 xcont   _as, #0             ' do before-visible part of scan line
+                resi1
                 xcont   _vi, #0             ' do visible part of scan line (blank)
+                resi1
                 xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
                 xzero   _ds, #1             ' do sync part of scan line
+                resi1
         _ret_   djnz    pa, #border
 
 blank           xcont   _as, #0             ' do before-visible part of scan line
+                resi1
                 xcont   _vi, #0             ' do visible part of scan line (blank)
+                resi1
                 xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
                 xzero   _ds, #1             ' do sync part of scan line
+                resi1
         _ret_   djnz    pa, #blank          ' loop if more blanks needed
 
 fifo_write      cmp     _ch, #$20       wc
@@ -1134,10 +1220,13 @@ _lb             long    0                   ' line buffer pointer
 _cp             long    0                   ' character pointer
 _cb             long    0[2]                ' character bitmap
 
-_li             long    0                   ' line index
-
 _ch             long    0
 _fc             long    0
+
+pia_kbd         long    $D010 - PIA_LUT_OFFSET
+pia_kbdcr       long    $D011 - PIA_LUT_OFFSET
+pia_dsp         long    $D012 - PIA_LUT_OFFSET
+pia_dspcr       long    $D013 - PIA_LUT_OFFSET
 
 _fifo_x         long    0
 _fifo_head      long    0
@@ -1180,7 +1269,7 @@ chr_rom
                 byte    $00, $02, $04, $08, $10, $20, $00, $00  ' 5C
                 byte    $3E, $30, $30, $30, $30, $30, $3E, $00  ' 5D
                 byte    $00, $00, $08, $14, $22, $00, $00, $00  ' 5E
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 5F
+                byte    $00, $00, $00, $00, $00, $00, $3E, $00  ' 5F
                 byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 20
                 byte    $08, $08, $08, $08, $08, $00, $08, $00  ' 21
                 byte    $14, $14, $14, $00, $00, $00, $00, $00  ' 22
@@ -1218,6 +1307,146 @@ vga_palette     long    $00_00_00_00        ' background
                 long    $00_F0_00_00        ' foreground
 
 vga_lut_end
+
+DAT             orgh
+
+'
+'
+' Lookup table
+'                       ascii     scan    extkey  regkey  ()=keypad
+'
+ps2_table       word    $0000   ' 00
+                word    $0000   ' 01              F9
+                word    $0000   ' 02
+                word    $0000   ' 03              F5
+                word    $0000   ' 04              F3
+                word    $0000   ' 05              F1
+                word    $0000   ' 06              F2
+                word    $0000   ' 07              F12
+                word    $0000   ' 08
+                word    $0000   ' 09              F10
+                word    $0000   ' 0A              F8
+                word    $0000   ' 0B              F6
+                word    $0000   ' 0C              F4
+                word    $0009   ' 0D              Tab
+                word    $7D5C   ' 0E             `
+                word    $0000   ' 0F
+                word    $0000   ' 10
+                word    $0000   ' 11      Alt-R   Alt-L
+                word    $0000   ' 12              Shift-L
+                word    $0000   ' 13
+                word    $0000   ' 14      Ctrl-R  Ctrl-L
+                word    $5151   ' 15              q
+                word    $2131   ' 16              1
+                word    $0000   ' 17
+                word    $0000   ' 18
+                word    $0000   ' 19
+                word    $5A5A   ' 1A              z
+                word    $5353   ' 1B              s
+                word    $4141   ' 1C              a
+                word    $5757   ' 1D              w
+                word    $2232   ' 1E              2
+                word    $0000   ' 1F      Win-L
+                word    $0000   ' 20
+                word    $4343   ' 21              c
+                word    $5858   ' 22              x
+                word    $4444   ' 23              d
+                word    $4545   ' 24              e
+                word    $2434   ' 25              4
+                word    $2333   ' 26              3
+                word    $0000   ' 27      Win-R
+                word    $0000   ' 28
+                word    $2020   ' 29              Space
+                word    $5656   ' 2A              v
+                word    $4646   ' 2B              f
+                word    $5454   ' 2C              t
+                word    $5252   ' 2D              r
+                word    $2535   ' 2E              5
+                word    $0000   ' 2F      Apps
+                word    $0000   ' 30
+                word    $4E4E   ' 31              n
+                word    $4242   ' 32              b
+                word    $4848   ' 33              h
+                word    $4747   ' 34              g
+                word    $5959   ' 35              y
+                word    $2636   ' 36              6
+                word    $0000   ' 37      Power
+                word    $0000   ' 38
+                word    $0000   ' 39
+                word    $4D4D   ' 3A              m
+                word    $4A4A   ' 3B              j
+                word    $5555   ' 3C              u
+                word    $2F37   ' 3D              7
+                word    $2838   ' 3E              8
+                word    $0000   ' 3F      Sleep
+                word    $0000   ' 40
+                word    $3B2C   ' 41              ,
+                word    $4B4B   ' 42              k
+                word    $4949   ' 43              i
+                word    $4F4F   ' 44              o
+                word    $3D30   ' 45              0
+                word    $2939   ' 46              9
+                word    $0000   ' 47
+                word    $0000   ' 48
+                word    $3A2E   ' 49             .
+                word    $5F2D   ' 4A      (/)     /
+                word    $4C4C   ' 4B              l
+                word    $4000   ' 4C              ;
+                word    $5050   ' 4D              p
+                word    $3F27   ' 4E              -
+                word    $0000   ' 4F
+                word    $0000   ' 50
+                word    $0000   ' 51
+                word    $2300   ' 52              '
+                word    $0000   ' 53
+                word    $7B00   ' 54              [
+                word    $5E00   ' 55              =
+                word    $0000   ' 56
+                word    $0000   ' 57
+                word    $0000   ' 58              CapsLock
+                word    $0000   ' 59              Shift-R
+                word    $0D0D   ' 5A      (Enter) Enter
+                word    $7D2B   ' 5B              ]
+                word    $0000   ' 5C
+                word    $0000   ' 5D              \
+                word    $0000   ' 5E      WakeUp
+                word    $0000   ' 5F
+                word    $0000   ' 60
+                word    $3E3C   ' 61
+                word    $0000   ' 62
+                word    $0000   ' 63
+                word    $0000   ' 64
+                word    $0000   ' 65
+                word    $DFDF   ' 66              BackSpace
+                word    $0000   ' 67
+                word    $0000   ' 68
+                word    $0000   ' 69      End     (1)
+                word    $0000   ' 6A
+                word    $0000   ' 6B      Left    (4)
+                word    $0000   ' 6C      Home    (7)
+                word    $0000   ' 6D
+                word    $0000   ' 6E
+                word    $0000   ' 6F
+                word    $0000   ' 70      Insert  (0)
+                word    $0000   ' 71      Delete  (.)
+                word    $0000   ' 72      Down    (2)
+                word    $0000   ' 73              (5)
+                word    $0000   ' 74      Right   (6)
+                word    $0000   ' 75      Up      (8)
+                word    $001B   ' 76              Esc
+                word    $0000   ' 77              NumLock
+                word    $0000   ' 78              F11
+                word    $0000   ' 79              (+)
+                word    $0000   ' 7A      PageDn  (3)
+                word    $0000   ' 7B              (-)
+                word    $0000   ' 7C      PrScr   (*)
+                word    $0000   ' 7D      PageUp  (9)
+                word    $0000   ' 7E              ScrLock
+                word    $0000   ' 7F
+                word    $0000   ' 80
+                word    $0000   ' 81
+                word    $0000   ' 82
+                word    $0000   ' 83              F7
 
 DAT             orgh
 
