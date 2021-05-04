@@ -5,6 +5,12 @@
 
 CON
 
+    CTL_CLK   = 24
+    CTL_INT   = 25
+    CTL_NMI   = 26
+    CTL_RESET = 27
+    CTL_STEP  = 28
+
     REGP_N = 7
     REGP_V = 6
     REGP_B = 4
@@ -15,89 +21,64 @@ CON
 
 VAR
 
-    long cog
-    long cog_mbox
-    byte ram_6502[65536]
 
-PUB start(mbox) : rc
+PUB start(instance) : rc
+{
+    Processor Instance
 
-    ram_addr := @ram_6502
+    long ctl    '  [19:0] = memory base
+                '    [24] = clock enable
+                '    [25] = int
+                '    [26] = nmi
+                '    [27] = reset
+                '    [28] = single step
 
-    rc := cog := coginit(16, @cog_6502, mbox)
-    cog_mbox := mbox
+    long rdfunc '  [19:0] = memory read function
+    long wrfunc '  [19:0] = memory write function
+    long rwaddr '  [15:0] = r/w address
 
-    waitatn()
+    long regs1  '   [7:0] = A
+                '  [15:8] = X
+                ' [23:16] = Y
+                ' [31:24] = P
+    long regs2  '  [15:0] = PC
+                ' [23:16] = S
 
-PUB step_ins()
+    long stat1  '  [31:0] = total cycles count
+    long stat2  '   [7:0] = last istruction cycles
+}
 
-    cogatn(1 << cog)
-    waitatn()
+    rc := coginit(16, @cog_6502, instance)
 
-PUB exec(b1, b2, b3)
-
-    ram_6502[long[cog_mbox][5]] := b1
-    ram_6502[long[cog_mbox][5] + 1] := b2
-    ram_6502[long[cog_mbox][5] + 2] := b3
-
-    cogatn(1 << cog)
-    waitatn()
-
-PUB peek(addr) : rc
-
-   rc := ram_6502[addr & $FFFF]
-
-PUB peekw(addr) : rc
-
-   rc := ram_6502[addr & $FFFF] | (ram_6502[(addr + 1) & $FFFF] << 8)
-
-PUB poke(addr, val)
-
-   ram_6502[addr & $FFFF] := val
-
-PUB pokew(addr, val)
-
-   ram_6502[addr & $FFFF] := val
-   ram_6502[(addr + 1) & $FFFF] := val >> 8
-
-PUB copymem(data, addr, length)
-
-    bytemove(@ram_6502 + addr, data, length)
 
 DAT             org     $000
 
 cog_6502
                 add     ptrb, ##@lut_6502 - @cog_6502
-                setq2   #$200-1
+                setq2   #(@lut_6502_end - @lut_6502) / 4 -1
                 rdlong  0, ptrb
 
-                mov     _P, #%00110000
+                rdlong  ram_addr, ptra
+                and     ram_addr, ##$FFFFF
 
-                mov     ptrb, ##$FFFC
-                add     ptrb, ram_addr
-                rdword  ptrb, ptrb
-                add     ptrb, ram_addr
+                mov     _P, #%00110000      ' initial flags
+                mov     _S, #$FF            ' initial stack pointer
 
-                rep     @.loop, #8          ' ready to single-step
-                push    #.loop
-
-.loop           nop
-                nop
-                add     _T, _I
-
-                mov     _PC, ptrb           ' update cpu status
-                sub     _PC, ram_addr       ' |
-                setq    #7-1                ' |
-                wrlong  _A, ptra            ' |
-
-                cogatn  #1                  ' wait next step
-                waitatn                     ' |
-
-                setq    #7-1                ' update cpu status
-                rdlong  _A, ptra            ' |
-                mov     ptrb, _PC           ' |
+                mov     ptrb, ##$FFFC       ' read reset vector
+                add     ptrb, ram_addr      ' |
+                rdword  ptrb, ptrb          ' |
                 add     ptrb, ram_addr      ' |
 
-                rdbyte  t1, ptrb++          ' fetch instruction
+                rep     @.l1, #8            ' ready to single-step
+                push    #.resume
+.l1
+                jmp     #.resume
+
+.wait_clk       rdlong  cpu_ctl, ptra       ' wait clock enable
+                testbn  cpu_ctl, #CTL_CLK wz
+        if_z    jmp     #.wait_clk
+
+.loop           rdbyte  t1, ptrb++          ' fetch instruction
 
                 rdlut   t1, t1              ' decode instruction
 
@@ -105,6 +86,46 @@ cog_6502
                 setnib  t1, #0, #7          ' |
 
                 execf   t1                  ' execute instruction
+
+.resume         nop
+                nop
+
+                add     _T, _I              ' update total cycles count
+
+                rdlong  cpu_ctl, ptra
+                testbn  cpu_ctl, #CTL_STEP wz
+        if_z    jmp     #.wait_clk
+
+                getbyte t1, _A, #0          ' update cpu status
+                setbyte t1, _X, #1          ' |
+                setbyte t1, _Y, #2          ' |
+                setbyte t1, _P, #3          ' |
+                wrlong  t1, ptra[4]         ' |
+                mov     t2, ptrb            ' |
+                sub     t2, ram_addr        ' |
+                setbyte t2, _S, #2          ' |
+                wrlong  t2, ptra[5]         ' |
+                wrlong  _T, ptra[6]         ' |
+                wrlong  _I, ptra[7]         ' |
+
+                bitl    cpu_ctl, #CTL_CLK   ' signal ready for next step
+                wrlong  cpu_ctl, ptra       ' |
+
+.wait           rdlong  cpu_ctl, ptra       ' wait clock enable
+                testbn  cpu_ctl, #CTL_CLK wz
+        if_z    jmp     #.wait
+
+                rdlong  t1, ptra[4]         ' update cpu status
+                getbyte _A, t1, #0          ' |
+                getbyte _X, t1, #1          ' |
+                getbyte _Y, t1, #2          ' |
+                getbyte _P, t1, #3          ' |
+                rdlong  t2, ptra[5]         ' |
+                getword ptrb, t2, #0        ' |
+                add     ptrb, ram_addr      ' |
+                getbyte _S, t2, #2          ' |
+
+                jmp     #.loop
 
 '
 '
@@ -598,6 +619,7 @@ _pop_t1         incmod  _S, #$FF
 '
 ' Initialized
 '
+cpu_ctl         long    0
 ram_addr        long    0
 
 '
@@ -915,3 +937,5 @@ lut_6502
 
 i_halt          cogid   t1
                 cogstop t1
+
+lut_6502_end
