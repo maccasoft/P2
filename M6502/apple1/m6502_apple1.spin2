@@ -23,7 +23,7 @@ CON
     REGP_Z = 1
     REGP_C = 0
 
-DAT             org     $000
+DAT             org     $000, $1F0
 
 cog_6502
                 asmclk
@@ -35,8 +35,6 @@ cog_6502
                 coginit #1, ##@vga_driver   ' start video driver on cog #1
                 waitatn                     ' wait for init complete
                 setluts #1                  ' enable lut sharing
-
-                coginit #2, ##@ps2_driver   ' start keyboard driver on cog #2
 
                 getct   ts                  ' timer reference for clock throttling
                 mov     _I, #4              ' reset cycles
@@ -590,7 +588,7 @@ t5              res     1
 
 ts              res     1
 
-DAT             org     $200
+DAT             org     $200, $3F0
 
 lut_6502
 '
@@ -873,23 +871,7 @@ lut_6502
 ' I/O Routines
 
 _read
-                cmp     t2, ##$D012     wz
-        if_nz   cmp     t2, ##$D013     wz
-        if_z    jmp     #.dsp
-
-                getword t5, t2, #0
-                add     t5, ram_addr
-                rdbyte  t1, t5
-                cmp     t2, ##$D011     wz
-        if_z    wrbyte  #$00, t5
-                ret
-
-.dsp            mov     t5, t2
-                sub     t5, ##$CE14
-        _ret_   rdlut   t1, t5
-
-_write
-                cmp     t2, ##$D010     wz
+                cmp     t2, ##$D010     wz      ' pia address
         if_nz   cmp     t2, ##$D011     wz
         if_nz   cmp     t2, ##$D012     wz
         if_nz   cmp     t2, ##$D013     wz
@@ -897,12 +879,31 @@ _write
 
                 getword t5, t2, #0
                 add     t5, ram_addr
-                cmp     t5, ##ram_top_6502   wc
+        _ret_   rdbyte  t1, t5
+
+.pia            mov     t5, t2                  ' translate to lut address
+                sub     t5, ##$CE14             ' $1FC-$1FF
+                rdlut   t1, t5
+                cmp     t2, ##$D010     wz      ' if read from keyboard
+        if_z    add     t5, #1                  ' clear ready flag
+        if_z    wrlut   #0, t5                  ' |
+                ret
+
+_write
+                cmp     t2, ##$D010     wz      ' pia address
+        if_nz   cmp     t2, ##$D011     wz
+        if_nz   cmp     t2, ##$D012     wz
+        if_nz   cmp     t2, ##$D013     wz
+        if_z    jmp     #.pia
+
+                getword t5, t2, #0
+                add     t5, ram_addr
+                cmp     t5, ##ram_top_6502   wc ' simulate rom or non existing ram
         if_c    wrbyte  t1, t5
                 ret
 
-.pia            mov     t5, t2
-                sub     t5, ##$CE14
+.pia            mov     t5, t2                  ' translate to lut address
+                sub     t5, ##$CE14             ' $1FC-$1FF
         _ret_   wrlut   t1, t5
 
 i_halt          ret
@@ -910,9 +911,9 @@ i_halt          ret
 
 '
 '
-' VGA Driver
+' VGA + PS/2 Driver
 '
-DAT             org     $000
+DAT             org     $000, $1F0
 
 vga_driver
                 add     ptrb, ##@vga_lut - @vga_driver
@@ -954,9 +955,114 @@ vga_driver
 
 '
 '
-' Field loop
+' PS/2 Keyboard loop
 '
+newkey          mov     code, #0
 
+receive         testpn  #PS2_CLOCK      wz  ' wait for initial clock low
+        if_nz   jmp     #receive
+
+                getct   ct                  ' setup timeout
+                addct1  ct, timeout
+
+                mov     bits, #11
+.l1             testpn  #PS2_CLOCK      wz  ' wait until clock low
+        if_nz   jct1    #newkey             ' | check timeout
+        if_nz   jmp     #.l1                ' |
+                testp   #PS2_DATA       wc  ' sample data
+                rcr     data, #1
+.l2             testpn  #PS2_CLOCK      wz  ' wait until clock high
+        if_z    jct1    #newkey             ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    bits, #.l1          ' another bit?
+
+                shr     data, #22           ' align byte
+                and     data, #$FF
+
+                cmp     data, #$F0      wz  ' release
+        if_z    setbyte code, data, #3
+        if_z    jmp     #receive
+
+                getbyte ct, code, #0        ' swap scancode bytes
+                setbyte code, data, #0
+                setbyte code, ct, #1
+
+                cmp     data, #$E0      wz
+        if_z    setbyte code, data, #2
+        if_z    andn    code, #$FF
+        if_z    jmp     #receive
+
+                cmp     data, #$E1      wz
+        if_z    setbyte code, data, #2
+        if_z    mov     bytes, #1
+        if_z    andn    code, #$FF
+        if_z    jmp     #receive
+
+                cmpsub  bytes, #1       wc
+        if_c    jmp     #receive
+
+                cmp     code, ps2_l_shift_rel   wz  ' left-shift
+        if_nz   cmp     code, ps2_r_shift_rel   wz  ' right-shift
+        if_nz   cmp     code, ps2_alt_gr_rel    wz  ' alt-gr
+        if_z    andn    shift, #$0001
+        if_z    jmp     #newkey
+
+                test    code, ps2_rel_mask  wz ' release ?
+        if_nz   jmp     #newkey
+
+                cmp     code, #$0012        wz  ' left-shift
+        if_nz   cmp     code, #$0059        wz  ' right-shift
+        if_nz   cmp     code, ps2_alt_gr    wz  ' alt-gr
+        if_z    or      shift, #$0001
+        if_z    jmp     #newkey
+
+                getbyte ct, code, #2
+                cmp     ct, #$E0        wz  ' extended
+        if_z    jmp     #newkey
+
+                getbyte key, code, #0
+                test    shift, #%0001   wc  ' shift
+                rcl     key, #1
+
+                add     key, _ps2_table
+                rdbyte  key, key
+
+                cmp     key, #0         wz
+        if_z    jmp     #newkey
+
+                or      key, #$80
+                wrlut   key, pia_kbd
+                wrlut   #$80, pia_kbdcr
+
+                jmp     #newkey
+
+pia_kbd         long    $D010 - $CE14
+pia_kbdcr       long    $D011 - $CE14
+
+ps2_rel_mask    long    $FF_000000
+
+ps2_alt_gr      long    $00_E00011
+
+ps2_l_shift_rel long    $F0_000012
+ps2_r_shift_rel long    $F0_000059
+ps2_alt_gr_rel  long    $F0_E00011
+
+_ps2_table      long    ps2_table
+
+
+ct              long    0
+bits            long    0
+bytes           long    0
+data            long    0
+code            long    0
+shift           long    0
+key             long    0
+timeout         long    _CLKFREQ / 10
+
+'
+'
+' VGA Driver loop
+'
 field           callpa  #24, #border
 
                 mov     _sl, #0
@@ -973,12 +1079,6 @@ field           callpa  #24, #border
 
                 callpa  #24, #border
 
-                ' first blank line done here to use visible
-                ' pixels time to update the fifo
-
-                xcont   _as, #0             ' do before-visible part of scan line
-                xcont   _vi, #0             ' do visible part of scan line (blank)
-
                 incmod  _fc, #60-1          ' cursor blink timer
                 cmp     _fc, #40        wc  ' |
         if_c    mov     _ch, #$00           ' |
@@ -993,57 +1093,72 @@ field           callpa  #24, #border
         if_nz   wrlut   _ch, _vy            ' ack character received
         if_nz   call    #fifo_write         ' insert into fifo
 
-                xcont   _bs, #0             ' do before-sync part of scan line
-                xzero   _ds, #1             ' do sync part of scan line
-
-                callpa  #10-1, #blank       ' remaining blank lines
+                callpa  #10, #blank         ' back porch
 
                 drvnot  _pn                 ' vertical sync on
                 callpa  #2, #blank
                 drvnot  _pn                 ' vertical sync off
 
-                callpa  #33, #blank
+                callpa  #33, #blank         ' front porch
 
                 jmp     #field              ' loop
 
-line            xcont   _as,#0              ' do before-visible part of scan line
+line            xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
+                xzero   _ds, #1             ' do sync part of scan line
+                resi1
+                xcont   _as, #0             ' do before-visible part of scan line
+                resi1
                 xcont   _bv, #0             ' do left border
+                resi1
 
-                mov     _vx, #0
-.l1             mov     _cp, _lb
-                add     _cp, _vx
-                altgb   _cp, #_fifo
-                getbyte _cp, _fifo, #0
+                mov     _vx, #40
+                mov     _cp, _lb
+.l1             altgb   _cp, #_fifo
+                getbyte _ch, _fifo, #0
+                add     _cp, #1
 
-                rdlut   _cb+0, _cp          ' get bitmap from lut
-                add     _cp, #1             ' |
-                rdlut   _cb+1, _cp          ' |
+                rdlut   _cb+0, _ch          ' get bitmap from lut
+                add     _ch, #1             ' |
+                rdlut   _cb+1, _ch          ' |
                 altgb   _sl, #_cb           ' |
-                getbyte _cp, _cb, #0        ' |
+                getbyte _ch, _cb, #0        ' |
 
-                xcont   _dv, _cp
-                incmod  _vx, #40-1      wc
-        if_nc   jmp     #.l1
+                xcont   _dv, _ch
+                resi1
+                djnz    _vx, #.l1
 
                 xcont   _av, #0             ' do right border
-                xcont   _bs,#0              ' do before-sync part of scan line
-        _ret_   xzero   _ds,#1              ' do sync part of scan line
+                resi1
+                ret
 
-border          xcont   _as, #0             ' do before-visible part of scan line
-                xcont   _vi, #0             ' do visible part of scan line (blank)
-                xcont   _bs, #0             ' do before-sync part of scan line
+border          xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
                 xzero   _ds, #1             ' do sync part of scan line
-
+                resi1
                 xcont   _as, #0             ' do before-visible part of scan line
+                resi1
                 xcont   _vi, #0             ' do visible part of scan line (blank)
+                resi1
+
                 xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
                 xzero   _ds, #1             ' do sync part of scan line
+                resi1
+                xcont   _as, #0             ' do before-visible part of scan line
+                resi1
+                xcont   _vi, #0             ' do visible part of scan line (blank)
+                resi1
         _ret_   djnz    pa, #border
 
-blank           xcont   _as, #0             ' do before-visible part of scan line
-                xcont   _vi, #0             ' do visible part of scan line (blank)
-                xcont   _bs, #0             ' do before-sync part of scan line
+blank           xcont   _bs, #0             ' do before-sync part of scan line
+                resi1
                 xzero   _ds, #1             ' do sync part of scan line
+                resi1
+                xcont   _as, #0             ' do before-visible part of scan line
+                resi1
+                xcont   _vi, #0             ' do visible part of scan line (blank)
+                resi1
         _ret_   djnz    pa, #blank          ' loop if more blanks needed
 
 fifo_write      cmp     _ch, #$20       wc
@@ -1063,7 +1178,7 @@ fifo_write      cmp     _ch, #$20       wc
         if_nz   ret
 
 .l2             altsb   _fifo_tail, #_fifo
-                setbyte 0-0, #$20, #0
+                setbyte 0-0, #$40, #0
                 add     _fifo_tail, #1
                 incmod  _fifo_x, #40-1  wc
         if_nc   jmp     #.l2
@@ -1109,7 +1224,7 @@ _fifo_tail      long    0
 
 _fifo           byte    $40[24 * 40]
 
-DAT             org     $200
+DAT             org     $200, $3F0
 
 vga_lut
 chr_rom
@@ -1184,109 +1299,11 @@ vga_palette     long    $00_00_00_00        ' background
 vga_lut_end
 
 
-'
-'
-' Keyboard Driver
-'
-DAT             org     $000
-
-ps2_driver
-
-newkey          mov     code, #0
-
-receive         testpn  #PS2_CLOCK      wz  ' wait for initial clock low
-        if_nz   jmp     #receive
-
-                getct   ct                  ' setup timeout
-                addct1  ct, ##_CLKFREQ / 10
-
-                mov     bits, #11
-.l1             testpn  #PS2_CLOCK      wz  ' wait until clock low
-        if_nz   jct1    #newkey             ' | check timeout
-        if_nz   jmp     #.l1                ' |
-                testp   #PS2_DATA       wc  ' sample data
-                rcr     data, #1
-.l2             testpn  #PS2_CLOCK      wz  ' wait until clock high
-        if_z    jct1    #newkey             ' | check timeout
-        if_z    jmp     #.l2                ' |
-                djnz    bits, #.l1          ' another bit?
-
-                shr     data, #22           ' align byte
-                and     data, #$FF
-
-                cmp     data, #$F0      wz  ' release
-        if_z    setbyte code, data, #3
-        if_z    jmp     #receive
-
-                getbyte ct, code, #0        ' swap scancode bytes
-                setbyte code, data, #0
-                setbyte code, ct, #1
-
-                cmp     data, #$E0      wz
-        if_z    setbyte code, data, #2
-        if_z    andn    code, #$FF
-        if_z    jmp     #receive
-
-                cmp     data, #$E1      wz
-        if_z    setbyte code, data, #2
-        if_z    mov     bytes, #1
-        if_z    andn    code, #$FF
-        if_z    jmp     #receive
-
-                cmpsub  bytes, #1       wc
-        if_c    jmp     #receive
-
-                cmp     code, ##$F0_000012  wz  ' left-shift
-        if_nz   cmp     code, ##$F0_000059  wz  ' right-shift
-        if_nz   cmp     code, ##$F0_E00011  wz  ' alt-gr
-        if_z    andn    shift, #$0001
-        if_z    jmp     #newkey
-
-                test    code, ##$FF_000000   wz ' release ?
-        if_nz   jmp     #newkey
-
-                cmp     code, #$12      wz  ' left-shift
-        if_nz   cmp     code, #$59      wz  ' right-shift
-        if_nz   cmp     code, ##$E00011 wz  ' alt-gr
-        if_z    or      shift, #$0001
-        if_z    jmp     #newkey
-
-                getbyte ct, code, #2
-                cmp     ct, #$E0        wz  ' extended
-        if_z    jmp     #newkey
-
-                getbyte key, code, #0
-                test    shift, #%0001   wc  ' shift
-                rcl     key, #1
-
-                add     key, ##ps2_table
-                rdbyte  key, key
-
-                cmp     key, #0         wz
-        if_z    jmp     #newkey
-
-                or      key, #$80
-                wrbyte  key, pia_kbd
-                wrbyte  #$80, pia_kbdcr
-
-                jmp     #newkey
-
-pia_kbd         long    ram_6502 + $D010
-pia_kbdcr       long    ram_6502 + $D011
-
-ct              long    0
-bits            long    0
-bytes           long    0
-data            long    0
-code            long    0
-shift           long    0
-key             long    0
-
 DAT             orgh
 
 '
 '
-' Lookup table
+' PS/2 Lookup table
 '                       ascii     scan    extkey  regkey  ()=keypad
 '
 ps2_table       word    $0000   ' 00
