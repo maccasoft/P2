@@ -38,26 +38,28 @@ cog_6502
 
                 coginit #2, ##@ps2_driver   ' start keyboard driver on cog #2
 
-                getct   ts
+                getct   ts                  ' timer reference for clock throttling
                 mov     _I, #4              ' reset cycles
 
-                mov     _P, #%00110000
+                mov     _P, #%00110000      ' initial flags
+                mov     _S, #$FF            ' initial stack pointer
 
-                mov     ptrb, ##$FFFC
-                add     ptrb, ram_addr
-                rdword  ptrb, ptrb
-                add     ptrb, ram_addr
+                mov     ptrb, ##$FFFC       ' read reset vector
+                add     ptrb, ram_addr      ' |
+                rdword  ptrb, ptrb          ' |
+                add     ptrb, ram_addr      ' |
 
                 rep     @.loop, #8          ' ready to single-step
                 push    #.loop
 
 .loop           nop
                 nop
-                add     _T, _I
 
-.wl             addct1  ts, _I_CLK          ' clock throttling
-                djnz    _I, #.wl
-                waitct1
+                add     _T, _I              ' update total cycles count
+
+                mul     _I, _I_CLK          ' clock throttling
+                addct1  ts, _I              ' |
+                waitct1                     ' |
 
                 rdbyte  t1, ptrb++          ' fetch instruction
 
@@ -260,10 +262,10 @@ i_inde_xy       getbyte t1, _X, #0          '  0   1   0   1
                 getbyte _Y, t1, #0          '  1   0   1   0
                 jmp     #_flags
 
-i_jmp           rdword  ptrb, ptrb           ' 0 0
-                add     ptrb, ram_addr       ' 1 0
-                rdword  ptrb, ptrb           ' 1 0
-        _ret_   add     ptrb, ram_addr       ' 0 0
+i_jmp           rdword  ptrb, ptrb          ' 0 0
+                add     ptrb, ram_addr      ' 1 0
+                rdword  ptrb, ptrb          ' 1 0
+        _ret_   add     ptrb, ram_addr      ' 0 0
 
 i_jsr           rdword  t4, ptrb            ' t4 = new PC
                 add     ptrb, #1
@@ -980,7 +982,7 @@ field           callpa  #24, #border
                 incmod  _fc, #60-1          ' cursor blink timer
                 cmp     _fc, #40        wc  ' |
         if_c    mov     _ch, #$00           ' |
-        if_nc   mov     _ch, #$20           ' |
+        if_nc   mov     _ch, #$40           ' |
                 altsb   _fifo_tail, #_fifo  ' |
                 setbyte 0-0, _ch, #0        ' |
 
@@ -1012,10 +1014,8 @@ line            xcont   _as,#0              ' do before-visible part of scan lin
                 add     _cp, _vx
                 altgb   _cp, #_fifo
                 getbyte _cp, _fifo, #0
-                and     _cp, #$7F
 
-                shl     _cp, #1             ' get bitmap from lut
-                rdlut   _cb+0, _cp          ' |
+                rdlut   _cb+0, _cp          ' get bitmap from lut
                 add     _cp, #1             ' |
                 rdlut   _cb+1, _cp          ' |
                 altgb   _sl, #_cb           ' |
@@ -1051,6 +1051,7 @@ fifo_write      cmp     _ch, #$20       wc
                 test    _ch, #%01000000 wz
                 muxz    _ch, #%00100000
                 and     _ch, #$3F
+                shl     _ch, #1             ' pre-shift for lut read
 
 .l1             altsb   _fifo_tail, #_fifo
                 setbyte 0-0, _ch, #0
@@ -1106,7 +1107,7 @@ _fifo_x         long    0
 _fifo_head      long    0
 _fifo_tail      long    0
 
-_fifo           byte    $20[24 * 40]
+_fifo           byte    $40[24 * 40]
 
 DAT             org     $200
 
@@ -1200,16 +1201,14 @@ receive         testpn  #PS2_CLOCK      wz  ' wait for initial clock low
                 addct1  ct, ##_CLKFREQ / 10
 
                 mov     bits, #11
-.l1             pollct1                 wc  ' poll timeout
-        if_c    jmp     #newkey             ' reset if expired
-                testpn  #PS2_CLOCK      wz  ' wait until clock low
-        if_nz   jmp     #.l1
+.l1             testpn  #PS2_CLOCK      wz  ' wait until clock low
+        if_nz   jct1    #newkey             ' | check timeout
+        if_nz   jmp     #.l1                ' |
                 testp   #PS2_DATA       wc  ' sample data
                 rcr     data, #1
-.l2             pollct1                 wc  ' poll timeout
-        if_c    jmp     #newkey             ' reset if expired
-                testpn  #PS2_CLOCK      wz  ' wait until clock high
-        if_z    jmp     #.l2
+.l2             testpn  #PS2_CLOCK      wz  ' wait until clock high
+        if_z    jct1    #newkey             ' | check timeout
+        if_z    jmp     #.l2                ' |
                 djnz    bits, #.l1          ' another bit?
 
                 shr     data, #22           ' align byte
