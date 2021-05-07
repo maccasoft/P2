@@ -1215,8 +1215,6 @@ _lb             long    0                   ' line buffer pointer
 _cp             long    0                   ' character pointer
 _cb             long    0[2]                ' character bitmap
 
-_li             long    0                   ' line index
-
 _ch             long    0
 _fc             long    0
 
@@ -1233,8 +1231,7 @@ _fifo           byte    $40[24 * 40]
 
 DAT             org     $200, $3F0
 
-vga_lut
-chr_rom
+vga_lut         ' chr rom
                 byte    $1C, $22, $2C, $2A, $2A, $2A, $1C, $00  ' 40
                 byte    $08, $14, $22, $22, $3E, $22, $22, $00  ' 41
                 byte    $1E, $22, $22, $1E, $22, $22, $1E, $00  ' 42
@@ -1300,7 +1297,8 @@ chr_rom
                 byte    $04, $08, $10, $20, $10, $08, $04, $00  ' 3E
                 byte    $1C, $22, $10, $08, $08, $00, $08, $00  ' 3F
 
-vga_palette     long    $00_00_00_00        ' background
+                ' palette
+                long    $00_00_00_00        ' background
                 long    $00_F0_00_00        ' foreground
 
 vga_lut_end
