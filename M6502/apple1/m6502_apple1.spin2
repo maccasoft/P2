@@ -15,6 +15,15 @@ CON
     PS2_DATA      = 25
     PS2_CLOCK     = 24
 
+    LEFT_CTRL   = %0000_0001
+    LEFT_SHIFT  = %0000_0010
+    LEFT_ALT    = %0000_0100
+    LEFT_GUI    = %0000_1000
+    RIGHT_CTRL  = %0001_0000
+    RIGHT_SHIFT = %0010_0000
+    RIGHT_ALT   = %0100_0000
+    RIGHT_GUI   = %1000_0000
+
     REGP_N = 7
     REGP_V = 6
     REGP_B = 4
@@ -916,6 +925,9 @@ i_halt          ret
 DAT             org     $000, $1F0
 
 vga_driver
+                fltl    #PS2_CLOCK
+                fltl    #PS2_DATA
+
                 add     ptrb, ##@vga_lut - @vga_driver
                 setq2   #(@vga_lut_end - @vga_lut) / 4 -1   ' load chr rom and palette into lut
                 rdlong  0, ptrb
@@ -957,107 +969,98 @@ vga_driver
 '
 ' PS/2 Keyboard loop
 '
-newkey          mov     code, #0
+reset           mov     key, #0
+                mov     shift, #0
+                mov     state, #0
 
-receive         testpn  #PS2_CLOCK      wz  ' wait for initial clock low
-        if_nz   jmp     #receive
+loop            testpn  #PS2_DATA       wz  ' wait for initial receive
+        if_z    jmp     #$-1
 
-                getct   ct                  ' setup timeout
-                addct1  ct, timeout
+                mov     state, #0
+                getct   tout                ' safety timeout
+                addct1  tout, safe_tout
 
-                mov     bits, #11
+.l1             calld   receive_ret, #receive
+                getbyte code, data, #0
+
+                cmp     data, #$F0      wz  ' release
+        if_z    bith    state, #31
+        if_z    jmp     #.l1
+
+                cmp     data, #$E1      wz
+        if_z    bith    state, #29
+        if_z    jmp     #ext1
+                cmp     data, #$E0      wz
+        if_z    bith    state, #28
+        if_z    jmp     #ext0
+
+                testb   state, #31      wc  ' test release
+
+                cmp     code, #$12      wz  ' left shift
+        if_z    muxnc   shift, #LEFT_SHIFT
+                cmp     code, #$59      wz  ' right shift
+        if_z    muxnc   shift, #RIGHT_SHIFT
+
+        if_c    jmp     #loop               ' ignore release
+
+                mov     tout, map
+                test    shift, #(LEFT_SHIFT | RIGHT_SHIFT)  wz
+        if_nz   add     tout, #$84
+                add     tout, data
+                rdbyte  key, tout       wz
+        if_z    jmp     #loop               ' ignore untranslated codes
+
+                or      key, #$80           ' send character to shared lut
+                wrlut   key, pia_kbd        ' |
+                wrlut   #$80, pia_kbdcr     ' |
+
+                jmp     #loop
+
+ext1            calld   receive_ret, #receive
+                setbyte code, data, #1
+                cmp     data, #$F0      wz  ' release
+        if_z    bith    state, #31
+        if_z    jmp     #ext1
+
+                ' fall through
+
+ext0            calld   receive_ret, #receive
+                setbyte code, data, #0
+                cmp     data, #$F0      wz  ' release
+        if_z    bith    state, #31
+        if_z    jmp     #ext0
+
+                jmp     #loop               ' extended codes are ignored
+
+receive         mov     bits, #11
 .l1             testpn  #PS2_CLOCK      wz  ' wait until clock low
-        if_nz   jct1    #newkey             ' | check timeout
+        if_nz   jct1    #reset              ' | check timeout
         if_nz   jmp     #.l1                ' |
                 testp   #PS2_DATA       wc  ' sample data
                 rcr     data, #1
 .l2             testpn  #PS2_CLOCK      wz  ' wait until clock high
-        if_z    jct1    #newkey             ' | check timeout
+        if_z    jct1    #reset              ' | check timeout
         if_z    jmp     #.l2                ' |
                 djnz    bits, #.l1          ' another bit?
 
                 shr     data, #22           ' align byte
+                test    data, #$1FF     wc  ' test parity
+        if_nc   jmp     #reset
                 and     data, #$FF
+                jmp     receive_ret
+receive_ret     long    0
 
-                cmp     data, #$F0      wz  ' release
-        if_z    setbyte code, data, #3
-        if_z    jmp     #receive
-
-                getbyte ct, code, #0        ' swap scancode bytes
-                setbyte code, data, #0
-                setbyte code, ct, #1
-
-                cmp     data, #$E0      wz
-        if_z    setbyte code, data, #2
-        if_z    andn    code, #$FF
-        if_z    jmp     #receive
-
-                cmp     data, #$E1      wz
-        if_z    setbyte code, data, #2
-        if_z    mov     bytes, #1
-        if_z    andn    code, #$FF
-        if_z    jmp     #receive
-
-                cmpsub  bytes, #1       wc
-        if_c    jmp     #receive
-
-                cmp     code, ps2_l_shift_rel   wz  ' left-shift
-        if_nz   cmp     code, ps2_r_shift_rel   wz  ' right-shift
-        if_nz   cmp     code, ps2_alt_gr_rel    wz  ' alt-gr
-        if_z    andn    shift, #$0001
-        if_z    jmp     #newkey
-
-                test    code, ps2_rel_mask  wz ' release ?
-        if_nz   jmp     #newkey
-
-                cmp     code, #$0012        wz  ' left-shift
-        if_nz   cmp     code, #$0059        wz  ' right-shift
-        if_nz   cmp     code, ps2_alt_gr    wz  ' alt-gr
-        if_z    or      shift, #$0001
-        if_z    jmp     #newkey
-
-                getbyte ct, code, #2
-                cmp     ct, #$E0        wz  ' extended
-        if_z    jmp     #newkey
-
-                getbyte key, code, #0
-                test    shift, #%0001   wc  ' shift
-                rcl     key, #1
-
-                add     key, _ps2_table
-                rdbyte  key, key
-
-                cmp     key, #0         wz
-        if_z    jmp     #newkey
-
-                or      key, #$80
-                wrlut   key, pia_kbd
-                wrlut   #$80, pia_kbdcr
-
-                jmp     #newkey
-
-pia_kbd         long    $D010 - $CE14
-pia_kbdcr       long    $D011 - $CE14
-
-ps2_rel_mask    long    $FF_000000
-
-ps2_alt_gr      long    $00_E00011
-
-ps2_l_shift_rel long    $F0_000012
-ps2_r_shift_rel long    $F0_000059
-ps2_alt_gr_rel  long    $F0_E00011
-
-_ps2_table      long    ps2_table
-
-
-ct              long    0
-bits            long    0
-bytes           long    0
-data            long    0
 code            long    0
+state           long    0
 shift           long    0
 key             long    0
-timeout         long    _CLKFREQ / 10
+
+map             long    ps2_table
+safe_tout       long    _CLKFREQ / 10
+
+bits            long    0
+data            long    0
+tout            long    0
 
 '
 '
@@ -1079,18 +1082,17 @@ field           callpa  #24, #border
 
                 callpa  #24, #border
 
-                incmod  _fc, #60-1          ' cursor blink timer
-                cmp     _fc, #40        wc  ' |
+                incmod  _fc, #30            ' cursor blink timer
+                cmp     _fc, #20        wc  ' 2/3 on 1/3 off
         if_c    mov     _ch, #$00           ' |
         if_nc   mov     _ch, #$40           ' |
                 altsb   _fifo_tail, #_fifo  ' |
                 setbyte 0-0, _ch, #0        ' |
 
-                mov     _vy, #$1FE          ' get character to display
-                rdlut   _ch, _vy            '   from shared lut
+                rdlut   _ch, pia_dsp        ' get character to display from shared lut
                 test    _ch, #$80       wz  ' test if valid
         if_nz   and     _ch, #$7F           ' mask bit 7
-        if_nz   wrlut   _ch, _vy            ' ack character received
+        if_nz   wrlut   _ch, pia_dsp        ' ack character received
         if_nz   call    #fifo_write         ' insert into fifo
 
                 callpa  #10, #blank         ' back porch
@@ -1218,6 +1220,11 @@ _li             long    0                   ' line index
 _ch             long    0
 _fc             long    0
 
+pia_kbd         long    $D010 - $CE14
+pia_kbdcr       long    $D011 - $CE14
+pia_dsp         long    $D012 - $CE14
+pia_dspcr       long    $D013 - $CE14
+
 _fifo_x         long    0
 _fifo_head      long    0
 _fifo_tail      long    0
@@ -1304,140 +1311,43 @@ DAT             orgh
 '
 '
 ' PS/2 Lookup table
-'                       ascii     scan    extkey  regkey  ()=keypad
 '
-ps2_table       word    $0000   ' 00
-                word    $0000   ' 01              F9
-                word    $0000   ' 02
-                word    $0000   ' 03              F5
-                word    $0000   ' 04              F3
-                word    $0000   ' 05              F1
-                word    $0000   ' 06              F2
-                word    $0000   ' 07              F12
-                word    $0000   ' 08
-                word    $0000   ' 09              F10
-                word    $0000   ' 0A              F8
-                word    $0000   ' 0B              F6
-                word    $0000   ' 0C              F4
-                word    $0009   ' 0D              Tab
-                word    $7D5C   ' 0E             `
-                word    $0000   ' 0F
-                word    $0000   ' 10
-                word    $0000   ' 11      Alt-R   Alt-L
-                word    $0000   ' 12              Shift-L
-                word    $0000   ' 13
-                word    $0000   ' 14      Ctrl-R  Ctrl-L
-                word    $5151   ' 15              q
-                word    $2131   ' 16              1
-                word    $0000   ' 17
-                word    $0000   ' 18
-                word    $0000   ' 19
-                word    $5A5A   ' 1A              z
-                word    $5353   ' 1B              s
-                word    $4141   ' 1C              a
-                word    $5757   ' 1D              w
-                word    $2232   ' 1E              2
-                word    $0000   ' 1F      Win-L
-                word    $0000   ' 20
-                word    $4343   ' 21              c
-                word    $5858   ' 22              x
-                word    $4444   ' 23              d
-                word    $4545   ' 24              e
-                word    $2434   ' 25              4
-                word    $2333   ' 26              3
-                word    $0000   ' 27      Win-R
-                word    $0000   ' 28
-                word    $2020   ' 29              Space
-                word    $5656   ' 2A              v
-                word    $4646   ' 2B              f
-                word    $5454   ' 2C              t
-                word    $5252   ' 2D              r
-                word    $2535   ' 2E              5
-                word    $0000   ' 2F      Apps
-                word    $0000   ' 30
-                word    $4E4E   ' 31              n
-                word    $4242   ' 32              b
-                word    $4848   ' 33              h
-                word    $4747   ' 34              g
-                word    $5959   ' 35              y
-                word    $2636   ' 36              6
-                word    $0000   ' 37      Power
-                word    $0000   ' 38
-                word    $0000   ' 39
-                word    $4D4D   ' 3A              m
-                word    $4A4A   ' 3B              j
-                word    $5555   ' 3C              u
-                word    $2F37   ' 3D              7
-                word    $2838   ' 3E              8
-                word    $0000   ' 3F      Sleep
-                word    $0000   ' 40
-                word    $3B2C   ' 41              ,
-                word    $4B4B   ' 42              k
-                word    $4949   ' 43              i
-                word    $4F4F   ' 44              o
-                word    $3D30   ' 45              0
-                word    $2939   ' 46              9
-                word    $0000   ' 47
-                word    $0000   ' 48
-                word    $3A2E   ' 49             .
-                word    $5F2D   ' 4A      (/)     /
-                word    $4C4C   ' 4B              l
-                word    $4000   ' 4C              ;
-                word    $5050   ' 4D              p
-                word    $3F27   ' 4E              -
-                word    $0000   ' 4F
-                word    $0000   ' 50
-                word    $0000   ' 51
-                word    $2300   ' 52              '
-                word    $0000   ' 53
-                word    $7B00   ' 54              [
-                word    $5E00   ' 55              =
-                word    $0000   ' 56
-                word    $0000   ' 57
-                word    $0000   ' 58              CapsLock
-                word    $0000   ' 59              Shift-R
-                word    $0D0D   ' 5A      (Enter) Enter
-                word    $7D2B   ' 5B              ]
-                word    $0000   ' 5C
-                word    $0000   ' 5D              \
-                word    $0000   ' 5E      WakeUp
-                word    $0000   ' 5F
-                word    $0000   ' 60
-                word    $3E3C   ' 61
-                word    $0000   ' 62
-                word    $0000   ' 63
-                word    $0000   ' 64
-                word    $0000   ' 65
-                word    $DFDF   ' 66              BackSpace
-                word    $0000   ' 67
-                word    $0000   ' 68
-                word    $0000   ' 69      End     (1)
-                word    $0000   ' 6A
-                word    $0000   ' 6B      Left    (4)
-                word    $0000   ' 6C      Home    (7)
-                word    $0000   ' 6D
-                word    $0000   ' 6E
-                word    $0000   ' 6F
-                word    $0000   ' 70      Insert  (0)
-                word    $0000   ' 71      Delete  (.)
-                word    $0000   ' 72      Down    (2)
-                word    $0000   ' 73              (5)
-                word    $0000   ' 74      Right   (6)
-                word    $0000   ' 75      Up      (8)
-                word    $001B   ' 76              Esc
-                word    $0000   ' 77              NumLock
-                word    $0000   ' 78              F11
-                word    $0000   ' 79              (+)
-                word    $0000   ' 7A      PageDn  (3)
-                word    $0000   ' 7B              (-)
-                word    $0000   ' 7C      PrScr   (*)
-                word    $0000   ' 7D      PageUp  (9)
-                word    $0000   ' 7E              ScrLock
-                word    $0000   ' 7F
-                word    $0000   ' 80
-                word    $0000   ' 81
-                word    $0000   ' 82
-                word    $0000   ' 83              F7
+ps2_table       ' normal
+                byte    $00, $00, $00, $00, $00, $00, $00, $00 ' 00-07
+                byte    $00, $00, $00, $00, $00, $09, "`", $00 ' 08-0F
+                byte    $00, $00, $00, $00, $00, "Q", "1", $00 ' 10-17
+                byte    $00, $00, "Z", "S", "A", "W", "2", $00 ' 18-1F
+                byte    $00, "C", "X", "D", "E", "4", "3", $00 ' 20-27
+                byte    $00, " ", "V", "F", "T", "R", "5", $00 ' 28-2F
+                byte    $00, "N", "B", "H", "G", "Y", "6", $00 ' 30-37
+                byte    $00, $00, "M", "J", "U", "7", "8", $00 ' 38-3F
+                byte    $00, ",", "K", "I", "O", "0", "9", $00 ' 40-47
+                byte    $00, ".", "/", "L", ";", "P", "-", $00 ' 48-4F
+                byte    $00, $00, $22, $00, "[", "=", $00, $00 ' 50-57
+                byte    $00, $00, $0D, "]", $00, "\", $00, $00 ' 58-5F
+                byte    $00, $00, $00, $00, $00, $00, $DF, $00 ' 60-67
+                byte    $00, "1", $00, "4", "7", $00, $00, $00 ' 68-6F
+                byte    "0", ".", "2", "5", "6", "8", $1B, $00 ' 70-77
+                byte    $00, "+", "3", "-", "*", "9", $00, $00 ' 78-7F
+                byte    $00, $00, $00, $00                     ' 80-83
+                ' shift
+                byte    $00, $00, $00, $00, $00, $00, $00, $00 ' 00-07
+                byte    $00, $00, $00, $00, $00, $09, "~", $00 ' 08-0F
+                byte    $00, $00, $00, $00, $00, "Q", "!", $00 ' 10-17
+                byte    $00, $00, "Z", "S", "A", "W", "@", $00 ' 18-1F
+                byte    $00, "C", "X", "D", "E", "$", "#", $00 ' 20-27
+                byte    $00, " ", "V", "F", "T", "R", "%", $00 ' 28-2F
+                byte    $00, "N", "B", "H", "G", "Y", "^", $00 ' 30-37
+                byte    $00, $00, "M", "J", "U", "&", "*", $00 ' 38-3F
+                byte    $00, "<", "K", "I", "O", ")", "(", $00 ' 40-47
+                byte    $00, ">", "?", "L", ":", "P", "_", $00 ' 48-4F
+                byte    $00, $00, "'", $00, "{", "+", $00, $00 ' 50-57
+                byte    $00, $00, $0D, "}", $00, "|", $00, $00 ' 58-5F
+                byte    $00, $00, $00, $00, $00, $00, $DF, $00 ' 60-67
+                byte    $00, "1", $00, "4", "7", $00, $00, $00 ' 68-6F
+                byte    "0", ".", "2", "5", "6", "8", $1B, $00 ' 70-77
+                byte    $00, "+", "3", "-", "*", "9", $00, $00 ' 78-7F
+                byte    $00,     $00,  $00,  $00                                         ' 80-83
 
 '
 '
