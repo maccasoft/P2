@@ -2157,15 +2157,15 @@ field
                 resi1
                 djnz    cy,#.line
 
+                mov     cy,#24                  'after-visible blank lines
+                calld   border_ret, #border
+
                 rdbyte  cy, #@tms_status        ' update status byte
                 bith    cy, #7              wcz ' vsync flag
                 wrbyte  cy, #@tms_status
 
                 test    regs+1, #TMSINTEN   wz
     if_00       cogatn  #%00000010              'signal vertical sync to cog1
-
-                mov     cy,#24                  'after-visible blank lines
-                calld   border_ret, #border
 
                 mov     cy, #10
                 calld   blank_ret, #blank
