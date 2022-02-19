@@ -987,32 +987,20 @@ zk_portout
                 cmp     zk_ea, #$80     wcz ' 00-7F = none
          if_c   ret
                 cmp     zk_ea, #$A0     wcz ' 80-9F = set to keypad mode
-         if_c   jmp     #\keypad_mode
+         if_c   sets    _ctl0, #@coleco_ctrls+0
+         if_c   sets    _ctl1, #@coleco_ctrls+2
+         if_c   ret
                 cmp     zk_ea, #$C0     wcz ' A0-BF = video
          if_c   jmp     #\tms_video_out
                 cmp     zk_ea, #$E0     wcz ' C0-DF = set to joystick mode
-         if_c   jmp     #\joy_mode
-                ret
-
-joy_mode
-                sets    _ctl0, #joy0_rd
-                sets    _ctl1, #joy1_rd
-                ret
-
-keypad_mode
-                sets    _ctl0, #pad0_rd
-                sets    _ctl1, #pad1_rd
-                ret
-
-tms_video_out
-                testbn  zk_ea, #0       wz
-        if_z    jmp     #\tms_ram_wr
-_setup  if_nz   jmp     #\tms_data_wr
+         if_c   sets    _ctl0, #@coleco_ctrls+1
+         if_c   sets    _ctl1, #@coleco_ctrls+3
                 ret
 
 zk_portin
                 ' zk_ea   = port
                 ' zk_tmp8 = data
+                add     zk_cycles, #4
                 mov     zk_tmp8, #$FF
                 cmp     zk_ea, #$A0     wcz ' 00-9F = none
          if_c   ret
@@ -1020,29 +1008,16 @@ zk_portin
          if_c   jmp     #\tms_video_in
                 cmp     zk_ea, #$E0     wcz ' C0-DF = none
          if_c   ret
-                testbn  zk_ea, #1       wz  ' E0-FF = controls
-_ctl0    if_z   jmp     #\pad0_rd
-_ctl1    if_nz  jmp     #\pad1_rd
+                testbn  zk_ea, #1       wz  ' E0-FF = controllers
+_ctl0    if_z   rdbyte  zk_tmp8, #@coleco_ctrls+0
+_ctl1    if_nz  rdbyte  zk_tmp8, #@coleco_ctrls+2
+                ret
 
-'                add     zk_cycles, #4
-'                mov     pa, zk_ea
-'                and     pa, #$E1
-'                cmp     pa, #$A0            wz
-'        if_z    jmp     #\tms_ram_rd
-'                cmp     pa, #$A1            wz
-'        if_z    jmp     #\tms_status_rd
-'                mov     pa, zk_ea
-'                and     pa, #$E2
-'                cmp     pa, #$E0        wz
-'_ctl0   if_z    jmp     #\pad0_rd
-'                cmp     pa, #$E2        wz
-'_ctl1   if_z    jmp     #\pad1_rd
-'                ret     wcz
-
-tms_video_in
+tms_video_out
                 testbn  zk_ea, #0       wz
-        if_z    jmp     #\tms_ram_rd
-        if_nz   jmp     #\tms_status_rd
+        if_z    jmp     #\tms_ram_wr
+_setup  if_nz   jmp     #\tms_data_wr
+                ret
 
 tms_data_wr     sets    _setup, #tms_reg_wr
                 getbyte tms_tmp0, zk_tmp8, #0
@@ -1066,15 +1041,6 @@ tms_addr_wr     mov     tms_ramptr, zk_tmp8
 tms_ramptr      long    0
 tms_tmp0        long    0
 tms_tmp1        long    0
-
-joy0_rd         rdbyte  zk_tmp8, #@coleco_ctrls+1
-                ret     wcz
-
-pad0_rd         rdbyte  zk_tmp8, #@coleco_ctrls+0
-                ret     wcz
-
-joy1_rd         ret     wcz
-pad1_rd         ret     wcz
 
 zk_ffffh        long    $FFFF
 zk_18000h       long    $18000
@@ -1679,6 +1645,16 @@ zk_halt
                 'incmod  zk_refresh, #127
                 jmp     #zk_halt
 
+                fit     $400
+
+
+DAT             orgh
+
+tms_video_in
+                testbn  zk_ea, #0       wz
+        if_z    jmp     #\tms_ram_rd
+        if_nz   jmp     #\tms_status_rd
+
 tms_ram_wr      mov     tms_tmp1, tms_ramptr
                 add     tms_tmp1, ##@tms_vram
                 wrbyte  zk_tmp8, tms_tmp1
@@ -1697,8 +1673,6 @@ tms_status_rd   mov     tms_tmp0, ##@tms_status
                 bitl    tms_tmp1, #7      wcz
         if_c    wrbyte  tms_tmp1, tms_tmp0
                 ret     wcz
-
-                fit     $400
 
 CON
 
