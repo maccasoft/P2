@@ -2,8 +2,10 @@
     ColecoVision Console Emulator
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
 
-    Z80 Emulator by Ada Gottensträter (Wuerfel_21)
+    Z80 Emulator by Ada Gottensträter
     TMS9918 Emulator by Marco Maccaferri
+    SN76489 Emulator by by Johannes Ahlebrand port to P2 by Ada Gottensträter
+    PS/2 Keyboard driver by Marco Maccaferri
 }
 CON
 
@@ -469,7 +471,7 @@ zk_cogbase
                 setq2   #511
                 rdlong  0, ptrb
 
-                mov     zk_pc, #0
+                'mov     zk_pc, #0
                 mov     zk_irqenable, #0
                 mov     zk_irqhook, #0
                 mov     zk_refresh, #0
@@ -954,7 +956,11 @@ zk_readcode
 zk_read8
                 add     zk_cycles,#3
                 mov     pa, zk_ea
-                add     pa, zk_ram
+                cmp     pa, ram_base    wcz
+        if_b    jmp     #.l1
+                cmp     pa, ram_top     wcz
+        if_b    and     pa, ram_mask
+.l1             add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
                 ret     wcz
 
@@ -979,27 +985,33 @@ zk_write8hl
 zk_write8
                 add     zk_cycles, #3
                 mov     pa, zk_ea
-                zerox   pa, #16
+                cmp     pa, ram_base    wcz
+         if_b   ret     wcz
+                cmp     pa, ram_top     wcz
+         if_ae  ret     wcz
+                and     pa, ram_mask
                 add     pa, zk_ram
                 wrbyte  zk_tmp8, pa
                 ret     wcz
+
+ram_base        long    $6000
+ram_top         long    $8000
+ram_mask        long    %1110_0011_1111_1111
 
 zk_portout
                 ' zk_ea   = port
                 ' zk_tmp8 = data
                 add     zk_cycles, #4
                 cmp     zk_ea, #$80     wcz ' 00-7F = none
-         if_c   ret
+         if_b   ret
                 cmp     zk_ea, #$A0     wcz ' 80-9F = set keypad mode
-         if_c   sets    _ctl0, #@coleco_ctrls+0
-         if_c   sets    _ctl1, #@coleco_ctrls+2
-         if_c   ret
+         if_b   bith    io_flags, #1
+         if_b   ret
                 cmp     zk_ea, #$C0     wcz ' A0-BF = video
-         if_c   jmp     #\tms_video_out
+         if_b   jmp     #\tms_wr
                 cmp     zk_ea, #$E0     wcz ' C0-DF = set joystick mode
-         if_c   sets    _ctl0, #@coleco_ctrls+1
-         if_c   sets    _ctl1, #@coleco_ctrls+3
-         if_c   ret
+         if_b   bitl    io_flags, #1
+         if_b   ret
                 jmp     #\psg_wr
 
 zk_portin
@@ -1008,40 +1020,16 @@ zk_portin
                 add     zk_cycles, #4
                 mov     zk_tmp8, #$FF
                 cmp     zk_ea, #$A0     wcz ' 00-9F = none
-         if_c   ret
+         if_b   ret
                 cmp     zk_ea, #$C0     wcz ' A0-BF = video
-         if_c   jmp     #\tms_video_in
+         if_b   jmp     #\tms_rd
                 cmp     zk_ea, #$E0     wcz ' C0-DF = none
-         if_c   ret
-                testbn  zk_ea, #1       wz  ' E0-FF = controllers
-_ctl0    if_z   rdbyte  zk_tmp8, #@coleco_ctrls+0
-_ctl1    if_nz  rdbyte  zk_tmp8, #@coleco_ctrls+2
+         if_b   ret
+                jmp     #\ctrl_rd           ' E0-FF = controller read
                 ret
 
-tms_video_out
-                testbn  zk_ea, #0       wz
-        if_z    jmp     #\tms_ram_wr
-_setup  if_nz   jmp     #\tms_data_wr
-                ret
-
-tms_data_wr     sets    _setup, #tms_reg_wr
-                getbyte tms_tmp0, zk_tmp8, #0
-                ret     wcz
-
-tms_reg_wr      sets    _setup, #tms_data_wr
-                testbn  zk_tmp8, #7          wz
-        if_z    jmp     #tms_addr_wr
-                mov     tms_tmp1, zk_tmp8
-                and     tms_tmp1, #$07
-                add     tms_tmp1, ##@tms_regs
-                wrbyte  tms_tmp0, tms_tmp1
-                ret     wcz
-
-tms_addr_wr     mov     tms_ramptr, zk_tmp8
-                and     tms_ramptr, #$3F
-                shl     tms_ramptr, #8
-                or      tms_ramptr, tms_tmp0
-                ret     wcz
+io_flags        long    0                   ' bit 0 = tms reg/data
+                                            '     1 = joystick/pad mode
 
 tms_ramptr      long    0
 tms_tmp0        long    0
@@ -1055,7 +1043,7 @@ zk_18000h       long    $18000
 zk_bit31        long    negx
 
 zk_cycles       long    0
-zk_pc           long    $0100
+zk_pc           long    $0000
 
 zk_bankmask     long    $FF8000
 zk_romstop      long    $4000000
@@ -1064,7 +1052,7 @@ zk_bankreg      long    0
 zk_flags        long    0
 zk_accu         long    0
 zk_debc         long    0
-zk_sp           long    0
+zk_sp           long    $F000
 zk_hl           long    0
 zk_ix           long    0
 zk_iy           long    0
@@ -1655,10 +1643,50 @@ zk_halt
 
                 fit     $400
 
+DAT             orgh    ' I/O Hub-exec code
 
-DAT             orgh
+'
+' Controllers
+'
+ctrl_rd
+                testb   io_flags, #1    wc
+                testb   zk_ea, #1       wz
+         if_00  rdbyte  zk_tmp8, #@coleco_ctrls+1
+         if_01  rdbyte  zk_tmp8, #@coleco_ctrls+3
+         if_10  rdbyte  zk_tmp8, #@coleco_ctrls+0
+         if_11  rdbyte  zk_tmp8, #@coleco_ctrls+2
+                ret     wcz
 
-tms_video_in
+'
+' TMS9918
+'
+tms_wr
+                testb   io_flags, #0    wc
+                testb   zk_ea, #0       wz
+         if_x0  jmp     #\tms_ram_wr
+         if_01  jmp     #\tms_data_wr
+         if_11  jmp     #\tms_reg_wr
+
+tms_data_wr     bith    io_flags, #0
+                getbyte tms_tmp0, zk_tmp8, #0
+                ret     wcz
+
+tms_reg_wr      bitl    io_flags, #0
+                testbn  zk_tmp8, #7     wz
+        if_z    jmp     #tms_addr_wr
+                mov     tms_tmp1, zk_tmp8
+                and     tms_tmp1, #$07
+                add     tms_tmp1, ##@tms_regs
+                wrbyte  tms_tmp0, tms_tmp1
+                ret     wcz
+
+tms_addr_wr     mov     tms_ramptr, zk_tmp8
+                and     tms_ramptr, #$3F
+                shl     tms_ramptr, #8
+                or      tms_ramptr, tms_tmp0
+                ret     wcz
+
+tms_rd
                 testbn  zk_ea, #0       wz
         if_z    jmp     #\tms_ram_rd
         if_nz   jmp     #\tms_status_rd
@@ -1678,12 +1706,12 @@ tms_ram_rd      mov     tms_tmp1, tms_ramptr
 tms_status_rd   mov     tms_tmp0, ##@tms_status
                 rdbyte  zk_tmp8, tms_tmp0
                 mov     tms_tmp1, zk_tmp8
-                bitl    tms_tmp1, #7      wcz
+                bitl    tms_tmp1, #7    wcz
         if_c    wrbyte  tms_tmp1, tms_tmp0
                 ret     wcz
 
 '
-' SN76489 I/O
+' SN76489
 '
 psg_wr
                 test    zk_tmp8, #%1_00_0_0000      wz  ' latch or data ?
@@ -2515,7 +2543,7 @@ CON
 
     ' WARNING !!  Don't alter the constants below unless you know what you are doing
 
-    SAMPLE_RATE           = 44100 ' 1_411_200 ' (32 x CD quality) ' Sample rate of SNEcog (176 kHz is maximum for an 80 Mhz propeller)
+    SAMPLE_RATE           = 1_411_200 ' (32 x CD quality) ' Sample rate of SNEcog (176 kHz is maximum for an 80 Mhz propeller)
     OSC_FREQ_CALIBRATION  = trunc((PSG_FREQUENCY/16.0)/float(SAMPLE_RATE)*(float(1<<22)))          ' Calibration of the oscillator frequency
     MAX_AMPLITUDE         = float($7F7F / 4)                      ' maxDACvalue / numberOfChannels (this makes room for maximum "swing" on all channels)
     AMPLITUDE_DAMP_FACTOR = 0.7941                                ' This gives a 2db drop per amplitude level (like the real thing)
@@ -2560,9 +2588,11 @@ tms_palette     long    $00_00_00_00
 
 tms_vram        byte    0[16384]
 
-z80_ram         file    "COLECO.ROM"
-                orgh    z80_ram + $8000
-                'byte    $00, $00
+z80_ram         file    "COLECO.ROM"                ' BIOS rom
+                byte    $FF[z80_ram + $4000 - $]    ' Expansion slot
+                byte    $FF[z80_ram + $6000 - $]    ' Expansion slot
+                byte    $00[z80_ram + $8000 - $]    ' RAM
+                                                    ' Cartridge
                 'file    "Final Test Cartridge (19xx).col"
                 'file    "BC's Quest for Tires (1983) (Sierravision).col"
                 'file    "Choplifter (USA, Europe).col"
@@ -2571,11 +2601,15 @@ z80_ram         file    "COLECO.ROM"
                 'file    "BurgerTime (USA, Europe).col"
                 'file    "Lady Bug (USA, Europe).col"
                 'file    "Donkey Kong (USA, Europe).col"
-                'file    "H.E.R.O (USA).col"
+                'file    "Galaxian (USA).col"
+                file    "H.E.R.O (USA).col"
                 'file    "Frogger (USA).col"
                 'file    "Pitfall! (USA).col"
+                'file    "Pitfall II - Lost Caverns (USA).col"
+                'file    "Popeye (USA).col"
                 'file    "River Raid (USA).col"
+                'file    "Super Cobra (USA).col"
                 'file    "Zaxxon (USA, Europe).col"
-                orgh    z80_ram + $10000
+                byte    $FF[z80_ram + $10000 - $]
 
-tms_bitmap      byte    0[256 * 192]
+tms_bitmap      'byte    0[256 * 192]
