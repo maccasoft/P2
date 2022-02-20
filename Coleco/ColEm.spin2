@@ -26,6 +26,8 @@ DAT             org     $000
                 asmclk
                 coginit #1, ##@zk_cogbase       'start Z80 on cog #1
                 coginit #2, ##@tms_driver       'start TMS9918 on cog #2
+                setq    #@sn_registers
+                coginit #3, ##@sn_driver        'start SN76489 on cog #3
                 jmp     #\ps2_driver
 
 ' Controller status
@@ -39,21 +41,23 @@ coleco_ctrls
 ' TMS9918 registers
 
 tms_regs        byte    $00, $00, $00, $00, $00, $00, $00, $00
-tms_status      byte    $00
+tms_status      long    $00
 
 ' SN76489 registers
 
 sn_registers
                                 ' Reg bits function
                                 ' -----------------------------------
-                word    $0000   ' 00  9..0 channel 1 freq
-                byte    $00     ' 01  3..0 channel 1 attunation
-                word    $0000   ' 02  9..0 channel 2 freq
-                byte    $00     ' 03  3..0 channel 2 attunation
-                word    $0000   ' 04  9..0 channel 3 freq
-                byte    $00     ' 05  3..0 channel 3 attunation
-                byte    $00     ' 06  4..0 noise control
-                byte    $00     ' 07  7..0 noise attunation
+                long    $0000   ' 00  9..0 channel 1 freq
+                long    $00     ' 01  3..0 channel 1 attunation
+                long    $0000   ' 02  9..0 channel 2 freq
+                long    $00     ' 03  3..0 channel 2 attunation
+                long    $0000   ' 04  9..0 channel 3 freq
+                long    $00     ' 05  3..0 channel 3 attunation
+                long    $00     ' 06  4..0 noise control
+                long    $00     ' 07  7..0 noise attunation
+
+                long    0[8]
 
 ps2_driver
                 fltl    #PS2_DATA_PIN
@@ -986,16 +990,17 @@ zk_portout
                 add     zk_cycles, #4
                 cmp     zk_ea, #$80     wcz ' 00-7F = none
          if_c   ret
-                cmp     zk_ea, #$A0     wcz ' 80-9F = set to keypad mode
+                cmp     zk_ea, #$A0     wcz ' 80-9F = set keypad mode
          if_c   sets    _ctl0, #@coleco_ctrls+0
          if_c   sets    _ctl1, #@coleco_ctrls+2
          if_c   ret
                 cmp     zk_ea, #$C0     wcz ' A0-BF = video
          if_c   jmp     #\tms_video_out
-                cmp     zk_ea, #$E0     wcz ' C0-DF = set to joystick mode
+                cmp     zk_ea, #$E0     wcz ' C0-DF = set joystick mode
          if_c   sets    _ctl0, #@coleco_ctrls+1
          if_c   sets    _ctl1, #@coleco_ctrls+3
-                ret
+         if_c   ret
+                jmp     #\psg_wr
 
 zk_portin
                 ' zk_ea   = port
@@ -1042,6 +1047,9 @@ tms_ramptr      long    0
 tms_tmp0        long    0
 tms_tmp1        long    0
 
+psg_data        long    0
+psg_latch       long    0
+
 zk_ffffh        long    $FFFF
 zk_18000h       long    $18000
 zk_bit31        long    negx
@@ -1085,7 +1093,7 @@ zk_tmp16        res     1
 zk_optmp0       res     1
 zk_optmp1       res     1
 
-'zk_memtmp0      res     1
+zk_memtmp0      res     1
 'zk_memtmp1      res     1
 'zk_memtmp2      res     1
 'zk_memtmp3      res     1
@@ -1674,6 +1682,43 @@ tms_status_rd   mov     tms_tmp0, ##@tms_status
         if_c    wrbyte  tms_tmp1, tms_tmp0
                 ret     wcz
 
+'
+' SN76489 I/O
+'
+psg_wr
+                test    zk_tmp8, #%1_00_0_0000      wz  ' latch or data ?
+        if_z    jmp     #psg_data_wr
+
+                mov     psg_data, zk_tmp8             ' data bits
+                and     psg_data, #%0_00_0_1111   ' isolate lower 4 bits
+
+                mov     psg_latch, zk_tmp8
+                and     psg_latch, #%0_11_0_0000  ' channel number
+                shr     psg_latch, #2             ' point to channel registers
+                test    zk_tmp8, #%0_00_1_0000      wz  ' type 1=volume, 0=tone/noise
+        if_nz   add     psg_latch, #4             ' offset to volume register
+        if_nz   and     psg_data, #$0F
+
+                mov     zk_memtmp0, #@sn_registers
+                add     zk_memtmp0, psg_latch
+                wrlong  psg_data, zk_memtmp0
+
+                ret
+
+psg_data_wr     and     zk_tmp8, #%00_111111
+                test    psg_latch, #$02       wz
+        if_z    shl     zk_tmp8, #4
+        if_nz   and     zk_tmp8, #%00_001111
+
+                mov     zk_memtmp0, #@sn_registers
+                add     zk_memtmp0, psg_latch
+                rdlong  psg_data, zk_memtmp0
+                and     psg_data, #$0F
+                or      psg_data, zk_tmp8
+                wrlong  psg_data, zk_memtmp0
+
+                ret
+
 CON
 
     ZK_CLOCK      = NTSC
@@ -2131,7 +2176,7 @@ field
                 resi1
                 djnz    cy,#.line
 
-                mov     cy,#24                  'after-visible blank lines
+.line_end       mov     cy,#24                  'after-visible blank lines
                 calld   border_ret, #border
 
                 rdbyte  cy, #@tms_status        ' update status byte
@@ -2276,6 +2321,222 @@ CON
 
     TMSSPRITES = 32
 
+DAT             org     $000
+
+'───────────────────────────────────────────────────────────
+'                Assembly SN emulator
+'───────────────────────────────────────────────────────────
+sn_driver       'mov     SN_Address, ptra            ' Init
+                fltl    leftp
+                fltl    rightp
+                wrpin   res1,leftp
+                wrpin   res1,rightp
+                wxpin   sampleRate,leftp
+                wxpin   sampleRate,rightp
+                wypin   dac_center,leftp
+                wypin   dac_center,rightp
+                drvh    leftp
+                drvh    rightp
+
+.loop           call    #sn_getRegisters            ' Main loop
+                call    #sn_calcSamples
+                call    #sn_mixer
+                jmp     #.loop
+
+'───────────────────────────────────────────────────────────
+' Read all SN registers from hub memory and convert
+' them to more convenient representations.
+'───────────────────────────────────────────────────────────
+sn_getRegisters
+                setq    #7
+                rdlong  frequency1,ptra
+                shl     frequency1,#22
+                shl     frequency2,#22
+                shl     frequency3,#22
+                wrbyte  #1, ptra[6*4+1]
+                mov     arg1,noiseFeedback
+                and     arg1,#3
+                cmp     arg1, #3                    wz      '|
+        if_ne   decod   noiseFreq, #26                      '|
+        if_ne   shl     noiseFreq, arg1                     '| These 4 lines handles selection of "external" noise frequency on/off
+        if_e    mov     noiseFreq, frequency3               '|
+                fge     noiseFreq,noiseSubValue   ' fix case where noise freq is zero
+
+                ret
+
+sn_calcSamples                                      ' Calculate SN samples
+
+.AmpN
+                test    noiseFeedback, #256     wz ' If bit 8 is zero; Reset noise register
+        if_z    mov     noiseValue, #1
+.Noise1         sub     oscCounterN, noiseSubValue wc ' Noise generator
+        if_nc   waitx   #(7-1)*2 ' wait equivalent time for timing stability
+        if_nc   jmp     #.Amp1
+                add     oscCounterN, noiseFreq
+'───────────────────────────────────────────────────────────
+                test    noiseFeedback, #4       wz ' Is it periodic or white noise ?
+        if_nz   test    noiseValue, #NOISE_TAP  wc ' C = White noise !
+        if_z    test    noiseValue, #1          wc ' C = Periodic noise !
+                bitc    noiseValue, #NOISE_MSB + 1
+                shr     noiseValue, #1          wc
+                alts    amplitudeN,#psg_amplitudeTable
+                negnc   outN, 0-0
+'───────────────────────────────────────────────────────────
+.Amp1
+.Square1        sub     oscCounter1, oscSubValue          wc ' Square wave generator 1
+        if_c    add     oscCounter1, frequency1
+        if_c    xor     oscState1, #1                     wz
+        if_c    alts    amplitude1,#psg_amplitudeTable
+        if_c    negz    out1, 0-0
+'───────────────────────────────────────────────────────────
+.Amp2
+.Square2        sub     oscCounter2, oscSubValue          wc ' Square wave generator 2
+        if_c    add     oscCounter2, frequency2
+        if_c    xor     oscState2, #1                     wz
+        if_c    alts    amplitude2,#psg_amplitudeTable
+        if_c    negz    out2, 0-0
+'───────────────────────────────────────────────────────────
+.Amp3
+.Square3        sub     oscCounter3, oscSubValue          wc ' Square wave generator 3
+        if_c    add     oscCounter3, frequency3
+        if_c    xor     oscState3, #1                     wz
+        if_c    alts    amplitude3,#psg_amplitudeTable
+        if_c    negz    out3, 0-0
+                ret
+
+'───────────────────────────────────────────────────────────
+'      Mix channels and update FRQA/FRQB PWM-values
+'───────────────────────────────────────────────────────────
+sn_mixer
+                mov     psgOut, dac_center
+                add     psgOut, out1
+                add     psgOut, out2
+                add     psgOut, out3
+                add     psgOut, outN
+
+                testp   rightp   wc
+        'if_c    drvh #24  ' light LED if too slow
+                testp   rightp   wc
+        if_nc   jmp     #$-1
+              'waitcnt  waitCounter, sampleRate         ' Wait until the right time to update
+                wypin   psgOut, leftp                    ' the PWM values in FRQA/FRQB
+                wypin   psgOut, rightp
+mixer_ret       ret
+
+'
+'    Variables, tables, masks and reference values
+'
+psg_amplitudeTable
+                long    trunc(AMPLITUDE_LEVEL_0)
+                long    trunc(AMPLITUDE_LEVEL_1)
+                long    trunc(AMPLITUDE_LEVEL_2)
+                long    trunc(AMPLITUDE_LEVEL_3)
+                long    trunc(AMPLITUDE_LEVEL_4)
+                long    trunc(AMPLITUDE_LEVEL_5)
+                long    trunc(AMPLITUDE_LEVEL_6)
+                long    trunc(AMPLITUDE_LEVEL_7)
+                long    trunc(AMPLITUDE_LEVEL_8)
+                long    trunc(AMPLITUDE_LEVEL_9)
+                long    trunc(AMPLITUDE_LEVEL_A)
+                long    trunc(AMPLITUDE_LEVEL_B)
+                long    trunc(AMPLITUDE_LEVEL_C)
+                long    trunc(AMPLITUDE_LEVEL_D)
+                long    trunc(AMPLITUDE_LEVEL_E)
+                long    trunc(AMPLITUDE_LEVEL_F)
+
+leftp           long    AUDIO_LEFT_PIN
+rightp          long    AUDIO_RIGHT_PIN
+res1            long    P_DAC_75R_2V|P_OE|P_DAC_DITHER_PWM
+mask10bit       long    $3ff
+val31bit        long    $80000000
+val22bit        long    1<<22
+val26bit        long    1<<26
+sampleRate      long    _CLKFREQ/SAMPLE_RATE
+
+dac_center      long    $7F80
+dac_center_hi   long    $7F80<<16
+
+noiseValue      long    1 << NOISE_MSB
+oscSubValue     long    OSC_FREQ_CALIBRATION
+noiseSubValue   long    OSC_FREQ_CALIBRATION >> 1
+oscState1       long    1
+oscState2       long    1
+oscState3       long    1
+oscStateN       long    1
+
+out1            long    0
+out2            long    0
+out3            long    0
+outN            long    0
+
+arg1            res     1
+arg2            res     1
+oscCounter1     res     1
+oscCounter2     res     1
+oscCounter3     res     1
+oscCounterN     res     1
+
+frequency1      res     1
+amplitude1      res     1
+frequency2      res     1
+amplitude2      res     1
+frequency3      res     1
+amplitude3      res     1
+noiseFeedback   res     1
+amplitudeN      res     1
+
+
+noiseFreq       res     1
+
+psgOut          res     1
+
+
+waitCounter     res     1
+tempValue       res     1
+
+                fit     $1F0
+
+CON
+
+    PSG_FREQUENCY     = CPU_CLOCK   ' Clock frequency input on the emulated SN chip
+    VOLUME_CORRECTION = 0.9         ' Volume correction value (0.0 - 1.0)
+
+'SMS, Genesis and Game Gear
+'    NOISE_TAP = %1001
+'    NOISE_MSB = 15
+
+'SG-1000, OMV, SC-3000H, BBC Micro and Colecovision
+    NOISE_TAP = %11
+    NOISE_MSB = 14
+
+'Tandy 1000
+'    NOISE_TAP = %10001
+'    NOISE_MSB = 14
+
+    ' WARNING !!  Don't alter the constants below unless you know what you are doing
+
+    SAMPLE_RATE           = 44100 ' 1_411_200 ' (32 x CD quality) ' Sample rate of SNEcog (176 kHz is maximum for an 80 Mhz propeller)
+    OSC_FREQ_CALIBRATION  = trunc((PSG_FREQUENCY/16.0)/float(SAMPLE_RATE)*(float(1<<22)))          ' Calibration of the oscillator frequency
+    MAX_AMPLITUDE         = float($7F7F / 4)                      ' maxDACvalue / numberOfChannels (this makes room for maximum "swing" on all channels)
+    AMPLITUDE_DAMP_FACTOR = 0.7941                                ' This gives a 2db drop per amplitude level (like the real thing)
+
+    AMPLITUDE_LEVEL_0 = MAX_AMPLITUDE     * VOLUME_CORRECTION
+    AMPLITUDE_LEVEL_1 = AMPLITUDE_LEVEL_0 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_2 = AMPLITUDE_LEVEL_1 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_3 = AMPLITUDE_LEVEL_2 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_4 = AMPLITUDE_LEVEL_3 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_5 = AMPLITUDE_LEVEL_4 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_6 = AMPLITUDE_LEVEL_5 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_7 = AMPLITUDE_LEVEL_6 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_8 = AMPLITUDE_LEVEL_7 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_9 = AMPLITUDE_LEVEL_8 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_A = AMPLITUDE_LEVEL_9 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_B = AMPLITUDE_LEVEL_A * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_C = AMPLITUDE_LEVEL_B * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_D = AMPLITUDE_LEVEL_C * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_E = AMPLITUDE_LEVEL_D * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_F = 0.0
+
 ' Runtime data area
 
 DAT             orgh
@@ -2298,7 +2559,6 @@ tms_palette     long    $00_00_00_00
                 long    $EE_EE_EE_00
 
 tms_vram        byte    0[16384]
-tms_bitmap      byte    0[256 * 192]
 
 z80_ram         file    "COLECO.ROM"
                 orgh    z80_ram + $8000
@@ -2317,3 +2577,5 @@ z80_ram         file    "COLECO.ROM"
                 'file    "River Raid (USA).col"
                 'file    "Zaxxon (USA, Europe).col"
                 orgh    z80_ram + $10000
+
+tms_bitmap      byte    0[256 * 192]
