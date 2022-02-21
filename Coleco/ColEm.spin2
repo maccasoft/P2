@@ -26,6 +26,9 @@ CON
 DAT             org     $000
 
                 asmclk
+                drvl    #56
+                drvl    #57
+
                 coginit #1, ##@zk_cogbase       'start Z80 on cog #1
                 coginit #2, ##@tms_driver       'start TMS9918 on cog #2
                 setq    #@sn_registers
@@ -808,6 +811,7 @@ zk_i2a
 
 zk_irqret       '' RETI/RETN
                 '' These are literally the same
+                add     zk_cycles,#8
                 testb   zk_irqenable,#ZK_IFF2_BIT wc
                 bitc    zk_irqenable,#ZK_IFF1_BIT
                 call    #\zk_pop16
@@ -815,6 +819,7 @@ zk_irqret       '' RETI/RETN
 
 
 zk_imode        ' Don't care, always assume IM1
+                add     zk_cycles,#3
                 ret
 
 zk_irqoff
@@ -838,6 +843,7 @@ zk_nmiptr       long    zk_donmi
 zk_donmi
                 add     zk_cycles,#10
                 andn    zk_irqenable,#(1<<ZK_IFF1_BIT)
+                mov     zk_irqhook,#0
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
                 mov     zk_pc,#$66
@@ -1003,15 +1009,15 @@ zk_portout
                 ' zk_tmp8 = data
                 add     zk_cycles, #4
                 cmp     zk_ea, #$80     wcz ' 00-7F = none
-         if_b   ret
+         if_b   ret     wcz
                 cmp     zk_ea, #$A0     wcz ' 80-9F = set keypad mode
          if_b   bith    io_flags, #1
-         if_b   ret
+         if_b   ret     wcz
                 cmp     zk_ea, #$C0     wcz ' A0-BF = video
          if_b   jmp     #\tms_wr
                 cmp     zk_ea, #$E0     wcz ' C0-DF = set joystick mode
          if_b   bitl    io_flags, #1
-         if_b   ret
+         if_b   ret     wcz
                 jmp     #\psg_wr
 
 zk_portin
@@ -1020,11 +1026,11 @@ zk_portin
                 add     zk_cycles, #4
                 mov     zk_tmp8, #$FF
                 cmp     zk_ea, #$A0     wcz ' 00-9F = none
-         if_b   ret
+         if_b   ret     wcz
                 cmp     zk_ea, #$C0     wcz ' A0-BF = video
          if_b   jmp     #\tms_rd
                 cmp     zk_ea, #$E0     wcz ' C0-DF = none
-         if_b   ret
+         if_b   ret     wcz
                 jmp     #\ctrl_rd           ' E0-FF = controller read
                 ret
 
@@ -1672,11 +1678,11 @@ tms_data_wr     bith    io_flags, #0
                 ret     wcz
 
 tms_reg_wr      bitl    io_flags, #0
-                testbn  zk_tmp8, #7     wz
-        if_z    jmp     #tms_addr_wr
+                testb   zk_tmp8, #7     wz
+        if_x0   jmp     #tms_addr_wr
                 mov     tms_tmp1, zk_tmp8
                 and     tms_tmp1, #$07
-                add     tms_tmp1, ##@tms_regs
+                add     tms_tmp1, #@tms_regs
                 wrbyte  tms_tmp0, tms_tmp1
                 ret     wcz
 
@@ -1687,9 +1693,9 @@ tms_addr_wr     mov     tms_ramptr, zk_tmp8
                 ret     wcz
 
 tms_rd
-                testbn  zk_ea, #0       wz
-        if_z    jmp     #\tms_ram_rd
-        if_nz   jmp     #\tms_status_rd
+                testb   zk_ea, #0       wz
+        if_x0   jmp     #\tms_ram_rd
+        if_x1   jmp     #\tms_status_rd
 
 tms_ram_wr      mov     tms_tmp1, tms_ramptr
                 add     tms_tmp1, ##@tms_vram
@@ -1703,11 +1709,10 @@ tms_ram_rd      mov     tms_tmp1, tms_ramptr
                 incmod  tms_ramptr, ##16384-1
                 ret     wcz
 
-tms_status_rd   mov     tms_tmp0, ##@tms_status
-                rdbyte  zk_tmp8, tms_tmp0
-                mov     tms_tmp1, zk_tmp8
+tms_status_rd   rdlong  tms_tmp1, #@tms_status
+                getbyte zk_tmp8, tms_tmp1, #0
                 bitl    tms_tmp1, #7    wcz
-        if_c    wrbyte  tms_tmp1, tms_tmp0
+        if_c    wrlong  tms_tmp1, #@tms_status
                 ret     wcz
 
 '
@@ -1731,7 +1736,7 @@ psg_wr
                 add     zk_memtmp0, psg_latch
                 wrlong  psg_data, zk_memtmp0
 
-                ret
+                ret     wcz
 
 psg_data_wr     and     zk_tmp8, #%00_111111
                 test    psg_latch, #$02       wz
@@ -1745,7 +1750,7 @@ psg_data_wr     and     zk_tmp8, #%00_111111
                 or      psg_data, zk_tmp8
                 wrlong  psg_data, zk_memtmp0
 
-                ret
+                ret     wcz
 
 CON
 
@@ -2204,15 +2209,19 @@ field
                 resi1
                 djnz    cy,#.line
 
-.line_end       mov     cy,#24                  'after-visible blank lines
+                mov     cy,#1                  'after-visible blank lines
                 calld   border_ret, #border
 
-                rdbyte  cy, #@tms_status        ' update status byte
+                rdlong  cy, #@tms_status        ' update status byte
                 bith    cy, #7              wcz ' vsync flag
-                wrbyte  cy, #@tms_status
+                drvc    #57
+                wrlong  cy, #@tms_status
+                testb   regs+1, #5          wz
+    if_x1       cogatn  #%00000010              'signal vertical sync to cog1
+                drvz    #56
 
-                test    regs+1, #TMSINTEN   wz
-    if_00       cogatn  #%00000010              'signal vertical sync to cog1
+                mov     cy,#24-1                'after-visible blank lines
+                calld   border_ret, #border
 
                 mov     cy, #10
                 calld   blank_ret, #blank
@@ -2602,7 +2611,7 @@ z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 'file    "Lady Bug (USA, Europe).col"
                 'file    "Donkey Kong (USA, Europe).col"
                 'file    "Galaxian (USA).col"
-                file    "H.E.R.O (USA).col"
+                'file    "H.E.R.O (USA).col"
                 'file    "Frogger (USA).col"
                 'file    "Pitfall! (USA).col"
                 'file    "Pitfall II - Lost Caverns (USA).col"
