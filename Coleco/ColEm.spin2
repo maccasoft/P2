@@ -31,8 +31,7 @@ DAT             org     $000
 
                 coginit #1, ##@zk_cogbase       'start Z80 on cog #1
                 coginit #2, ##@tms_driver       'start TMS9918 on cog #2
-                setq    #@sn_registers
-                coginit #3, ##@sn_driver        'start SN76489 on cog #3
+                coginit #3, ##@psg_driver       'start SN76489 on cog #3
                 jmp     #\ps2_driver
 
 ' Controller status
@@ -50,7 +49,7 @@ tms_status      long    $00
 
 ' SN76489 registers
 
-sn_registers
+psg_registers
                                 ' Reg bits function
                                 ' -----------------------------------
                 long    $0000   ' 00  9..0 channel 1 freq
@@ -61,8 +60,6 @@ sn_registers
                 long    $0F     ' 05  3..0 channel 3 attunation
                 long    $00     ' 06  4..0 noise control
                 long    $0F     ' 07  7..0 noise attunation
-
-                long    0[8]
 
 ps2_driver
                 fltl    #PS2_DATA_PIN
@@ -1712,7 +1709,7 @@ tms_ram_rd      mov     tms_tmp1, tms_ramptr
 tms_status_rd   rdlong  tms_tmp1, #@tms_status
                 getbyte zk_tmp8, tms_tmp1, #0
                 bitl    tms_tmp1, #7    wcz
-        if_c    wrlong  tms_tmp1, #@tms_status
+        if_x1   wrlong  tms_tmp1, #@tms_status
                 ret     wcz
 
 '
@@ -1732,7 +1729,7 @@ psg_wr
         if_nz   add     psg_latch, #4             ' offset to volume register
         if_nz   and     psg_data, #$0F
 
-                mov     zk_memtmp0, #@sn_registers
+                mov     zk_memtmp0, #@psg_registers
                 add     zk_memtmp0, psg_latch
                 wrlong  psg_data, zk_memtmp0
 
@@ -1743,7 +1740,7 @@ psg_data_wr     and     zk_tmp8, #%00_111111
         if_z    shl     zk_tmp8, #4
         if_nz   and     zk_tmp8, #%00_001111
 
-                mov     zk_memtmp0, #@sn_registers
+                mov     zk_memtmp0, #@psg_registers
                 add     zk_memtmp0, psg_latch
                 rdlong  psg_data, zk_memtmp0
                 and     psg_data, #$0F
@@ -2363,7 +2360,7 @@ DAT             org     $000
 '───────────────────────────────────────────────────────────
 '                Assembly SN emulator
 '───────────────────────────────────────────────────────────
-sn_driver       'mov     SN_Address, ptra            ' Init
+psg_driver      'mov     ptra, #@sn_registers        ' Init
                 fltl    leftp
                 fltl    rightp
                 wrpin   res1,leftp
@@ -2386,11 +2383,11 @@ sn_driver       'mov     SN_Address, ptra            ' Init
 '───────────────────────────────────────────────────────────
 sn_getRegisters
                 setq    #7
-                rdlong  frequency1,ptra
+                rdlong  frequency1,#@psg_registers
                 shl     frequency1,#22
                 shl     frequency2,#22
                 shl     frequency3,#22
-                wrbyte  #1, ptra[6*4+1]
+                wrbyte  #1, #@psg_registers+(6*4+1)
                 mov     arg1,noiseFeedback
                 and     arg1,#3
                 cmp     arg1, #3                    wz      '|
@@ -2618,6 +2615,7 @@ z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 'file    "Popeye (USA).col"
                 'file    "River Raid (USA).col"
                 'file    "Super Cobra (USA).col"
+                'file    "Time Pilot (USA, Europe).col"
                 'file    "Zaxxon (USA, Europe).col"
                 byte    $FF[z80_ram + $10000 - $]
 
