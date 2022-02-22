@@ -958,7 +958,7 @@ zk_readcode
                 ' fall through
 zk_read8
                 add     zk_cycles,#3
-                mov     pa, zk_ea
+                getword pa, zk_ea, #0
                 cmp     pa, ram_base    wcz
         if_b    jmp     #.l1
                 cmp     pa, ram_top     wcz
@@ -987,7 +987,7 @@ zk_write8hl
                 getword zk_ea,zk_tempidx,#0
 zk_write8
                 add     zk_cycles, #3
-                mov     pa, zk_ea
+                getword pa, zk_ea, #0
                 cmp     pa, ram_base    wcz
          if_b   ret     wcz
                 cmp     pa, ram_top     wcz
@@ -1005,31 +1005,30 @@ zk_portout
                 ' zk_ea   = port
                 ' zk_tmp8 = data
                 add     zk_cycles, #4
-                cmp     zk_ea, #$80     wcz ' 00-7F = none
-         if_b   ret     wcz
-                cmp     zk_ea, #$A0     wcz ' 80-9F = set keypad mode
-         if_b   bith    io_flags, #1
-         if_b   ret     wcz
-                cmp     zk_ea, #$C0     wcz ' A0-BF = video
-         if_b   jmp     #\tms_wr
-                cmp     zk_ea, #$E0     wcz ' C0-DF = set joystick mode
-         if_b   bitl    io_flags, #1
-         if_b   ret     wcz
-                jmp     #\psg_wr
+                testb   zk_ea, #7       wc
+        if_0x   ret     wcz                     ' 00-7F = nothing
+                testb   zk_ea, #6       wc
+                testb   zk_ea, #5       wz
+        if_00   bitl    io_flags, #1            ' 80-9F = set keypad mode
+        if_01   jmp     #\tms_wr                ' A0-BF = video
+        if_10   bith    io_flags, #1            ' C0-DF = set joystick mode
+        if_11   jmp     #\psg_wr                ' E0-FF = psg
+                ret     wcz
 
 zk_portin
                 ' zk_ea   = port
                 ' zk_tmp8 = data
                 add     zk_cycles, #4
                 mov     zk_tmp8, #$FF
-                cmp     zk_ea, #$A0     wcz ' 00-9F = none
-         if_b   ret     wcz
-                cmp     zk_ea, #$C0     wcz ' A0-BF = video
-         if_b   jmp     #\tms_rd
-                cmp     zk_ea, #$E0     wcz ' C0-DF = none
-         if_b   ret     wcz
-                jmp     #\ctrl_rd           ' E0-FF = controller read
-                ret
+                testb   zk_ea, #7       wc
+        if_0x   ret     wcz                     ' 00-7F = nothing
+                testb   zk_ea, #6       wc
+                testb   zk_ea, #5       wz
+        {if_00   ret     wcz}                   ' 80-9F = nothing
+        if_01   jmp     #\tms_rd                ' A0-BF = video
+        {if_10   ret     wcz}                   ' C0-DF = nothing
+        if_11   jmp     #\ctrl_rd               ' E0-FF = controller read
+                ret     wcz
 
 io_flags        long    0                   ' bit 0 = tms reg/data
                                             '     1 = joystick/pad mode
@@ -1652,12 +1651,12 @@ DAT             orgh    ' I/O Hub-exec code
 ' Controllers
 '
 ctrl_rd
-                testb   io_flags, #1    wc
-                testb   zk_ea, #1       wz
-         if_00  rdbyte  zk_tmp8, #@coleco_ctrls+1
-         if_01  rdbyte  zk_tmp8, #@coleco_ctrls+3
-         if_10  rdbyte  zk_tmp8, #@coleco_ctrls+0
-         if_11  rdbyte  zk_tmp8, #@coleco_ctrls+2
+                testb   zk_ea, #1       wc          ' A1 = select controller
+                testb   io_flags, #1    wz          ' Controller mode flip/flop
+         if_00  rdbyte  zk_tmp8, #@coleco_ctrls+0   ' Joystick 0
+         if_01  rdbyte  zk_tmp8, #@coleco_ctrls+1   ' Keypad 0
+         if_10  rdbyte  zk_tmp8, #@coleco_ctrls+2   ' Joystick 1
+         if_11  rdbyte  zk_tmp8, #@coleco_ctrls+3   ' Keypad 1
                 ret     wcz
 
 '
@@ -1665,7 +1664,7 @@ ctrl_rd
 '
 tms_wr
                 testb   io_flags, #0    wc
-                testb   zk_ea, #0       wz
+                testb   zk_ea, #0       wz          ' A0 = register / ram
          if_x0  jmp     #\tms_ram_wr
          if_01  jmp     #\tms_data_wr
          if_11  jmp     #\tms_reg_wr
