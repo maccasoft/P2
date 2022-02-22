@@ -37,10 +37,10 @@ DAT             org     $000
 ' Controller status
 
 coleco_ctrls
-                byte    $FF     ' keypad 0
-                byte    $FF     ' joystick 0
-                byte    $FF     ' keypad 1
-                byte    $FF     ' joystick 1
+                byte    $7F     ' keypad 0
+                byte    $7F     ' joystick 0
+                byte    $7F     ' keypad 1
+                byte    $7F     ' joystick 1
 
 ' TMS9918 registers
 
@@ -154,41 +154,41 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
 
                 'call    #translate
                 cmp     ps2_key, #$1E       wz  ' 1
- if_z_and_nc    setbyte ps2_ctrl, #$0D, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$D,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$1F       wz  ' 2
- if_z_and_nc    setbyte ps2_ctrl, #$07, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$7,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$20       wz  ' 3
- if_z_and_nc    setbyte ps2_ctrl, #$0C, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$C,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$21       wz  ' 4
- if_z_and_nc    setbyte ps2_ctrl, #$02, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$2,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$22       wz  ' 5
- if_z_and_nc    setbyte ps2_ctrl, #$03, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$3,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$23       wz  ' 6
- if_z_and_nc    setbyte ps2_ctrl, #$0E, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$E,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$24       wz  ' 7
- if_z_and_nc    setbyte ps2_ctrl, #$05, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$5,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$25       wz  ' 8
- if_z_and_nc    setbyte ps2_ctrl, #$01, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$1,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$26       wz  ' 9
- if_z_and_nc    setbyte ps2_ctrl, #$0B, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$B,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$27       wz  ' 0
- if_z_and_nc    setbyte ps2_ctrl, #$0A, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$A,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$2D       wz  ' *
- if_z_and_nc    setbyte ps2_ctrl, #$09, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$9,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$2E       wz  ' #
- if_z_and_nc    setbyte ps2_ctrl, #$06, #0
-  if_z_and_c    setbyte ps2_ctrl, #$FF, #0
+ if_z_and_nc    setnib  ps2_ctrl, #$6,  #0
+  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
 
                 cmp     ps2_key, #$4F       wz  ' RIGHT
         if_z    bitc    ps2_ctrl, #8+1
@@ -312,7 +312,7 @@ ps2_key         long    0
 ps2_data        long    0
 ps2_tout        long    0
 
-ps2_ctrl        long    $FFFFFFFF
+ps2_ctrl        long    $7F7F7F7F
 
 ps2_table       word    $0000   '00
                 word    $0042   '01             F9
@@ -1715,35 +1715,29 @@ tms_status_rd   rdlong  tms_tmp1, #@tms_status
 ' SN76489
 '
 psg_wr
-                test    zk_tmp8, #%1_00_0_0000      wz  ' latch or data ?
+                test    zk_tmp8, #%1_000_0000   wz  ' latch or data ?
         if_z    jmp     #psg_data_wr
 
-                mov     psg_data, zk_tmp8             ' data bits
-                and     psg_data, #%0_00_0_1111   ' isolate lower 4 bits
-
                 mov     psg_latch, zk_tmp8
-                and     psg_latch, #%0_11_0_0000  ' channel number
-                shr     psg_latch, #2             ' point to channel registers
-                test    zk_tmp8, #%0_00_1_0000      wz  ' type 1=volume, 0=tone/noise
-        if_nz   add     psg_latch, #4             ' offset to volume register
-        if_nz   and     psg_data, #$0F
+                and     psg_latch, #%0_111_0000     ' channel number
+                shr     psg_latch, #2               ' point to channel registers
 
                 mov     zk_memtmp0, #@psg_registers
                 add     zk_memtmp0, psg_latch
+                rdlong  psg_data, zk_memtmp0
+                setnib  psg_data, zk_tmp8, #0
                 wrlong  psg_data, zk_memtmp0
 
                 ret     wcz
 
 psg_data_wr     and     zk_tmp8, #%00_111111
-                test    psg_latch, #$02       wz
-        if_z    shl     zk_tmp8, #4
-        if_nz   and     zk_tmp8, #%00_001111
+                shl     zk_tmp8, #4
 
                 mov     zk_memtmp0, #@psg_registers
                 add     zk_memtmp0, psg_latch
                 rdlong  psg_data, zk_memtmp0
-                and     psg_data, #$0F
-                or      psg_data, zk_tmp8
+                and     psg_data, #$0F              ' keep existing lower 4 bits
+                or      psg_data, zk_tmp8           ' add upper 6 bits
                 wrlong  psg_data, zk_memtmp0
 
                 ret     wcz
