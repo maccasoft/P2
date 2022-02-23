@@ -474,7 +474,7 @@ zk_cogbase
 
                 'mov     zk_pc, #0
                 mov     zk_irqenable, #0
-                mov     zk_irqhook, #0
+'                mov     zk_irqhook, #0
                 mov     zk_refresh, #0
                 mov     zk_refreshhi, #0
                 mov     zk_ivector, #0
@@ -488,7 +488,7 @@ zk_nextop
         if_c    wrbyte  zk_memtmp0, #@tms_status+3
         if_c    jmp     #\zk_donmi
 
-zk_irqhook      nop
+'zk_irqhook      nop
 
                 mul     zk_cycles, zk_cycletime
                 add     zk_cycles, zk_lastwait
@@ -827,25 +827,27 @@ zk_imode        ' Don't care, always assume IM1
 
 zk_irqoff
                 andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
-        _ret_   mov     zk_irqhook,#0
+                ret
+'        _ret_   mov     zk_irqhook,#0
 zk_irqon
                 or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
-        _ret_   mov     zk_irqhook,##(%1111_1011110_010_000000100<<9)+zk_irqptr ' JSE1 zk_irqptr
+                ret
+'        _ret_   mov     zk_irqhook,##(%1111_1011110_010_000000100<<9)+zk_irqptr ' JSE1 zk_irqptr
 
-zk_irqptr       long    zk_doirq
-zk_doirq
-                add     zk_cycles,#10
-                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)
-                mov     zk_irqhook,#0
-                mov     zk_tmp16,zk_pc
-                call    #\zk_push16
-                mov     zk_pc,#$38
-                jmp     #\zk_nextop
+'zk_irqptr       long    zk_doirq
+'zk_doirq
+'                add     zk_cycles,#10
+'                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)
+'                mov     zk_irqhook,#0
+'                mov     zk_tmp16,zk_pc
+'                call    #\zk_push16
+'                mov     zk_pc,#$38
+'                jmp     #\zk_nextop
 
 zk_donmi
                 add     zk_cycles,#10
                 andn    zk_irqenable,#(1<<ZK_IFF1_BIT)
-                mov     zk_irqhook,#0
+'                mov     zk_irqhook,#0
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
                 mov     zk_pc,#$66
