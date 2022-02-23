@@ -1714,9 +1714,9 @@ tms_ram_rd      mov     tms_tmp1, tms_ramptr
 
 tms_status_rd   rdlong  tms_tmp1, #@tms_status
                 getbyte zk_tmp8, tms_tmp1, #0
-                bitl    tms_tmp1, #31
-                bitl    tms_tmp1, #7    wcz
-        if_x1   wrlong  tms_tmp1, #@tms_status
+                test    tms_tmp1, #%111_00000   wz
+                and     tms_tmp1, #%000_11111
+        if_nz   wrlong  tms_tmp1, #@tms_status
                 ret     wcz
 
 '
