@@ -45,7 +45,8 @@ coleco_ctrls
 ' TMS9918 registers
 
 tms_regs        byte    $00, $00, $00, $00, $00, $00, $00, $00
-tms_status      long    $00
+tms_status      long    $00     ' 7..0 = VDP status
+                                '   31 = NMI
 
 ' SN76489 registers
 
@@ -481,7 +482,11 @@ zk_cogbase
                 mov     zk_cycles, #1
 
 zk_nextop
-                jatn    zk_nmiptr
+                rdbyte  zk_memtmp0, #@tms_status+3
+                bitl    zk_memtmp0, #7  wcz
+        if_c    wrbyte  zk_memtmp0, #@tms_status+3
+        if_c    jmp     #\zk_donmi
+
 zk_irqhook      nop
 
                 mul     zk_cycles, zk_cycletime
@@ -836,7 +841,6 @@ zk_doirq
                 mov     zk_pc,#$38
                 jmp     #\zk_nextop
 
-zk_nmiptr       long    zk_donmi
 zk_donmi
                 add     zk_cycles,#10
                 andn    zk_irqenable,#(1<<ZK_IFF1_BIT)
@@ -1639,9 +1643,10 @@ zk_loadimm8
                 jmp     #\zk_readcode
 
 zk_halt
-                jatn    zk_nmiptr
-                'incmod  zk_refresh, #127
-                jmp     #zk_halt
+                rdbyte  zk_memtmp0, #@tms_status+3
+                testb   zk_memtmp0, #7  wc
+        if_nc   decmod  zk_pc,zk_ffffh
+                ret
 
                 fit     $400
 
@@ -1707,6 +1712,7 @@ tms_ram_rd      mov     tms_tmp1, tms_ramptr
 
 tms_status_rd   rdlong  tms_tmp1, #@tms_status
                 getbyte zk_tmp8, tms_tmp1, #0
+                bitl    tms_tmp1, #31
                 bitl    tms_tmp1, #7    wcz
         if_x1   wrlong  tms_tmp1, #@tms_status
                 ret     wcz
@@ -1816,15 +1822,6 @@ loop
                 getnib  scol+1, sbuf+1, #6      ' border color for next line
                 movbyts scol+1, #0
 
-                cmp     _cl, _tms_first     wcz ' check if first visible line
-    if_c        jmp     #loop
-                cmp     _cl, _tms_last      wc  ' check if last visible line
-    if_nc       jmp     #loop
-
-    if_z        mov     loff, #0                ' if first line reset counters...
-    if_z        mov     lcnt, #0
-    if_z        mov     ptrv, _tms_bitmap       ' ...and pointers
-
                 getbyte regs+0, sbuf, #0
                 test    regs+0, #TMSMODE3   wz  ' graphics mode II
                 getbyte regs+1, sbuf, #1
@@ -1846,6 +1843,15 @@ loop
                 shl     regs+6, #11             ' sprite pattern generator base address * $800
                 add     regs+6, _tms_vram
                 getbyte regs+7, sbuf+1, #3
+
+                cmp     _cl, #24            wcz ' check if first visible line
+    if_c        jmp     #loop
+                cmp     _cl, #24 + 192      wc  ' check if last visible line
+    if_nc       jmp     #loop
+
+    if_z        mov     loff, #0                ' if first line reset counters...
+    if_z        mov     lcnt, #0
+    if_z        mov     ptrv, _tms_bitmap       ' ...and pointers
 
                 setq    #32-1                   ' read all sprite attribute table
                 rdlong  sbuf, regs+5
@@ -2204,11 +2210,9 @@ field
 
                 rdlong  cy, #@tms_status        ' update status byte
                 bith    cy, #7              wcz ' vsync flag
-                drvc    #57
+                testb   regs+1, #5          wz  ' interrupt enable
+                bitz    cy, #31                 ' NMI
                 wrlong  cy, #@tms_status
-                testb   regs+1, #5          wz
-    if_x1       cogatn  #%00000010              'signal vertical sync to cog1
-                drvz    #56
 
                 mov     cy,#24-1                'after-visible blank lines
                 calld   border_ret, #border
@@ -2287,8 +2291,6 @@ _cl             long    0                       'current line
 _pn             long    VGA_PIN & $38           'base pin
 
 _tms_vram       long    @tms_vram
-_tms_first      long    24
-_tms_last       long    24 + 192
 _tms_bitmap     long    @tms_bitmap
 _tms_palette    long    @tms_palette
 
