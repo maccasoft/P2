@@ -359,13 +359,12 @@ sprites
 .loop           alts    ccnt, #sbuf
                 mov     sprt, 0-0
 
-                mov     y, sprt
-                shl     y, #24
-                sar     y, #24                  ' sign-extend y
-                cmps    y, neg_clip wc
-    if_c        and     y, #$FF                 ' max -32
+                getbyte y, sprt, #0
                 cmp     y, #$D0     wz          ' end of sprites processing
     if_z        jmp     #.end
+                add     y, #1
+                cmp     y, #$D0     wcz
+    if_a        sub     y, #$100
 
                 mov     a, lcnt                 ' check sprite scanline visibility
                 subs    a, y        wc
@@ -411,9 +410,9 @@ end_scanline
 
 draw_sprite
                 getbyte a, sprt, #0
-                mov     ptrc, sprt
-                shr     ptrc, #16
-                and     ptrc, #$FF
+                getbyte ptrc, sprt, #2
+                test    regs+1, #TMSSPRSIZE wz
+    if_nz       and     ptrc, #$FC
                 shl     ptrc, #3
                 add     ptrc, regs+6
                 test    regs+1, #TMSSPRMAG  wz
