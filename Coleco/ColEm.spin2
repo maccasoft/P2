@@ -482,14 +482,6 @@ zk_cogbase
                 mov     zk_cycles, #1
 
 zk_nextop
-                rdbyte  zk_memtmp0, #@tms_status+3
-                bitl    zk_memtmp0, #7  wcz
-        if_c    drvl    #56
-        if_c    wrbyte  zk_memtmp0, #@tms_status+3
-        if_c    jmp     #\zk_donmi
-
-'zk_irqhook      nop
-
                 mul     zk_cycles, zk_cycletime
                 add     zk_cycles, zk_lastwait
                 getct   pa
@@ -499,6 +491,11 @@ zk_nextop
                 getct   zk_lastwait
 
                 mov     zk_cycles, #1
+
+                testb   zk_ctl, #8          wc  ' C = old NMI
+                rdlong  zk_ctl, #@tms_status
+                testb   zk_ctl, #8          wz  ' Z = current NMI
+        if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
                 mov     zk_temphl, zk_hl
                 mov     zk_hlptr, #zk_hl
@@ -826,30 +823,23 @@ zk_imode        ' Don't care, always assume IM1
                 ret
 
 zk_irqoff
-                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
-                ret
-'        _ret_   mov     zk_irqhook,#0
+        _ret_   andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
+
 zk_irqon
-                or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
-                ret
-'        _ret_   mov     zk_irqhook,##(%1111_1011110_010_000000100<<9)+zk_irqptr ' JSE1 zk_irqptr
+        _ret_   or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
 
-'zk_irqptr       long    zk_doirq
-'zk_doirq
-'                add     zk_cycles,#10
-'                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)
-'                mov     zk_irqhook,#0
-'                mov     zk_tmp16,zk_pc
-'                call    #\zk_push16
-'                mov     zk_pc,#$38
-'                jmp     #\zk_nextop
-
+zk_doirq
+                skipf   #%0_10_000000_1
 zk_donmi
+                skipf   #%0_01_000000
+
                 add     zk_cycles,#10
-                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)
-'                mov     zk_irqhook,#0
+                test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
+                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
+        if_nz   incmod  zk_pc,zk_ffffh
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
+                mov     zk_pc,#$38
                 mov     zk_pc,#$66
                 jmp     #\zk_nextop
 
@@ -1054,10 +1044,6 @@ zk_bit31        long    negx
 zk_cycles       long    0
 zk_pc           long    $0000
 
-zk_bankmask     long    $FF8000
-zk_romstop      long    $4000000
-zk_bankreg      long    0
-
 zk_flags        long    0
 zk_accu         long    0
 zk_debc         long    0
@@ -1096,7 +1082,7 @@ zk_memtmp0      res     1
 'zk_memtmp3      res     1
 zk_tmp8         res     1 ' memory read/write value
 zk_ea           res     1 ' remapped EA
-'zk_ctl          res     1
+zk_ctl          res     1
 
                 fit     $1F0
 
@@ -1646,11 +1632,8 @@ zk_loadimm8
                 jmp     #\zk_readcode
 
 zk_halt
-                drvh    #56
-                rdbyte  zk_memtmp0, #@tms_status+3
-                testb   zk_memtmp0, #7  wc
-        if_nc   decmod  zk_pc,zk_ffffh
-                ret
+                or      zk_irqenable,#(1<<ZK_HALT_BIT)
+        _ret_   decmod  zk_pc,zk_ffffh
 
                 fit     $400
 
@@ -1716,9 +1699,8 @@ tms_ram_rd      mov     tms_tmp1, tms_ramptr
 
 tms_status_rd   rdlong  tms_tmp1, #@tms_status
                 getbyte zk_tmp8, tms_tmp1, #0
-                test    tms_tmp1, #%111_00000   wz
                 and     tms_tmp1, #%000_11111
-        if_nz   wrlong  tms_tmp1, #@tms_status
+                wrlong  tms_tmp1, #@tms_status
                 ret     wcz
 
 '
@@ -1769,6 +1751,7 @@ CON
 
     ZK_IFF1_BIT   = 0
     ZK_IFF2_BIT   = 1
+    ZK_HALT_BIT   = 2
 
 DAT             org     $000
 
@@ -2214,7 +2197,7 @@ field
                 rdlong  cy, #@tms_status        ' update status byte
                 bith    cy, #7              wcz ' vsync flag
                 testb   regs+1, #5          wz  ' interrupt enable
-                bitz    cy, #31                 ' NMI
+                bitz    cy, #8                  ' NMI
                 wrlong  cy, #@tms_status
 
                 mov     cy,#24-1                'after-visible blank lines
