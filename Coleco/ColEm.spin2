@@ -21,9 +21,9 @@ CON
     AUDIO_RIGHT_PIN = 49
     AUDIO_LEFT_PIN  = 48
 
-                ' startup code
 
-DAT             org     $000
+DAT             ' Startup
+                org     $000
 
                 asmclk
                 drvl    #56
@@ -32,7 +32,7 @@ DAT             org     $000
                 coginit #1, ##@zk_cogbase       'start Z80 on cog #1
                 coginit #2, ##@tms_driver       'start TMS9918 on cog #2
                 coginit #3, ##@psg_driver       'start SN76489 on cog #3
-                jmp     #\ps2_driver
+                jmp     #\ps2_driver            'cog #0 (this) PS/2 keyboard
 
 ' Controller status
 
@@ -46,7 +46,7 @@ coleco_ctrls
 
 tms_regs        byte    $00, $00, $00, $00, $00, $00, $00, $00
 tms_status      long    $00     ' 7..0 = VDP status
-                                '   31 = NMI
+                                '    8 = NMI
 
 ' SN76489 registers
 
@@ -62,6 +62,9 @@ psg_registers
                 long    $00     ' 06  4..0 noise control
                 long    $0F     ' 07  7..0 noise attunation
 
+'
+' PS/2 Keyboard river
+'
 ps2_driver
                 fltl    #PS2_DATA_PIN
                 fltl    #PS2_CLOCK_PIN
@@ -75,12 +78,10 @@ ps2_driver
                 jmp     #ps2_locks
 
 ps2_reset
-ps2_loop        testpn  #PS2_CLOCK_PIN  wz  ' wait for initial clock low
-        if_z    jmp     #$-1
+ps2_loop        and     ps2_state, #$07     ' keep locks state
 
-                and     ps2_state, #$07     ' keep locks state
-                getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ##_CLKFREQ / 10
+'                getct   ps2_tout            ' safety timeout
+'                addct1  ps2_tout, ##_CLKFREQ / 10
 
 .l1             call    #ps2_receive
                 getbyte ps2_code, ps2_data, #0
@@ -461,11 +462,8 @@ CON
     RIGHT_ALT   = %0100_0000
     RIGHT_GUI   = %1000_0000
 
-DAT             org     $000
-
-'
-' Z80 CPU Emulator
-'
+DAT             ' ZiKore Z80 COG resident code
+                org     $000
 
 zk_cogbase
                 add     ptrb, ##@zk_lutbase - @zk_cogbase
@@ -811,7 +809,7 @@ zk_i2a
 
 zk_irqret       '' RETI/RETN
                 '' These are literally the same
-                add     zk_cycles,#8
+                add     zk_cycles,#6
                 testb   zk_irqenable,#ZK_IFF2_BIT wc
                 bitc    zk_irqenable,#ZK_IFF1_BIT
                 call    #\zk_pop16
@@ -819,7 +817,6 @@ zk_irqret       '' RETI/RETN
 
 
 zk_imode        ' Don't care, always assume IM1
-                add     zk_cycles,#3
                 ret
 
 zk_irqoff
@@ -1088,8 +1085,8 @@ zk_ctl          res     1
 
 DAT             ' ZiKore Z80 LUT resident code
                 org     $200
-zk_lutbase
-                '' Opcode table
+
+zk_lutbase      '' Opcode table
                 long    zk_nextop                                           ' $00: NOP
                 long    zk_loadimm16 + (%0000_1_111_0<<10)                  ' $01: LD BC,imm16
                 long    zk_a_and_ptr + (%001110<<10)                        ' $02: LD (BC),A
@@ -1637,7 +1634,8 @@ zk_halt
 
                 fit     $400
 
-DAT             orgh    ' I/O Hub-exec code
+DAT             ' I/O Hub-exec code
+                orgh
 
 '
 ' Controllers
@@ -1753,14 +1751,13 @@ CON
     ZK_IFF2_BIT   = 1
     ZK_HALT_BIT   = 2
 
-DAT             org     $000
+DAT             ' TMS9918 VGA Driver
+                org     $000
 
-'
-' VGA Driver
-'
 tms_driver
+                add     ptrb, ##@tms_palette - @tms_driver
                 setq2   #$10 - 1                'load palette into lut
-                rdlong  0, _tms_palette
+                rdlong  0, ptrb
 
                 mov     _xf, ##_CLKFREQ         'calculate streamer frequency
                 qfrac   ##VGA_FPIX, _xf
@@ -1803,7 +1800,16 @@ loop
                 mov     scol, scol+1
                 mov     scnt, _cl
 
-                setq    #1                      ' read registers into temp buffer
+                cmp     _cl, #24 + 192      wz
+    if_ne       jmp     #.skip
+
+                rdlong  a, #@tms_status         ' update status byte
+                bith    a, #7               wcz ' vsync flag
+                testb   regs+1, #5          wz  ' interrupt enable
+                bitz    a, #8                   ' NMI
+                wrlong  a, #@tms_status
+
+.skip           setq    #1                      ' read registers into temp buffer
                 rdlong  sbuf, #@tms_regs        ' |
 
                 getnib  scol+1, sbuf+1, #6      ' border color for next line
@@ -2052,7 +2058,7 @@ sprites
     if_e        mov     stat, ccnt              ' set 5th sprite
     if_e        or      stat, #%010_00000       ' |
                 sub     vcnt, #1
-    if_ae       jmp     #.loop                  ' comment to remove sprite flicker
+    if_ae       jmp     #.loop                  ' comment to remove sprite limit
 
                 getbyte ptrc, sprt, #2
                 test    regs+1, #TMSSPRSIZE wz
@@ -2193,16 +2199,7 @@ field
                 resi1
                 djnz    cy,#.line
 
-                mov     cy,#1                  'after-visible blank lines
-                calld   border_ret, #border
-
-                rdlong  cy, #@tms_status        ' update status byte
-                bith    cy, #7              wcz ' vsync flag
-                testb   regs+1, #5          wz  ' interrupt enable
-                bitz    cy, #8                  ' NMI
-                wrlong  cy, #@tms_status
-
-                mov     cy,#24-1                'after-visible blank lines
+                mov     cy,#24                  'after-visible blank lines
                 calld   border_ret, #border
 
                 mov     cy, #10
@@ -2280,7 +2277,6 @@ _pn             long    VGA_PIN & $38           'base pin
 
 _tms_vram       long    @tms_vram
 _tms_bitmap     long    @tms_bitmap
-_tms_palette    long    @tms_palette
 
 vdp_8k_mask     long    $1FFF
 
@@ -2314,6 +2310,27 @@ line            res     8+1
 
                 fit     $1F0
 
+DAT             ' TMS9918 VGA Palette
+                org     $200
+
+tms_palette
+                long    $00_00_00_00
+                long    $00_00_00_00
+                long    $66_CC_66_00
+                long    $88_EE_88_00
+                long    $44_44_DD_00
+                long    $77_77_FF_00
+                long    $BB_55_55_00
+                long    $77_DD_DD_00
+                long    $DD_66_66_00
+                long    $FF_77_77_00
+                long    $CC_CC_55_00
+                long    $EE_EE_88_00
+                long    $55_AA_55_00
+                long    $BB_55_BB_00
+                long    $CC_CC_CC_00
+                long    $EE_EE_EE_00
+
 CON
 
     VGA_FPIX      = 12_500_000
@@ -2335,12 +2352,10 @@ CON
 
     TMSSPRITES = 32
 
-DAT             org     $000
+DAT             'Assembly SN76489 emulator
+                org     $000
 
-'───────────────────────────────────────────────────────────
-'                Assembly SN emulator
-'───────────────────────────────────────────────────────────
-psg_driver      'mov     ptra, #@sn_registers        ' Init
+psg_driver                                           ' Init
                 fltl    leftp
                 fltl    rightp
                 wrpin   res1,leftp
@@ -2357,10 +2372,8 @@ psg_driver      'mov     ptra, #@sn_registers        ' Init
                 call    #sn_mixer
                 jmp     #.loop
 
-'───────────────────────────────────────────────────────────
 ' Read all SN registers from hub memory and convert
 ' them to more convenient representations.
-'───────────────────────────────────────────────────────────
 sn_getRegisters
                 setq    #7
                 rdlong  frequency1,#@psg_registers
@@ -2387,7 +2400,7 @@ sn_calcSamples                                      ' Calculate SN samples
         if_nc   waitx   #(7-1)*2 ' wait equivalent time for timing stability
         if_nc   jmp     #.Amp1
                 add     oscCounterN, noiseFreq
-'───────────────────────────────────────────────────────────
+
                 test    noiseFeedback, #4       wz ' Is it periodic or white noise ?
         if_nz   test    noiseValue, #NOISE_TAP  wc ' C = White noise !
         if_z    test    noiseValue, #1          wc ' C = Periodic noise !
@@ -2395,21 +2408,21 @@ sn_calcSamples                                      ' Calculate SN samples
                 shr     noiseValue, #1          wc
                 alts    amplitudeN,#psg_amplitudeTable
                 negnc   outN, 0-0
-'───────────────────────────────────────────────────────────
+
 .Amp1
 .Square1        sub     oscCounter1, oscSubValue          wc ' Square wave generator 1
         if_c    add     oscCounter1, frequency1
         if_c    xor     oscState1, #1                     wz
         if_c    alts    amplitude1,#psg_amplitudeTable
         if_c    negz    out1, 0-0
-'───────────────────────────────────────────────────────────
+
 .Amp2
 .Square2        sub     oscCounter2, oscSubValue          wc ' Square wave generator 2
         if_c    add     oscCounter2, frequency2
         if_c    xor     oscState2, #1                     wz
         if_c    alts    amplitude2,#psg_amplitudeTable
         if_c    negz    out2, 0-0
-'───────────────────────────────────────────────────────────
+
 .Amp3
 .Square3        sub     oscCounter3, oscSubValue          wc ' Square wave generator 3
         if_c    add     oscCounter3, frequency3
@@ -2418,9 +2431,7 @@ sn_calcSamples                                      ' Calculate SN samples
         if_c    negz    out3, 0-0
                 ret
 
-'───────────────────────────────────────────────────────────
-'      Mix channels and update FRQA/FRQB PWM-values
-'───────────────────────────────────────────────────────────
+' Mix channels and update FRQA/FRQB PWM-values
 sn_mixer
                 mov     psgOut, dac_center
                 add     psgOut, out1
@@ -2437,9 +2448,7 @@ sn_mixer
                 wypin   psgOut, rightp
 mixer_ret       ret
 
-'
-'    Variables, tables, masks and reference values
-'
+' Variables, tables, masks and reference values
 psg_amplitudeTable
                 long    trunc(AMPLITUDE_LEVEL_0)
                 long    trunc(AMPLITUDE_LEVEL_1)
@@ -2553,26 +2562,10 @@ CON
 
 ' Runtime data area
 
-DAT             orgh
+DAT             ' Work area
+                orgh
 
-tms_palette     long    $00_00_00_00
-                long    $00_00_00_00
-                long    $66_CC_66_00
-                long    $88_EE_88_00
-                long    $44_44_DD_00
-                long    $77_77_FF_00
-                long    $BB_55_55_00
-                long    $77_DD_DD_00
-                long    $DD_66_66_00
-                long    $FF_77_77_00
-                long    $CC_CC_55_00
-                long    $EE_EE_88_00
-                long    $55_AA_55_00
-                long    $BB_55_BB_00
-                long    $CC_CC_CC_00
-                long    $EE_EE_EE_00
-
-tms_vram        byte    0[16384]
+tms_vram        byte    0[16384]                    ' TMS9918 video ram
 
 z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 byte    $FF[z80_ram + $4000 - $]    ' Expansion slot
@@ -2590,7 +2583,7 @@ z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 'file    "Galaxian (USA).col"
                 'file    "H.E.R.O (USA).col"
                 'file    "Frogger (USA).col"
-                'file    "Pitfall! (USA).col"
+                file    "Pitfall! (USA).col"
                 'file    "Pitfall II - Lost Caverns (USA).col"
                 'file    "Popeye (USA).col"
                 'file    "River Raid (USA).col"
@@ -2599,4 +2592,4 @@ z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 'file    "Zaxxon (USA, Europe).col"
                 byte    $FF[z80_ram + $10000 - $]
 
-tms_bitmap      'byte    0[256 * 192]
+tms_bitmap      ' Memory used as rendered bitmap
