@@ -29,6 +29,11 @@ DAT             ' Startup
                 drvl    #56
                 drvl    #57
 
+                rep     @.lockmadness,#16
+                locknew pb
+                nop
+.lockmadness
+
                 coginit #1, ##@zk_cogbase       'start Z80 on cog #1
                 coginit #2, ##@tms_driver       'start TMS9918 on cog #2
                 coginit #3, ##@psg_driver       'start SN76489 on cog #3
@@ -480,6 +485,8 @@ zk_cogbase
                 mov     zk_cycles, #1
 
 zk_nextop
+                lockrel #0                      ' Release lock
+
                 mul     zk_cycles, zk_cycletime
                 add     zk_cycles, zk_lastwait
                 getct   pa
@@ -487,6 +494,9 @@ zk_nextop
                 cmps    zk_cycles, #1   wc
         if_ae   waitx   zk_cycles
                 getct   zk_lastwait
+
+                locktry #0              wc      ' Acquire lock for instruction processing
+    if_nc       jmp     #$-1
 
                 mov     zk_cycles, #1
 
@@ -1668,8 +1678,15 @@ tms_reg_wr      bitl    io_flags, #0
         if_x0   jmp     #tms_addr_wr
                 mov     tms_tmp1, zk_tmp8
                 and     tms_tmp1, #$07
+                cmp     tms_tmp1, #1    wz      ' Z = Reg1 (may be INT enable)
                 add     tms_tmp1, #@tms_regs
                 wrbyte  tms_tmp0, tms_tmp1
+        if_nz   ret     wcz
+                rdlong  tms_tmp1, #@tms_status
+                testb   zk_tmp8, #5     wc      ' C = INT ENABLE
+                testb   tms_tmp1, #5    andc    ' FSync
+                bitc    tms_tmp1, #8            ' Generate NMI if INT enable and FSync
+                wrlong  tms_tmp1, #@tms_status
                 ret     wcz
 
 tms_addr_wr     mov     tms_ramptr, zk_tmp8
@@ -1803,11 +1820,14 @@ loop
                 cmp     _cl, #24 + 192      wz
     if_ne       jmp     #.skip
 
+                locktry #0              wc
+    if_nc       jmp     #$-1
                 rdlong  a, #@tms_status         ' update status byte
-                bith    a, #7               wcz ' vsync flag
-                testb   regs+1, #5          wz  ' interrupt enable
-                bitz    a, #8                   ' NMI
+                or      a, #TMSVSYNC            ' vsync flag
+                test    regs+1, #TMSINTEN   wz  ' interrupt enable
+                bitnz   a, #8                   ' NMI
                 wrlong  a, #@tms_status
+                lockrel #0
 
 .skip           setq    #1                      ' read registers into temp buffer
                 rdlong  sbuf, #@tms_regs        ' |
@@ -2056,9 +2076,9 @@ sprites
 
                 cmps    vcnt, #5            wcz
     if_e        mov     stat, ccnt              ' set 5th sprite
-    if_e        or      stat, #%010_00000       ' |
+    if_e        or      stat, #TMS5SPRITE       ' |
                 sub     vcnt, #1
-    if_ae       jmp     #.loop                  ' comment to remove sprite limit
+'    if_ae       jmp     #.loop                  ' comment to remove sprite limit
 
                 getbyte ptrc, sprt, #2
                 test    regs+1, #TMSSPRSIZE wz
@@ -2142,12 +2162,15 @@ sprites
                 jmp     #.loop
 .end
 
+                locktry #0              wc
+    if_nc       jmp     #$-1
                 rdbyte  a, #@tms_status         ' update status byte
-                test    stat, #%001_00000  wz
-    if_nz       or      a, #%001_00000
-                test    a, #%010_00000     wz
+                test    stat, #TMSCOLL      wz
+    if_nz       or      a, #TMSCOLL
+                test    a, #TMS5SPRITE      wz
     if_z        or      a, stat
                 wrbyte  a, #@tms_status
+                lockrel #0
 
 end_scanline
                 add     ptrv, #256
@@ -2348,7 +2371,9 @@ CON
     TMSSPRSIZE = %00000010      ' sprite size
     TMSSPRMAG  = %00000001      ' sprite magnification
 
-    TMSVSYNC   = %10000000      ' framce sync
+    TMSVSYNC   = %10000000      ' frame sync
+    TMS5SPRITE = %01000000      ' 5th sprite
+    TMSCOLL    = %00100000      ' coincidence flag
 
     TMSSPRITES = 32
 
@@ -2583,7 +2608,7 @@ z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 'file    "Galaxian (USA).col"
                 'file    "H.E.R.O (USA).col"
                 'file    "Frogger (USA).col"
-                file    "Pitfall! (USA).col"
+                'file    "Pitfall! (USA).col"
                 'file    "Pitfall II - Lost Caverns (USA).col"
                 'file    "Popeye (USA).col"
                 'file    "River Raid (USA).col"
