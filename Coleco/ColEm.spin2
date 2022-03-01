@@ -13,7 +13,9 @@ CON
 
     CPU_CLOCK       = 3_579_545.0 ' 3_546_893.0
 
+    VIDEO           = VGA
     VGA_PIN         = 8
+    CVBS_PIN        = 32+7*3 addpins 1
 
     PS2_DATA_PIN    = 25
     PS2_CLOCK_PIN   = 24
@@ -503,6 +505,7 @@ zk_nextop
                 testb   zk_ctl, #8          wc  ' C = old NMI
                 rdlong  zk_ctl, #@tms_status
                 testb   zk_ctl, #8          wz  ' Z = current NMI
+                drvz    #4
         if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
                 mov     zk_temphl, zk_hl
@@ -1773,13 +1776,13 @@ DAT             ' TMS9918
 
 tms_driver
                 add     ptrb, ##@tms_palette - @tms_driver
-                setq2   #511                    'load driver into lut
+                setq2   #511                    ' load video driver into lut
                 rdlong  0, ptrb
 
-                call    #\vga_init
+                call    #\(VIDEO == VGA ? vga_init : cvbs_init) ' start VGA driver
 
                 mov     scol, #0
-                xcont   #10,#0                  'do streamer instruction to start interrupt sequence
+                xcont   #10,#0                  ' do streamer instruction to start interrupt sequence
 '
 '
 ' Main program
@@ -2158,6 +2161,7 @@ end_scanline
 '
 dacmode_s       long    %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
 dacmode_c       long    %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
+dacmode         long    P_DAC_75R_2V + P_CHANNEL  '%0000_0000_000_101110000xxxx_01_00000_0
 
 cx              long    0
 cy              long    0
@@ -2172,8 +2176,31 @@ vga_dv          long    $7F08_0000 + 256    ' streamer command: during visible
 vga_av          long    $3F00_0000 +  32    ' streamer command: after visible
 vga_pn          long    VGA_PIN & $38       ' base pin
 
+cvbs_cb         long    NTSC_CB             ' colorburst reference color
+cvbs_cy         long    NTSC_CY             ' colorspace y coefficients
+cvbs_ci         long    NTSC_CI             ' colorspace i coefficients
+cvbs_cq         long    NTSC_CQ             ' colorspace q coefficients
+cvbs_ca         long    NTSC_CQ             ' colorspace q coefficients, alt for pal
+cvbs_cf         long    NTSC_CF frac _CLKFREQ ' colorspace frequency setting
+cvbs_xf         long    $030B_8EB8          ' streamer frequency setting (depends on CLKFREQ)
+cvbs_bs         long    $7F01_0000 +  10    ' streamer command: before-sync
+cvbs_ds         long    $7F01_0000 +  27    ' streamer command: during-sync
+cvbs_bc         long    $7F01_0000 +   4    ' streamer command: before-colorburst
+cvbs_dc         long    $7F01_0000 +  15    ' streamer command: during-colorburst
+cvbs_ac         long    $7F01_0000 +   9    ' streamer command: after-colorburst
+cvbs_bv         long    $3F00_0000 +  28    ' streamer command: before-visible
+cvbs_dv         long    $7F08_0000 + 256    ' streamer command: during-visible
+cvbs_av         long    $3F00_0000 +  29    ' streamer command: after-visible
+cvbs_db         long    $7F01_0000 + 313    ' streamer command: during-blank
+cvbs_hf         long    $7F01_0000 + 189    ' streamer command: half-line
+cvbs_hl         long    $7F01_0000 +  14    ' streamer command: high-vsync-low
+cvbs_hh         long    $7F01_0000 + 165    ' streamer command: high-vsync-high
+cvbs_ll         long    $7F01_0000 + 161    ' streamer command: low-vsync-low
+cvbs_lh         long    $7F01_0000 +  18    ' streamer command: low-vsync-high
+cvbs_pn         long    CVBS_PIN            ' pin(s)
+
 _lb             long    0                   ' line buffer pointer
-_cl             long    0                       'current line
+_cl             long    0                   ' current line
 _tms_vram       long    @tms_vram
 _tms_bitmap     long    @tms_bitmap
 
@@ -2207,7 +2234,7 @@ sbuf            res     32
 
 line            res     8+1
 
-DAT             ' VGA driver
+DAT             ' VGA / CVBS drivers
                 org     $200
 
 tms_palette
@@ -2324,17 +2351,6 @@ vga_field
 '
 ' Subroutines
 '
-.blank          xcont   vga_as,#0               ' do before-visible part of scan line
-                resi1
-                xcont   vga_vi,#0               ' do visible part of scan line (blank)
-                resi1
-                xcont   vga_bs,#0               ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds,#1               ' do sync part of scan line
-                resi1
-                djnz    cy,#.blank              ' loop if more blanks needed
-                jmp     pa
-
 .border         xcont   vga_as,#0               ' do before-visible part of scan line
                 add     _cl, #1
                 resi1
@@ -2354,6 +2370,133 @@ vga_field
                 xzero   vga_ds,#1               ' do sync part of scan line
                 resi1
                 djnz    cy,#.border
+                jmp     pa
+
+.blank          xcont   vga_as,#0               ' do before-visible part of scan line
+                resi1
+                xcont   vga_vi,#0               ' do visible part of scan line (blank)
+                resi1
+                xcont   vga_bs,#0               ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds,#1               ' do sync part of scan line
+                resi1
+                djnz    cy,#.blank              ' loop if more blanks needed
+                jmp     pa
+'
+'
+' CVBS Driver
+'
+cvbs_init
+                setcmod #%11_1_0000             ' set colorspace converter to YIQ mode (composite)
+                setcy   cvbs_cy                 ' set colorspace converter y coefficients
+                setci   cvbs_ci                 ' set colorspace converter i coefficients
+                setcq   cvbs_cq                 ' set colorspace converter q coefficients
+                setcfrq cvbs_cf                 ' set colorspace converter frequency
+                setxfrq cvbs_xf                 ' set transfer frequency
+
+                cogid   cx                      ' install cogid into dacmode
+                setnib  dacmode,cx,#2
+                wrpin   dacmode,cvbs_pn         ' enable dac mode in pin(s)
+                drvl    cvbs_pn                 ' enable dac output(s)
+
+                mov     ijmp1,##cvbs_field      ' set up streamer-empty interrupt
+        _ret_   setint1 #10
+
+cvbs_field
+                mov     cy, #24                 ' before-visible blank lines
+                calld   pa, #.border            ' |
+
+                rdfast  #0, _tms_bitmap         ' start reading pixels into fifo
+                mov     cy, #192                ' visible lines
+
+.line           xcont   cvbs_bs, #1             ' horizontal sync
+                add     _cl, #1
+                resi1                           ' |
+                xcont   cvbs_ds, #2             ' |
+                resi1                           ' |
+                xcont   cvbs_bc, #1             ' |
+                resi1                           ' |
+                xcont   cvbs_dc, cvbs_cb        ' |
+                resi1                           ' |
+                xcont   cvbs_ac, #1             ' |
+                resi1                           ' |
+
+                xcont   cvbs_bv, scol           ' left border
+                resi1
+                xcont   cvbs_dv, #0             ' visible part (from streamer)
+                resi1
+                xcont   cvbs_av, scol           ' right border
+                resi1
+
+                djnz    cy, #.line
+
+                mov     cy, #24                 ' after-visible blank lines
+                calld   pa, #.border            ' |
+
+                mov     cy, #2                  ' before-visible blank lines
+                calld   pa, #.blank             ' |
+
+                mov     _cl, #0
+
+                mov     cy, #6
+                calld   pa, #.vhigh             ' initial high vertical syncs
+                mov     cy, #6
+                calld   pa, #.vlow              ' low vertical syncs
+                mov     cy, #6
+                calld   pa, #.vhigh             ' final high vertical syncs
+
+                mov     cy, #10                 ' before-visible blank lines
+                calld   pa, #.blank             ' |
+
+                jmp     #cvbs_field             ' loop
+
+.border         xcont   cvbs_bs, #1             ' horizontal sync
+                add     _cl, #1
+                resi1                           ' |
+                xcont   cvbs_ds, #2             ' |
+                resi1                           ' |
+                xcont   cvbs_bc, #1             ' |
+                resi1                           ' |
+                xcont   cvbs_dc, cvbs_cb        ' |
+                resi1                           ' |
+                xcont   cvbs_ac, #1             ' |
+                resi1                           ' |
+                xcont   cvbs_db, #1             ' blank line
+                resi1                           ' |
+                djnz    cy, #.border
+                jmp     pa
+
+.blank          xcont   cvbs_bs, #1             ' horizontal sync
+                resi1                           ' |
+                xcont   cvbs_ds, #2             ' |
+                resi1                           ' |
+                xcont   cvbs_bc, #1             ' |
+                resi1                           ' |
+                xcont   cvbs_dc, cvbs_cb        ' |
+                resi1                           ' |
+                xcont   cvbs_ac, #1             ' |
+                resi1                           ' |
+                xcont   cvbs_db, #1             ' blank line
+                resi1                           ' |
+                djnz    cy, #.blank
+                jmp     pa
+
+.vhigh          xcont   cvbs_bs, #1             ' |
+                resi1                           ' |
+                xcont   cvbs_hl, #2             ' |
+                resi1                           ' |
+                xcont   cvbs_hh, #1             ' |
+                resi1                           ' |
+                djnz    cy, #.vhigh
+                jmp     pa
+
+.vlow           xcont   cvbs_bs, #1             ' |
+                resi1                           ' |
+                xcont   cvbs_ll, #2             ' |
+                resi1                           ' |
+                xcont   cvbs_lh, #1             ' |
+                resi1                           ' |
+                djnz    cy, #.vlow
                 jmp     pa
 
                 fit     $3F0
@@ -2380,8 +2523,40 @@ CON ' TMS9918 constants
 
 CON ' VGA constants
 
+    VGA           = 0
     VGA_FPIX      = 12_500_000
     VGA_INTENSITY = 80    '0..128
+
+CON ' CVBS constants
+
+    NTSC            = 1
+    NTSC_BLANK_LEV  = 40.0                                  'levels
+    NTSC_BLACK_LEV  = NTSC_BLANK_LEV + 7.5
+    NTSC_PEAK_LEV   = NTSC_BLANK_LEV + 140.0
+    NTSC_SCALE      = 127.0 / NTSC_PEAK_LEV * 128.0
+    NTSC_SCALE_COR  = NTSC_SCALE / 1.646                    'CORDIC prescale for IQ modulator
+
+    NTSC_BLANK      = round(NTSC_SCALE * 2.0 * NTSC_BLANK_LEV / NTSC_PEAK_LEV)
+    NTSC_BLACK      = round(NTSC_SCALE * 2.0 * NTSC_BLACK_LEV / NTSC_PEAK_LEV)
+
+    NTSC_YR         = round(NTSC_SCALE     *  0.299)        'Y sums to 1
+    NTSC_YG         = round(NTSC_SCALE     *  0.587)
+    NTSC_YB         = round(NTSC_SCALE     *  0.114)
+
+    NTSC_IR         = round(NTSC_SCALE_COR *  0.596)        'I sums to 0
+    NTSC_IG         = round(NTSC_SCALE_COR * -0.274)
+    NTSC_IB         = round(NTSC_SCALE_COR * -0.322)
+
+    NTSC_QR         = round(NTSC_SCALE_COR *  0.212)        'Q sums to 0
+    NTSC_QG         = round(NTSC_SCALE_COR * -0.523)
+    NTSC_QB         = round(NTSC_SCALE_COR *  0.311)
+
+    NTSC_CY         = (NTSC_YR & $FF) << 24 + (NTSC_YG & $FF) << 16 + (NTSC_YB & $FF) << 8 + NTSC_BLACK
+    NTSC_CI         = (NTSC_IR & $FF) << 24 + (NTSC_IG & $FF) << 16 + (NTSC_IB & $FF) << 8 + NTSC_BLANK
+    NTSC_CQ         = (NTSC_QR & $FF) << 24 + (NTSC_QG & $FF) << 16 + (NTSC_QB & $FF) << 8 + 128
+
+    NTSC_CB         = $809000_01                            'colorburst reference color
+    NTSC_CF         = 3_579_545                             'colorburst frequency
 
 DAT             ' SN76489
                 org     $000
