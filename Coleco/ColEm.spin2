@@ -1768,41 +1768,15 @@ CON
     ZK_IFF2_BIT   = 1
     ZK_HALT_BIT   = 2
 
-DAT             ' TMS9918 VGA Driver
+DAT             ' TMS9918
                 org     $000
 
 tms_driver
                 add     ptrb, ##@tms_palette - @tms_driver
-                setq2   #$10 - 1                'load palette into lut
+                setq2   #511                    'load driver into lut
                 rdlong  0, ptrb
 
-                mov     _xf, ##_CLKFREQ         'calculate streamer frequency
-                qfrac   ##VGA_FPIX, _xf
-                getqx   _xf
-                shr     _xf, #1
-
-                setcmod #%01_0_000_0            'enable colorspace conversion
-                setcy   ##VGA_INTENSITY << 24   'r      set colorspace for rgb
-                setci   ##VGA_INTENSITY << 16   'g
-                setcq   ##VGA_INTENSITY << 08   'b
-                setxfrq _xf                     'set transfer frequency
-
-                cogid   cx                      'insert cogid into dac modes
-                setnib  dacmode_s,cx,#2
-                setnib  dacmode_c,cx,#2
-
-                wrpin   dacmode_s,_pn           'enable 123-ohm 3.3V dac mode in pin +0
-
-                xor     _pn,#2<<6|1             'enable 75-ohm 2.0V dac mode in pins +1..3
-                wrpin   dacmode_c,_pn
-
-                xor     _pn,#3<<6 ^(2<<6|1)     'make pins +0..3 outputs
-                drvl    _pn
-
-                xor     _pn,#4|(3<<6)           'leave av_base pointing to pin +4 (vertical sync)
-
-                mov     ijmp1,#field            'set up streamer-empty interrupt
-                setint1 #10
+                call    #\vga_init
 
                 mov     scol, #0
                 xcont   #10,#0                  'do streamer instruction to start interrupt sequence
@@ -2180,104 +2154,6 @@ end_scanline
                 jmp     #loop
 '
 '
-' Field loop
-'
-field
-                mov     cy,#24                  'before-visible blank lines
-                calld   border_ret, #border
-
-                mov     _lb, _tms_bitmap
-
-                mov     cy,#192                 'visible lines
-.line           xcont   _as,#0                  'do before-visible part of scan line
-                add     _cl, #1
-
-                rdfast  #4, _lb                 'start reading pixels into fifo
-                resi1
-                xcont   _bv, scol
-                resi1
-                xcont   _dv, #0
-                resi1
-                xcont   _av, scol
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-                resi1
-
-                ' duplicate line
-                xcont   _as,#0                 'do before-visible part of scan line
-                resi1
-                xcont   _bv, scol
-                resi1
-                xcont   _dv, #0
-                resi1
-                xcont   _av, scol
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-
-                add     _lb, #256
-                resi1
-                djnz    cy,#.line
-
-                mov     cy,#24                  'after-visible blank lines
-                calld   border_ret, #border
-
-                mov     cy, #10
-                calld   blank_ret, #blank
-
-                drvnot  _pn                     'vertical sync on
-                mov     cy, #2
-                calld   blank_ret, #blank
-                drvnot  _pn                     'vertical sync off
-
-                mov     _cl, #0
-
-                mov     cy, #33
-                calld   blank_ret, #blank
-
-                jmp     #field                  'loop
-'
-'
-' Subroutines
-'
-blank           xcont   _as,#0                  'do before-visible part of scan line
-                resi1
-                xcont   _vi,#0                  'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                  'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                  'do sync part of scan line
-                resi1
-                djnz    cy,#blank               'loop if more blanks needed
-                jmp     blank_ret
-blank_ret       long    0
-
-border          xcont   _as,#0                  'do before-visible part of scan line
-                add     _cl, #1
-                resi1
-                xcont   _vi,scol                'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                  'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                  'do sync part of scan line
-                resi1
-
-                xcont   _as,#0                  'do before-visible part of scan line
-                resi1
-                xcont   _vi,scol                'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                  'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                  'do sync part of scan line
-                resi1
-                djnz    cy,#border
-                jmp     border_ret
-border_ret      long    0
-'
-'
 ' Data
 '
 dacmode_s       long    %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
@@ -2286,18 +2162,18 @@ dacmode_c       long    %0000_0000_000_1011100000000_01_00000_0         'R/G/B a
 cx              long    0
 cy              long    0
 
-_xf             long    0                       'streamer frequency setting
-_bs             long    $7F010000+8             'streamer command: before-sync
-_ds             long    $7F010000+48            'streamer command: during-sync
-_as             long    $7F010000+24            'streamer command: after sync
-_vi             long    $3F000000+320           'streamer command: visible
-_bv             long    $3F000000+32            'streamer command: before visible
-_dv             long    $7F080000+256           'streamer command: during visible
-_av             long    $3F000000+32            'streamer command: after visible
-_lb             long    0                       'line buffer pointer
-_cl             long    0                       'current line
-_pn             long    VGA_PIN & $38           'base pin
+vga_xf          long    0                   ' streamer frequency setting
+vga_bs          long    $7F01_0000 +   8    ' streamer command: before-sync
+vga_ds          long    $7F01_0000 +  48    ' streamer command: during-sync
+vga_as          long    $7F01_0000 +  24    ' streamer command: after sync
+vga_vi          long    $3F00_0000 + 320    ' streamer command: visible
+vga_bv          long    $3F00_0000 +  32    ' streamer command: before visible
+vga_dv          long    $7F08_0000 + 256    ' streamer command: during visible
+vga_av          long    $3F00_0000 +  32    ' streamer command: after visible
+vga_pn          long    VGA_PIN & $38       ' base pin
 
+_lb             long    0                   ' line buffer pointer
+_cl             long    0                       'current line
 _tms_vram       long    @tms_vram
 _tms_bitmap     long    @tms_bitmap
 
@@ -2331,9 +2207,7 @@ sbuf            res     32
 
 line            res     8+1
 
-                fit     $1F0
-
-DAT             ' TMS9918 VGA Palette
+DAT             ' VGA driver
                 org     $200
 
 tms_palette
@@ -2353,11 +2227,138 @@ tms_palette
                 long    $BB_55_BB_00
                 long    $CC_CC_CC_00
                 long    $EE_EE_EE_00
+'
+'
+' VGA Driver
+'
+vga_init
+                mov     vga_xf, ##_CLKFREQ      ' calculate streamer frequency
+                qfrac   ##VGA_FPIX, vga_xf
+                getqx   vga_xf
+                shr     vga_xf, #1
 
-CON
+                setcmod #%01_0_000_0            ' enable colorspace conversion
+                setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
+                setci   ##VGA_INTENSITY << 16   ' g
+                setcq   ##VGA_INTENSITY << 08   ' b
+                setxfrq vga_xf                  ' set transfer frequency
 
-    VGA_FPIX      = 12_500_000
-    VGA_INTENSITY = 80    '0..128
+                cogid   cx                      ' insert cogid into dac modes
+                setnib  dacmode_s,cx,#2
+                setnib  dacmode_c,cx,#2
+
+                wrpin   dacmode_s,vga_pn        ' enable 123-ohm 3.3V dac mode in pin +0
+
+                xor     vga_pn,#2<<6|1          ' enable 75-ohm 2.0V dac mode in pins +1..3
+                wrpin   dacmode_c,vga_pn
+
+                xor     vga_pn,#3<<6 ^(2<<6|1)  ' make pins +0..3 outputs
+                drvl    vga_pn
+
+                xor     vga_pn,#4|(3<<6)        ' leave av_base pointing to pin +4 (vertical sync)
+
+                mov     ijmp1,##vga_field       ' set up streamer-empty interrupt
+        _ret_   setint1 #10
+'
+'
+' Field loop
+'
+vga_field
+                mov     cy,#24                  ' before-visible blank lines
+                calld   pa, #.border
+
+                mov     _lb, _tms_bitmap
+
+                mov     cy,#192                 ' visible lines
+.line           xcont   vga_as,#0               ' do before-visible part of scan line
+                add     _cl, #1
+
+                rdfast  #4, _lb                 ' start reading pixels into fifo
+                resi1
+                xcont   vga_bv, scol
+                resi1
+                xcont   vga_dv, #0
+                resi1
+                xcont   vga_av, scol
+                resi1
+                xcont   vga_bs,#0               ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds,#1               ' do sync part of scan line
+                resi1
+
+                ' duplicate line
+                xcont   vga_as,#0               ' do before-visible part of scan line
+                resi1
+                xcont   vga_bv, scol
+                resi1
+                xcont   vga_dv, #0
+                resi1
+                xcont   vga_av, scol
+                resi1
+                xcont   vga_bs,#0               ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds,#1               ' do sync part of scan line
+
+                add     _lb, #256
+                resi1
+                djnz    cy,#.line
+
+                mov     cy,#24                  ' after-visible blank lines
+                calld   pa, #.border
+
+                mov     cy, #10
+                calld   pa, #.blank
+
+                drvnot  vga_pn                  ' vertical sync on
+                mov     cy, #2
+                calld   pa, #.blank
+                drvnot  vga_pn                  ' vertical sync off
+
+                mov     _cl, #0
+
+                mov     cy, #33
+                calld   pa, #.blank
+
+                jmp     #vga_field              ' loop
+'
+'
+' Subroutines
+'
+.blank          xcont   vga_as,#0               ' do before-visible part of scan line
+                resi1
+                xcont   vga_vi,#0               ' do visible part of scan line (blank)
+                resi1
+                xcont   vga_bs,#0               ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds,#1               ' do sync part of scan line
+                resi1
+                djnz    cy,#.blank              ' loop if more blanks needed
+                jmp     pa
+
+.border         xcont   vga_as,#0               ' do before-visible part of scan line
+                add     _cl, #1
+                resi1
+                xcont   vga_vi,scol             ' do visible part of scan line (blank)
+                resi1
+                xcont   vga_bs,#0               ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds,#1               ' do sync part of scan line
+                resi1
+
+                xcont   vga_as,#0               ' do before-visible part of scan line
+                resi1
+                xcont   vga_vi,scol             ' do visible part of scan line (blank)
+                resi1
+                xcont   vga_bs,#0               ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds,#1               ' do sync part of scan line
+                resi1
+                djnz    cy,#.border
+                jmp     pa
+
+                fit     $3F0
+
+CON ' TMS9918 constants
 
     TMSMODE3   = %00000010      ' mode bit 3
     TMSEXTVID  = %00000001      ' external video
@@ -2377,7 +2378,12 @@ CON
 
     TMSSPRITES = 32
 
-DAT             'Assembly SN76489 emulator
+CON ' VGA constants
+
+    VGA_FPIX      = 12_500_000
+    VGA_INTENSITY = 80    '0..128
+
+DAT             ' SN76489
                 org     $000
 
 psg_driver                                           ' Init
@@ -2604,7 +2610,9 @@ z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 'file    "Bump 'N' Jump (USA, Europe).col"
                 'file    "BurgerTime (USA, Europe).col"
                 'file    "Lady Bug (USA, Europe).col"
+                'file    "Defender (USA).col"
                 'file    "Donkey Kong (USA, Europe).col"
+                'file    "Donkey Kong Jr (USA, Europe).col"
                 'file    "Galaxian (USA).col"
                 'file    "H.E.R.O (USA).col"
                 'file    "Frogger (USA).col"
