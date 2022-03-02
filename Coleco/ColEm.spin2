@@ -1069,7 +1069,7 @@ zk_irqenable    long    0
 
 zk_ram          long    @z80_ram
 
-zk_cycletime    long    round(float(_CLKFREQ) / ZK_CLOCK)
+zk_cycletime    long    round(float(_CLKFREQ) / float(ZK_CLOCK))
 zk_lastwait     res     1
 
 zk_opcode       res     1
@@ -1751,7 +1751,7 @@ psg_data_wr     and     zk_tmp8, #%00_111111
 
 CON
 
-    ZK_CLOCK      = VIDEO == PAL ? 3_546_893.0 : 3_579_545.0
+    ZK_CLOCK      = VIDEO == PAL ? 3_546_893 : 3_579_545
     ZK_HLOP       = 1 << 10
 
     ZK_CARRY_BIT  = 0
@@ -2162,7 +2162,7 @@ dacmode_c       long    P_DAC_75R_2V + P_CHANNEL  ' %0000_0000_000_1011100000000
 cx              long    0
 cy              long    0
 
-vga_xf          long    0                   ' streamer frequency setting
+vga_xf          long   (VGA_FPIX frac _CLKFREQ) >> 1             ' streamer frequency setting
 vga_bs          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +   8    ' streamer command: before-sync
 vga_ds          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  48    ' streamer command: during-sync
 vga_as          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  24    ' streamer command: after sync
@@ -2256,11 +2256,6 @@ tms_palette
 ' VGA Driver
 '
 vga_init
-                mov     vga_xf, ##_CLKFREQ      ' calculate streamer frequency
-                qfrac   ##VGA_FPIX, vga_xf
-                getqx   vga_xf
-                shr     vga_xf, #1
-
                 setcmod #%01_0_000_0            ' enable colorspace conversion
                 setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
                 setci   ##VGA_INTENSITY << 16   ' g
@@ -2566,9 +2561,9 @@ CON ' CVBS constants
     NTSC_CC         = round(227.5 * 4.0)                    'color cycles per line * 4 to preserve fraction
     NTSC_X_TOTAL    = 378
 
-    NTSC_DOTF       = (NTSC_X_TOTAL * (NTSC_CF * 4 * 128)) / NTSC_CC
-    NTSC_I          = 31 - encod _CLKFREQ
-    NTSC_XF         = ((NTSC_DOTF >> (7 - NTSC_I)) frac (_CLKFREQ << NTSC_I) + 1) >> 1
+    'NTSC_DOTF       = (NTSC_X_TOTAL * (NTSC_CF * 4 * 128)) / NTSC_CC
+    'NTSC_I          = 31 - encod _CLKFREQ
+    NTSC_XF         = $030B8EB8 ' ((NTSC_DOTF >> (7 - NTSC_I)) frac (_CLKFREQ << NTSC_I) + 1) >> 1
 
     PAL             = 2
     PAL_BLANK_LEV   = 43.0                                  'levels
@@ -2602,9 +2597,9 @@ CON ' CVBS constants
     PAL_CC          = round(283.75 * 4.0)                   'color cycles per line * 4 to preserve fraction
     PAL_X_TOTAL     = 416
 
-    PAL_DOTF        = (PAL_X_TOTAL * (PAL_CF * 4 * 128)) / PAL_CC
-    PAL_I           = 31 - encod _CLKFREQ
-    PAL_XF          = ((PAL_DOTF >> (7 - PAL_I)) frac (_CLKFREQ << PAL_I) + 1) >> 1
+    'PAL_DOTF        = (PAL_X_TOTAL * (PAL_CF * 4 * 128)) / PAL_CC
+    'PAL_I           = 31 - encod _CLKFREQ
+    PAL_XF          = $0353F900 ' ((PAL_DOTF >> (7 - PAL_I)) frac (_CLKFREQ << PAL_I) + 1) >> 1
 
 DAT             ' SN76489
                 org     $000
@@ -2775,7 +2770,7 @@ tempValue       res     1
 
 CON
 
-    PSG_FREQUENCY     = ZK_CLOCK    ' Clock frequency input on the emulated SN chip
+    PSG_FREQUENCY     = float(ZK_CLOCK)    ' Clock frequency input on the emulated SN chip
     VOLUME_CORRECTION = 0.9         ' Volume correction value (0.0 - 1.0)
 
 'SMS, Genesis and Game Gear
