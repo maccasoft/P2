@@ -11,18 +11,15 @@ CON
 
     _CLKFREQ        = 250_000_000
 
-    CPU_CLOCK       = 3_579_545.0 ' 3_546_893.0
-
-    VIDEO           = VGA
+    VIDEO           = VGA ' video mode VGA, NTSC or PAL
     VGA_PIN         = 8
-    CVBS_PIN        = 32+7*3 addpins 1
+    CVBS_PIN        = 32+7*3 addpins 1 ' 53+54
 
     PS2_DATA_PIN    = 25
     PS2_CLOCK_PIN   = 24
 
     AUDIO_RIGHT_PIN = 49
     AUDIO_LEFT_PIN  = 48
-
 
 DAT             ' Startup
                 org     $000
@@ -1072,7 +1069,7 @@ zk_irqenable    long    0
 
 zk_ram          long    @z80_ram
 
-zk_cycletime    long    round(float(_CLKFREQ) / CPU_CLOCK)
+zk_cycletime    long    round(float(_CLKFREQ) / ZK_CLOCK)
 zk_lastwait     res     1
 
 zk_opcode       res     1
@@ -1754,7 +1751,7 @@ psg_data_wr     and     zk_tmp8, #%00_111111
 
 CON
 
-    ZK_CLOCK      = CPU_CLOCK
+    ZK_CLOCK      = VIDEO == PAL ? 3_546_893.0 : 3_579_545.0
     ZK_HLOP       = 1 << 10
 
     ZK_CARRY_BIT  = 0
@@ -1794,7 +1791,7 @@ loop
                 mov     scol, scol+1
                 mov     scnt, _cl
 
-                cmp     _cl, #24 + 192      wz
+                cmp     _cl, #(VIDEO == PAL ? 48 : 24) + 192      wz
     if_ne       jmp     #.skip
 
                 locktry #0              wc
@@ -1834,9 +1831,9 @@ loop
                 add     regs+6, _tms_vram
                 getbyte regs+7, sbuf+1, #3
 
-                cmp     _cl, #24            wcz ' check if first visible line
+                cmp     _cl, #(VIDEO == PAL ? 48 : 24)  wcz ' check if first visible line
     if_c        jmp     #loop
-                cmp     _cl, #24 + 192      wc  ' check if last visible line
+                cmp     _cl, #(VIDEO == PAL ? 48 : 24) + 192    wc  ' check if last visible line
     if_nc       jmp     #loop
 
     if_z        mov     loff, #0                ' if first line reset counters...
@@ -2159,46 +2156,46 @@ end_scanline
 '
 ' Data
 '
-dacmode_s       long    %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
-dacmode_c       long    %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
-dacmode         long    P_DAC_75R_2V + P_CHANNEL  '%0000_0000_000_101110000xxxx_01_00000_0
+dacmode_s       long    P_DAC_124R_3V + P_CHANNEL ' %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
+dacmode_c       long    P_DAC_75R_2V + P_CHANNEL  ' %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
 
 cx              long    0
 cy              long    0
 
 vga_xf          long    0                   ' streamer frequency setting
-vga_bs          long    $7F01_0000 +   8    ' streamer command: before-sync
-vga_ds          long    $7F01_0000 +  48    ' streamer command: during-sync
-vga_as          long    $7F01_0000 +  24    ' streamer command: after sync
-vga_vi          long    $3F00_0000 + 320    ' streamer command: visible
-vga_bv          long    $3F00_0000 +  32    ' streamer command: before visible
-vga_dv          long    $7F08_0000 + 256    ' streamer command: during visible
-vga_av          long    $3F00_0000 +  32    ' streamer command: after visible
+vga_bs          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +   8    ' streamer command: before-sync
+vga_ds          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  48    ' streamer command: during-sync
+vga_as          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  24    ' streamer command: after sync
+vga_vi          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + 320    ' streamer command: visible
+vga_bv          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +  32    ' streamer command: before visible
+vga_dv          long    X_RFLONG_4X8_LUT|X_DACS_3_2_1_0 + 256    ' streamer command: during visible
+vga_av          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +  32    ' streamer command: after visible
 vga_pn          long    VGA_PIN & $38       ' base pin
 
-cvbs_cb         long    NTSC_CB             ' colorburst reference color
-cvbs_cy         long    NTSC_CY             ' colorspace y coefficients
-cvbs_ci         long    NTSC_CI             ' colorspace i coefficients
-cvbs_cq         long    NTSC_CQ             ' colorspace q coefficients
-cvbs_ca         long    NTSC_CQ             ' colorspace q coefficients, alt for pal
-cvbs_cf         long    NTSC_CF frac _CLKFREQ ' colorspace frequency setting
-cvbs_xf         long    $030B_8EB8          ' streamer frequency setting (depends on CLKFREQ)
-cvbs_bs         long    $7F01_0000 +  10    ' streamer command: before-sync
-cvbs_ds         long    $7F01_0000 +  27    ' streamer command: during-sync
-cvbs_bc         long    $7F01_0000 +   4    ' streamer command: before-colorburst
-cvbs_dc         long    $7F01_0000 +  15    ' streamer command: during-colorburst
-cvbs_ac         long    $7F01_0000 +   9    ' streamer command: after-colorburst
-cvbs_bv         long    $3F00_0000 +  28    ' streamer command: before-visible
-cvbs_dv         long    $7F08_0000 + 256    ' streamer command: during-visible
-cvbs_av         long    $3F00_0000 +  29    ' streamer command: after-visible
-cvbs_db         long    $7F01_0000 + 313    ' streamer command: during-blank
-cvbs_hf         long    $7F01_0000 + 189    ' streamer command: half-line
-cvbs_hl         long    $7F01_0000 +  14    ' streamer command: high-vsync-low
-cvbs_hh         long    $7F01_0000 + 165    ' streamer command: high-vsync-high
-cvbs_ll         long    $7F01_0000 + 161    ' streamer command: low-vsync-low
-cvbs_lh         long    $7F01_0000 +  18    ' streamer command: low-vsync-high
+cvbs_cb         long    VIDEO == PAL ? PAL_CB : NTSC_CB             ' colorburst reference color
+cvbs_cy         long    VIDEO == PAL ? PAL_CY : NTSC_CY             ' colorspace y coefficients
+cvbs_ci         long    VIDEO == PAL ? PAL_CI : NTSC_CI             ' colorspace i coefficients
+cvbs_cq         long    VIDEO == PAL ? PAL_CQ : NTSC_CQ             ' colorspace q coefficients
+cvbs_ca         long    VIDEO == PAL ? PAL_CA : NTSC_CQ             ' colorspace q coefficients, alt for pal
+cvbs_cf         long   (VIDEO == PAL ? PAL_CF : NTSC_CF) frac _CLKFREQ ' colorspace frequency setting
+cvbs_xf         long    VIDEO == PAL ? PAL_XF : NTSC_XF             ' streamer frequency setting
+cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  10 :  10)    ' streamer command: before-sync
+cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :  27)    ' streamer command: during-sync
+cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   6 :   4)    ' streamer command: before-colorburst
+cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  15)    ' streamer command: during-colorburst
+cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  17 :   9)    ' streamer command: after-colorburst
+cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  28)    ' streamer command: before-visible
+cvbs_dv         long    X_RFLONG_4X8_LUT|X_DACS_3_2_1_0 +                    256        ' streamer command: during-visible
+cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  29)    ' streamer command: after-visible
+cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: during-blank
+cvbs_hf         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 208 : 189)    ' streamer command: half-line
+cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  14)    ' streamer command: high-vsync-low
+cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 183 : 165)    ' streamer command: high-vsync-high
+cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 177 : 161)    ' streamer command: low-vsync-low
+cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  21 :  18)    ' streamer command: low-vsync-high
 cvbs_pn         long    CVBS_PIN            ' pin(s)
 
+_md             long    0
 _lb             long    0                   ' line buffer pointer
 _cl             long    0                   ' current line
 _tms_vram       long    @tms_vram
@@ -2395,15 +2392,15 @@ cvbs_init
                 setxfrq cvbs_xf                 ' set transfer frequency
 
                 cogid   cx                      ' install cogid into dacmode
-                setnib  dacmode,cx,#2
-                wrpin   dacmode,cvbs_pn         ' enable dac mode in pin(s)
+                setnib  dacmode_c,cx,#2
+                wrpin   dacmode_c,cvbs_pn       ' enable dac mode in pin(s)
                 drvl    cvbs_pn                 ' enable dac output(s)
 
                 mov     ijmp1,##cvbs_field      ' set up streamer-empty interrupt
         _ret_   setint1 #10
 
 cvbs_field
-                mov     cy, #24                 ' before-visible blank lines
+                mov     cy, #(VIDEO == PAL ? 48 : 24)                 ' before-visible blank lines
                 calld   pa, #.border            ' |
 
                 rdfast  #0, _tms_bitmap         ' start reading pixels into fifo
@@ -2417,6 +2414,9 @@ cvbs_field
                 xcont   cvbs_bc, #1             ' |
                 resi1                           ' |
                 xcont   cvbs_dc, cvbs_cb        ' |
+                bitnot  _md, #31            wcz ' for pal, alternate phase each line
+        if_nc   setcq   cvbs_cq                 ' |
+        if_c    setcq   cvbs_ca                 ' |
                 resi1                           ' |
                 xcont   cvbs_ac, #1             ' |
                 resi1                           ' |
@@ -2430,22 +2430,22 @@ cvbs_field
 
                 djnz    cy, #.line
 
-                mov     cy, #24                 ' after-visible blank lines
+                mov     cy, #(VIDEO == PAL ? 48 : 24)                 ' after-visible blank lines
                 calld   pa, #.border            ' |
 
-                mov     cy, #2                  ' before-visible blank lines
+                mov     cy, #(VIDEO == PAL ? 8 : 2)                  ' before-visible blank lines
                 calld   pa, #.blank             ' |
 
                 mov     _cl, #0
 
                 mov     cy, #6
                 calld   pa, #.vhigh             ' initial high vertical syncs
-                mov     cy, #6
+                mov     cy, #(VIDEO == PAL ? 5 : 6)
                 calld   pa, #.vlow              ' low vertical syncs
-                mov     cy, #6
+                mov     cy, #(VIDEO == PAL ? 5 : 6)
                 calld   pa, #.vhigh             ' final high vertical syncs
 
-                mov     cy, #10                 ' before-visible blank lines
+                mov     cy, #(VIDEO == PAL ? 8 : 10)                 ' before-visible blank lines
                 calld   pa, #.blank             ' |
 
                 jmp     #cvbs_field             ' loop
@@ -2458,6 +2458,9 @@ cvbs_field
                 xcont   cvbs_bc, #1             ' |
                 resi1                           ' |
                 xcont   cvbs_dc, cvbs_cb        ' |
+                bitnot  _md, #31            wcz ' for pal, alternate phase each line
+        if_nc   setcq   cvbs_cq                 ' |
+        if_c    setcq   cvbs_ca                 ' |
                 resi1                           ' |
                 xcont   cvbs_ac, #1             ' |
                 resi1                           ' |
@@ -2473,6 +2476,9 @@ cvbs_field
                 xcont   cvbs_bc, #1             ' |
                 resi1                           ' |
                 xcont   cvbs_dc, cvbs_cb        ' |
+                bitnot  _md, #31            wcz ' for pal, alternate phase each line
+        if_nc   setcq   cvbs_cq                 ' |
+        if_c    setcq   cvbs_ca                 ' |
                 resi1                           ' |
                 xcont   cvbs_ac, #1             ' |
                 resi1                           ' |
@@ -2557,6 +2563,48 @@ CON ' CVBS constants
 
     NTSC_CB         = $809000_01                            'colorburst reference color
     NTSC_CF         = 3_579_545                             'colorburst frequency
+    NTSC_CC         = round(227.5 * 4.0)                    'color cycles per line * 4 to preserve fraction
+    NTSC_X_TOTAL    = 378
+
+    NTSC_DOTF       = (NTSC_X_TOTAL * (NTSC_CF * 4 * 128)) / NTSC_CC
+    NTSC_I          = 31 - encod _CLKFREQ
+    NTSC_XF         = ((NTSC_DOTF >> (7 - NTSC_I)) frac (_CLKFREQ << NTSC_I) + 1) >> 1
+
+    PAL             = 2
+    PAL_BLANK_LEV   = 43.0                                  'levels
+    PAL_BLACK_LEV   = PAL_BLANK_LEV + 0.0
+    PAL_PEAK_LEV    = PAL_BLANK_LEV + 140.0
+    PAL_SCALE       = 127.0 / PAL_PEAK_LEV * 128.0
+    PAL_SCALE_COR   = PAL_SCALE / 1.646                     'CORDIC prescale for IQ modulator
+
+    PAL_BLANK       = round(PAL_SCALE * 2.0 * PAL_BLANK_LEV / PAL_PEAK_LEV)
+    PAL_BLACK       = round(PAL_SCALE * 2.0 * PAL_BLACK_LEV / PAL_PEAK_LEV)
+
+    PAL_YR          = round(PAL_SCALE     *  0.299)         'Y sums to 1
+    PAL_YG          = round(PAL_SCALE     *  0.587)
+    PAL_YB          = round(PAL_SCALE     *  0.114)
+
+    PAL_UR          = round(PAL_SCALE_COR * -0.147)         'I sums to 0
+    PAL_UG          = round(PAL_SCALE_COR * -0.289)
+    PAL_UB          = round(PAL_SCALE_COR *  0.436)
+
+    PAL_VR          = round(PAL_SCALE_COR *  0.615)         'Q sums to 0
+    PAL_VG          = round(PAL_SCALE_COR * -0.515)
+    PAL_VB          = round(PAL_SCALE_COR * -0.100)
+
+    PAL_CY          = ( PAL_YR & $FF) << 24 + ( PAL_YG & $FF) << 16 + ( PAL_YB & $FF) << 8 + PAL_BLACK
+    PAL_CI          = ( PAL_UR & $FF) << 24 + ( PAL_UG & $FF) << 16 + ( PAL_UB & $FF) << 8 + PAL_BLANK
+    PAL_CQ          = ( PAL_VR & $FF) << 24 + ( PAL_VG & $FF) << 16 + ( PAL_VB & $FF) << 8 + 128
+    PAL_CA          = (-PAL_VR & $FF) << 24 + (-PAL_VG & $FF) << 16 + (-PAL_VB & $FF) << 8 + 128
+
+    PAL_CB          = $FFC060_01                            'colorburst reference color
+    PAL_CF          = 4_433_618                             'colorburst frequency
+    PAL_CC          = round(283.75 * 4.0)                   'color cycles per line * 4 to preserve fraction
+    PAL_X_TOTAL     = 416
+
+    PAL_DOTF        = (PAL_X_TOTAL * (PAL_CF * 4 * 128)) / PAL_CC
+    PAL_I           = 31 - encod _CLKFREQ
+    PAL_XF          = ((PAL_DOTF >> (7 - PAL_I)) frac (_CLKFREQ << PAL_I) + 1) >> 1
 
 DAT             ' SN76489
                 org     $000
@@ -2727,7 +2775,7 @@ tempValue       res     1
 
 CON
 
-    PSG_FREQUENCY     = CPU_CLOCK   ' Clock frequency input on the emulated SN chip
+    PSG_FREQUENCY     = ZK_CLOCK    ' Clock frequency input on the emulated SN chip
     VOLUME_CORRECTION = 0.9         ' Volume correction value (0.0 - 1.0)
 
 'SMS, Genesis and Game Gear
