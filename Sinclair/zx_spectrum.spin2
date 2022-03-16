@@ -28,17 +28,23 @@ DAT             ' Startup
                 mov     pa, ##48*1024/4
                 mov     ptra, ##@z80_0000+$4000 ' initialize memory with random values
 .l1             getrnd  t0
-                wrlong  t0, #ptra++
+                wrlong  t0, ptra++
                 djnz    pa, #.l1
 
-                coginit #1, ##@zk_cogbase       'start Z80 on cog #1
-                coginit #2, ##@video_driver     'start video on cog #2
+                coginit #1, ##@video_driver     'start video on cog #1
+
+                getct   pa                      ' delay to allow monitor to settle
+                addct1  pa, ##_CLKFREQ
+                waitct1
+
+                coginit #2, ##@zk_cogbase       'start Z80 on cog #2
+
                 jmp     #\ps2_driver            'cog #0 (this) PS/2 keyboard
 
-' Controller status
+' Shared variables
 
-zk_nmi_mem      word    0                   ' bit 8 = NMI
-zk_irq_mem      word    0                   ' bit 8 = IRQ, 7..0 vector
+zk_nmi_mem      long    0                   ' bit 8 = NMI
+zk_irq_mem      long    0                   ' bit 8 = IRQ, 7..0 vector
 
 zx_border       byte    $00
                 byte    $00[3]
@@ -431,10 +437,6 @@ zk_cogbase
                 setq2   #511
                 rdlong  0, ptrb
 
-                getct   pa                      ' delay to allow monitor to settle
-                addct1  pa, ##_CLKFREQ
-                waitct1
-
                 'mov     zk_pc, #0
                 mov     zk_irqenable, #0
                 mov     zk_refresh, #0
@@ -459,14 +461,14 @@ zk_nextop
                 mov     zk_cycles, #1
 
                 testb   zk_nmi_ctl, #8      wc  ' C = old NMI
-                rdword  zk_nmi_ctl, #@zk_nmi_mem
+                rdlong  zk_nmi_ctl, #@zk_nmi_mem
                 testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
         if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
                 testbn  zk_irqenable,#ZK_IFF1_BIT wz
         if_z    jmp     #.skip
                 testb   zk_irq_ctl, #8      wc  ' C = old IRQ
-                rdword  zk_irq_ctl, #@zk_irq_mem
+                rdlong  zk_irq_ctl, #@zk_irq_mem
                 testb   zk_irq_ctl, #8      wz  ' Z = current IRQ
         if_01   jmp     #\zk_doirq              ' jump if 0 -> 1 transition
 .skip
@@ -818,14 +820,14 @@ zk_donmi
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
 
-                mov     zk_pc,#$38
+                mov     zk_pc,#$38 ' IM1/IM0
 
-                getbyte zk_ea, zk_irq_ctl, #0
-                setbyte zk_ea, zk_ivector, #1
-                call    #\zk_read16
-                mov     zk_pc, zk_tmp16
+                getbyte zk_ea, zk_irq_ctl, #0 ' IM2
+                setbyte zk_ea, zk_ivector, #1 ' IM2
+                call    #\zk_read16 ' IM2
+                mov     zk_pc, zk_tmp16 ' IM2
 
-                mov     zk_pc,#$66
+                mov     zk_pc,#$66 ' NMI
 
                 jmp     #\zk_nextop
 
@@ -992,7 +994,7 @@ zk_portin
                 ' zk_ea   = port
                 ' zk_tmp8 = data
                 add     zk_cycles, #4
-                mov     zk_tmp8, #$FF
+                getbyte zk_tmp8, zk_ea, #1 ' floating bus default
                 testbn  zk_ea, #0       wz
         if_nz   ret     wcz
                 getbyte zk_memtmp0, zk_ea, #1
@@ -1691,13 +1693,13 @@ vga_field       callpa  #24, #.border       ' top border
 
                 callpa  #10, #.blank        ' back porch
 
-                wrword  #%1_00000000, #@zk_irq_mem
+                wrlong  #%1_11111110, #@zk_irq_mem
 
                 drvnot  vga_pn              ' vertical sync on
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
 
-                wrword  #%0_00000000, #@zk_irq_mem
+                wrlong  #%0_11111110, #@zk_irq_mem
 
                 callpa  #33, #.blank        ' front porch
 
@@ -1785,7 +1787,7 @@ cvbs_init
                 drvl    cvbs_pn             ' enable dac output(s)
 
 cvbs_field
-                callpa  #(VIDEO == PAL ? 54 : 24), #.border ' top border
+                callpa  #(VIDEO == PAL ? 48 : 24), #.border ' top border
 
                 mov     ptra, zx_screen
                 mov     ptrb, zx_attribute
@@ -1853,17 +1855,17 @@ cvbs_field
                 add     ptra, ##2048-256
                 djnz    pa, #.block
 
-                callpa  #(VIDEO == PAL ? 42 : 24), #.border ' bottom border
+                callpa  #(VIDEO == PAL ? 48 : 24), #.border ' bottom border
 
                 callpa  #(VIDEO == PAL ? 8 : 2), #.blank ' after-visible blank lines
 
-                wrword  #%1_00000000, #@zk_irq_mem
+                wrlong  #%1_11111110, #@zk_irq_mem
 
                 callpa  #6, #.vhigh                      ' initial high vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
 
-                wrword  #%0_00000000, #@zk_irq_mem
+                wrlong  #%0_11111110, #@zk_irq_mem
 
                 callpa  #(VIDEO == PAL ? 8 : 10), #.blank ' after-visible blank lines
 
@@ -2029,9 +2031,9 @@ CON ' CVBS constants
     NTSC_CC         = round(227.5 * 4.0)                    'color cycles per line * 4 to preserve fraction
     NTSC_X_TOTAL    = 378
 
-    NTSC_DOTF       = (NTSC_X_TOTAL * (NTSC_CF * 4 * 128)) / NTSC_CC
-    NTSC_I          = 31 - encod _CLKFREQ
-    NTSC_XF         = ((NTSC_DOTF >> (7 - NTSC_I)) frac (_CLKFREQ << NTSC_I) + 1) >> 1
+    'NTSC_DOTF       = (NTSC_X_TOTAL * (NTSC_CF * 4 * 128)) / NTSC_CC
+    'NTSC_I          = 31 - encod _CLKFREQ
+    NTSC_XF         = $030B8EB8 ' ((NTSC_DOTF >> (7 - NTSC_I)) frac (_CLKFREQ << NTSC_I) + 1) >> 1
 
     PAL             = 2
     PAL_BLANK_LEV   = 43.0                                  'levels
@@ -2065,9 +2067,9 @@ CON ' CVBS constants
     PAL_CC          = round(283.75 * 4.0)                   'color cycles per line * 4 to preserve fraction
     PAL_X_TOTAL     = 416
 
-    PAL_DOTF        = (PAL_X_TOTAL * (PAL_CF * 4 * 128)) / PAL_CC
-    PAL_I           = 31 - encod _CLKFREQ
-    PAL_XF          = ((PAL_DOTF >> (7 - PAL_I)) frac (_CLKFREQ << PAL_I) + 1) >> 1
+    'PAL_DOTF        = (PAL_X_TOTAL * (PAL_CF * 4 * 128)) / PAL_CC
+    'PAL_I           = 31 - encod _CLKFREQ
+    PAL_XF          = $0353F900 ' ((PAL_DOTF >> (7 - PAL_I)) frac (_CLKFREQ << PAL_I) + 1) >> 1
 
 DAT             ' I/O Hub-exec code
                 orgh
