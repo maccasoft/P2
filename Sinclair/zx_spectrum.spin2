@@ -8,7 +8,7 @@ CON
 
     _CLKFREQ      = 250_000_000
 
-    VIDEO         = NTSC ' video mode VGA, NTSC or PAL
+    VIDEO         = VGA ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
     CVBS_PIN      = 32+7*3 addpins 1 ' 53+54
 
@@ -40,8 +40,8 @@ DAT             ' Startup
 zk_nmi_mem      word    0                   ' bit 8 = NMI
 zk_irq_mem      word    0                   ' bit 8 = IRQ, 7..0 vector
 
-zx_border       byte    0
-                byte    0[3]
+zx_border       byte    $00
+                byte    $00[3]
 
                                             '     D4 D3 D2 D1 D0
                                             '
@@ -139,10 +139,8 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
 
                 testb   ps2_state, #28  wc      ' extended code
                 rcl     ps2_code, #1            '   to bit 0
-                nop
                 altgb   ps2_code, #ps2_table    ' get usb scancode
                 getbyte ps2_key, 0-0, #0        ' |
-                nop
 
                 cmp     ps2_key, #$FF   wz
         if_z    jmp     #ps2_loop
@@ -1634,6 +1632,10 @@ DAT             ' Video COG resident code
                 org     $000
 
 video_driver
+                add     ptrb, ##@video_driver_lut - @video_driver
+                setq2   #16-1   ' load palette into LUT
+                rdlong  0, ptrb
+
                 jmp     #\(VIDEO == VGA ? vga_init : cvbs_init) ' start video driver
 
 '
@@ -1674,11 +1676,14 @@ vga_field       callpa  #24, #.border       ' top border
 .scanline
                 call    #.line
                 call    #.line1
+
                 add     ptra, #256
                 djnz    _sc, #.scanline
+
                 sub     ptra, ##2048-32
                 add     ptrb, #32
                 djnz    _rc, #.row
+
                 add     ptra, ##2048-256
                 djnz    pa, #.block
 
@@ -1698,80 +1703,63 @@ vga_field       callpa  #24, #.border       ' top border
 
                 jmp     #vga_field          ' frame loop
 
-.line1          skipf   #%11011_000
+.line1          skipf   #%0_111_000
 .line           xcont   vga_bs, #0          ' do before-sync part of scan line
                 xzero   vga_ds, #1          ' do sync part of scan line
                 xcont   vga_as, #0          ' do before-visible part of scan line
 
-                rdbyte  t0, #@zx_border
-                and     t0, #%00000_111
-                xcont   vga_bv, #0          ' do left border
-                altd    t0, #_c0
-                wrlut   0-0, #64
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   vga_bv, _bc         ' do left border
 
-                mov     _vx, #16
-
-.l1             rdbyte  t0, ptrb++
-                testb   t0, #7      wz      ' blink
-                rdbyte  _ch, ptra++
-        if_11   xor     _ch, #$FF
-                rev     _ch
-                shr     _ch, #24
-                mov     t1, t0
-                and     t1, #%0_0_111_000
-                shr     t1, #3
-                testb   t0, #6      wz      ' bright
-                bitz    t1, #3
-                and     t0, #%0_0_000_111
-                bitz    t0, #3
-
-                xcont   vga_dv0, _ch
-                altd    t1, #_c0
-                wrlut   0-0, #0
-                altd    t0, #_c0
-                wrlut   0-0, #1
-
+                rep     @.loop, #32
                 rdbyte  t0, ptrb++
                 testb   t0, #7      wz      ' blink
                 rdbyte  _ch, ptra++
-        if_11   xor     _ch, #$FF
-                rev     _ch
-                shr     _ch, #24
-                mov     t1, t0
-                and     t1, #%0_0_111_000
-                shr     t1, #3
+        if_11   xor     _ch, #$FF           ' invert bitmap if blinking
+
+                rev     _ch                 ' revert lsb<>msb
+                shr     _ch, #24            ' shift into position
+                mergew  _ch                 ' merge to 8 bitpairs
+
                 testb   t0, #6      wz      ' bright
-                bitz    t1, #3
-                and     t0, #%0_0_000_111
-                bitz    t0, #3
+                mov     t1, t0
+                and     t1, #%0_0_111_000   ' mask background
+                shr     t1, #3              ' shift into byte 0
+                bitz    t1, #3              ' set brightness
+                and     t0, #%0_0_000_111   ' mask foreground
+                shl     t0, #8              ' shift into byte 1
+                bitz    t1, #8+3            ' set brightness
+                or      t0, t1
+                or      t1, t0
 
-                xcont   vga_dv1, _ch
-                altd    t1, #_c0
-                wrlut   0-0, #32+0
-                altd    t0, #_c0
-                wrlut   0-0, #32+1
+                movbyts t0, _ch
+                xcont   vga_dv, t0
+                shr     _ch, #8
+                movbyts t1, _ch
+                xcont   vga_dv, t1
+.loop
 
-                djnz    _vx, #.l1
+                xcont   vga_av, _bc         ' do right border
 
-                xcont   vga_av, #0          ' do right border
                 sub     ptra, #32
                 sub     ptrb, #32
                 ret
 
 .border         xcont   vga_bs, #0          ' do before-sync part of scan line
                 xzero   vga_ds, #1          ' do sync part of scan line
-                xcont   vga_as, #0          ' do before-visible part of scan line
+                xcont   vga_as, #0          ' do after-sync part of scan line
 
-                rdbyte  t0, #@zx_border
-                and     t0, #%00000_111
-                xcont   vga_vi, #0          ' do visible part of scan line
-                altd    t0, #_c0
-                wrlut   0-0, #64
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   vga_vi, _bc         ' do visible part of scan line
 
                 xcont   vga_bs, #0          ' do before-sync part of scan line
                 xzero   vga_ds, #1          ' do sync part of scan line
-                xcont   vga_as, #0          ' do before-visible part of scan line
-                xcont   vga_vi, #0          ' do visible part of scan line (blank)
+                xcont   vga_as, #0          ' do after-sync part of scan line
+                xcont   vga_vi, _bc         ' do visible part of scan line (blank)
         _ret_   djnz    pa, #.border
 
 .blank          xcont   vga_bs, #0          ' do before-sync part of scan line
@@ -1797,7 +1785,7 @@ cvbs_init
                 drvl    cvbs_pn             ' enable dac output(s)
 
 cvbs_field
-                callpa  #(VIDEO == PAL ? 56 : 24), #.border ' top border
+                callpa  #(VIDEO == PAL ? 54 : 24), #.border ' top border
 
                 mov     ptra, zx_screen
                 mov     ptrb, zx_attribute
@@ -1807,13 +1795,9 @@ cvbs_field
                 mov     pa, #3
 .block          mov     _rc, #8
 .row            mov     _sc, #8             ' visible lines 8*8*3=192
-.scanline
-                xcont   cvbs_bs, #1         ' horizontal sync
+
+.scanline       xcont   cvbs_bs, #1         ' horizontal sync
                 xcont   cvbs_ds, #2         ' |
-
-                rdbyte  t0, #@zx_border
-                and     t0, #%00000_111
-
                 xcont   cvbs_bc, #1         ' |
                 xcont   cvbs_dc, cvbs_cb    ' |
                 bitnot  _md, #31        wcz ' for pal, alternate phase each line
@@ -1821,67 +1805,55 @@ cvbs_field
         if_c    setcq   cvbs_ca             ' |
                 xcont   cvbs_ac, #1         ' |
 
-                xcont   cvbs_bv, #0         ' left border
-                altd    t0, #_c0
-                wrlut   0-0, #64
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   cvbs_bv, _bc        ' do left border
 
                 cmp     _fc, #(VIDEO == PAL ? 25 : 30) wc
 
-                mov     _vx, #32/2
-.l1             rdbyte  t0, ptrb++
-                testb   t0, #7      wz      ' blink
-                rdbyte  _ch, ptra++
-        if_11   xor     _ch, #$FF
-                rev     _ch
-                shr     _ch, #24
-                testb   t0, #6      wz      ' bright
-                mov     t1, t0
-                and     t1, #%0_0_111_000
-                shr     t1, #3
-                bitz    t1, #3
-                and     t0, #%0_0_000_111
-                bitz    t0, #3
-
-                xcont   cvbs_dv0, _ch
-                altd    t1, #_c0
-                wrlut   0-0, #0
-                altd    t0, #_c0
-                wrlut   0-0, #1
-
+                rep     @.loop, #32
                 rdbyte  t0, ptrb++
                 testb   t0, #7      wz      ' blink
                 rdbyte  _ch, ptra++
-        if_11   xor     _ch, #$FF
-                rev     _ch
-                shr     _ch, #24
+        if_11   xor     _ch, #$FF           ' invert bitmap if blinking
+
+                rev     _ch                 ' revert lsb<>msb
+                shr     _ch, #24            ' shift into position
+                mergew  _ch                 ' merge to 8 bitpairs
+
                 testb   t0, #6      wz      ' bright
                 mov     t1, t0
-                and     t1, #%0_0_111_000
-                shr     t1, #3
-                bitz    t1, #3
-                and     t0, #%0_0_000_111
-                bitz    t0, #3
+                and     t1, #%0_0_111_000   ' mask background
+                shr     t1, #3              ' shift into byte 0
+                bitz    t1, #3              ' set brightness
+                and     t0, #%0_0_000_111   ' mask foreground
+                shl     t0, #8              ' shift into byte 1
+                bitz    t1, #8+3            ' set brightness
+                or      t0, t1
+                or      t1, t0
 
-                xcont   cvbs_dv1, _ch
-                altd    t1, #_c0
-                wrlut   0-0, #32+0
-                altd    t0, #_c0
-                wrlut   0-0, #32+1
+                movbyts t0, _ch
+                xcont   cvbs_dv, t0
+                shr     _ch, #8
+                movbyts t1, _ch
+                xcont   cvbs_dv, t1
+.loop
 
-                djnz    _vx, #.l1
+                xcont   cvbs_av, _bc        ' do right border
 
-                xcont   cvbs_av, #0         ' right border
                 add     ptra, #256-32
                 sub     ptrb, #32
-
                 djnz    _sc, #.scanline
+
                 sub     ptra, ##2048-32
                 add     ptrb, #32
                 djnz    _rc, #.row
+
                 add     ptra, ##2048-256
                 djnz    pa, #.block
 
-                callpa  #(VIDEO == PAL ? 40 : 24), #.border ' bottom border
+                callpa  #(VIDEO == PAL ? 42 : 24), #.border ' bottom border
 
                 callpa  #(VIDEO == PAL ? 8 : 2), #.blank ' after-visible blank lines
 
@@ -1899,10 +1871,6 @@ cvbs_field
 
 .border         xcont   cvbs_bs, #1         ' horizontal sync
                 xcont   cvbs_ds, #2         ' |
-
-                rdbyte  t0, #@zx_border     ' border color
-                and     t0, #%00000_111     ' |
-
                 xcont   cvbs_bc, #1         ' |
                 xcont   cvbs_dc, cvbs_cb    ' |
                 bitnot  _md, #31        wcz ' for pal, alternate phase each line
@@ -1910,14 +1878,16 @@ cvbs_field
         if_c    setcq   cvbs_ca             ' |
                 xcont   cvbs_ac, #1         ' |
 
-                xcont   cvbs_vi, #0         ' |
-                altd    t0, #_c0            ' |
-                wrlut   0-0, #64            ' |
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   cvbs_vi, _bc        ' do visible part of scan line
 
         _ret_   djnz    pa, #.border
 
 .blank          xcont   cvbs_bs, #1         ' horizontal sync
                 xcont   cvbs_ds, #2         ' |
+                xcont   cvbs_bc, #1         ' |
                 xcont   cvbs_dc, cvbs_cb    ' |
                 bitnot  _md, #31        wcz ' for pal, alternate phase each line
         if_nc   setcq   cvbs_cq             ' |
@@ -1947,11 +1917,10 @@ vga_xf          long   (VGA_FPIX frac _CLKFREQ) >> 1             ' streamer freq
 vga_bs          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +   8    ' streamer command: before-sync
 vga_ds          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  48    ' streamer command: during-sync
 vga_as          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  24    ' streamer command: after sync
-vga_vi          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $2 << 16 + 320    ' streamer command: visible
-vga_bv          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $2 << 16 +  32    ' streamer command: before visible
-vga_dv0         long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $0 << 16 +   8    ' streamer command: during visible
-vga_dv1         long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $1 << 16 +   8    ' streamer command: during visible
-vga_av          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $2 << 16 +  32    ' streamer command: after visible
+vga_vi          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + 320    ' streamer command: visible
+vga_bv          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +  32    ' streamer command: before visible
+vga_dv          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +   4    ' streamer command: during visible
+vga_av          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +  32    ' streamer command: after visible
 vga_db          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + 320    ' streamer command: during-blank
 vga_pn          long    VGA_PIN & $38       ' base pin
 
@@ -1968,11 +1937,10 @@ cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 : 
 cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   6 :   4)    ' streamer command: before-colorburst
 cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  15)    ' streamer command: during-colorburst
 cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  17 :   9)    ' streamer command: after-colorburst
-cvbs_vi         long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $2 << 16 + (VIDEO == PAL ? 338 : 313)    ' streamer command: visible
-cvbs_bv         long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $2 << 16 + (VIDEO == PAL ?  41 :  28)    ' streamer command: before-visible
-cvbs_dv0        long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $0 << 16 +                     8         ' streamer command: during-visible
-cvbs_dv1        long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $1 << 16 +                     8         ' streamer command: during-visible
-cvbs_av         long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $2 << 16 + (VIDEO == PAL ?  41 :  29)    ' streamer command: after-visible
+cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: visible
+cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  28)    ' streamer command: before-visible
+cvbs_dv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                     4         ' streamer command: during-visible
+cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  29)    ' streamer command: after-visible
 cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: during-blank
 cvbs_hf         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 208 : 189)    ' streamer command: half-line
 cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  14)    ' streamer command: high-vsync-low
@@ -1992,7 +1960,19 @@ _md             long    0
 _ch             long    0
 _fc             long    0
 
-_c0             long    $00_00_00_00
+_bc             long    0
+
+t0              res     1
+t1              res     1
+t2              res     1
+
+                fit     $1F0
+
+DAT             ' Video LUT resident code
+                org     $200
+
+video_driver_lut
+                long    $00_00_00_00    ' Palette
                 long    $00_00_B8_00
                 long    $B8_00_00_00
                 long    $B8_00_B8_00
@@ -2001,7 +1981,7 @@ _c0             long    $00_00_00_00
                 long    $B8_B8_00_00
                 long    $B8_B8_B8_00
 
-_c1             long    $00_00_00_00
+                long    $00_00_00_00
                 long    $00_00_F8_00
                 long    $F8_00_00_00
                 long    $F8_00_F8_00
@@ -2009,12 +1989,6 @@ _c1             long    $00_00_00_00
                 long    $00_F8_F8_00
                 long    $F8_F8_00_00
                 long    $F8_F8_F8_00
-
-t0              res     1
-t1              res     1
-t2              res     1
-
-                fit     $1F0
 
 CON ' VGA constants
 
