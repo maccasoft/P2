@@ -8,7 +8,7 @@ CON
 
     _CLKFREQ      = 250_000_000
 
-    VIDEO         = VGA ' video mode VGA, NTSC or PAL
+    VIDEO         = NTSC ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
     CVBS_PIN      = 32+7*3 addpins 1 ' 53+54
 
@@ -793,7 +793,10 @@ zk_irqret       '' RETI/RETN
         _ret_   mov     zk_pc,zk_tmp16
 
 
-zk_imode        ' Don't care, always assume IM1
+zk_imode
+                cmp     zk_opcode,#$5E  wz
+        if_nz   cmp     zk_opcode,#$7E  wz
+                bitz    zk_irqenable,#ZK_IM2_BIT
                 ret
 
 zk_irqoff
@@ -803,9 +806,12 @@ zk_irqon
         _ret_   or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
 
 zk_doirq
-                skipf   #%0_10_000000_1
+                test    zk_irqenable,#(1<<ZK_IM2_BIT)  wz
+        if_z    skipf   ##%0_1_1111_0_000000_1111
+        if_nz   skipf   ##%0_1_0000_1_000000_11
+
 zk_donmi
-                skipf   #%0_01_000000
+                skipf   ##%0_0_1111_1_000000
 
                 add     zk_cycles,#10
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
@@ -813,8 +819,16 @@ zk_donmi
         if_nz   incmod  zk_pc,zk_ffffh
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
+
                 mov     zk_pc,#$38
+
+                getbyte zk_ea, zk_irq_ctl, #0
+                setbyte zk_ea, zk_ivector, #1
+                call    #\zk_read16
+                mov     zk_pc, zk_tmp16
+
                 mov     zk_pc,#$66
+
                 jmp     #\zk_nextop
 
 zk_jump_indir
@@ -1614,6 +1628,7 @@ CON ' ZiKore Z80 constants
     ZK_IFF1_BIT   = 0
     ZK_IFF2_BIT   = 1
     ZK_HALT_BIT   = 2
+    ZK_IM2_BIT    = 3
 
 DAT             ' Video COG resident code
                 org     $000
@@ -1650,8 +1665,8 @@ vga_field       callpa  #24, #.border       ' top border
                 mov     ptra, zx_screen
                 mov     ptrb, zx_attribute
 
-                incmod  _fc, #(VIDEO == PAL ? 50 : 60) ' blink frequency
-                cmp     _fc, #(VIDEO == PAL ? 25 : 30) wc
+                incmod  _fc, #60            ' blink frequency
+                cmp     _fc, #30        wc
 
                 mov     pa, #3
 .block          mov     _rc, #8
@@ -1795,6 +1810,10 @@ cvbs_field
 .scanline
                 xcont   cvbs_bs, #1         ' horizontal sync
                 xcont   cvbs_ds, #2         ' |
+
+                rdbyte  t0, #@zx_border
+                and     t0, #%00000_111
+
                 xcont   cvbs_bc, #1         ' |
                 xcont   cvbs_dc, cvbs_cb    ' |
                 bitnot  _md, #31        wcz ' for pal, alternate phase each line
@@ -1802,15 +1821,13 @@ cvbs_field
         if_c    setcq   cvbs_ca             ' |
                 xcont   cvbs_ac, #1         ' |
 
-                rdbyte  t0, #@zx_border
-                and     t0, #%00000_111
                 xcont   cvbs_bv, #0         ' left border
                 altd    t0, #_c0
                 wrlut   0-0, #64
 
-                cmp     _fc, #30    wc
+                cmp     _fc, #(VIDEO == PAL ? 25 : 30) wc
 
-                mov     _vx, #16
+                mov     _vx, #32/2
 .l1             rdbyte  t0, ptrb++
                 testb   t0, #7      wz      ' blink
                 rdbyte  _ch, ptra++
@@ -1882,6 +1899,10 @@ cvbs_field
 
 .border         xcont   cvbs_bs, #1         ' horizontal sync
                 xcont   cvbs_ds, #2         ' |
+
+                rdbyte  t0, #@zx_border     ' border color
+                and     t0, #%00000_111     ' |
+
                 xcont   cvbs_bc, #1         ' |
                 xcont   cvbs_dc, cvbs_cb    ' |
                 bitnot  _md, #31        wcz ' for pal, alternate phase each line
@@ -1889,8 +1910,6 @@ cvbs_field
         if_c    setcq   cvbs_ca             ' |
                 xcont   cvbs_ac, #1         ' |
 
-                rdbyte  t0, #@zx_border     ' border color
-                and     t0, #%00000_111     ' |
                 xcont   cvbs_vi, #0         ' |
                 altd    t0, #_c0            ' |
                 wrlut   0-0, #64            ' |
