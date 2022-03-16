@@ -154,12 +154,16 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
                 mov     ptra, #@zx_keys
                 testb   ps2_state, #7   wc      ' release
 
-                cmp     ps2_code, #($66<<1)     wz
-        if_nz   cmp     ps2_code, #($6B<<1)|1   wz
-        if_nz   cmp     ps2_code, #($74<<1)|1   wz
-        if_nz   cmp     ps2_code, #($75<<1)|1   wz
-        if_nz   cmp     ps2_code, #($72<<1)|1   wz
+                cmp     ps2_code, #($66<<1)     wz ' BS
+        if_nz   cmp     ps2_code, #($6B<<1)|1   wz ' LEFT
+        if_nz   cmp     ps2_code, #($74<<1)|1   wz ' RIGHT
+        if_nz   cmp     ps2_code, #($75<<1)|1   wz ' UP
+        if_nz   cmp     ps2_code, #($72<<1)|1   wz ' DOWN
         if_z    call    #c_shift
+
+                cmp     ps2_code, #($41<<1)     wz ' ,
+        if_nz   cmp     ps2_code, #($49<<1)     wz ' .
+        if_z    call    #s_shift
 
                 mov     ps2_data, ps2_key
                 shr     ps2_data, #5
@@ -348,7 +352,7 @@ ps2_table       word    %111_11111_111_11111    '00
                 word    %111_11111_100_00100    '3E             8
                 word    %111_11111_111_11111    '3F     Sleep
                 word    %111_11111_111_11111    '40
-                word    %111_11111_111_11111    '41             ,
+                word    %111_11111_111_01000    '41             ,
                 word    %111_11111_110_00100    '42             k
                 word    %111_11111_101_00100    '43             i
                 word    %111_11111_101_00010    '44             o
@@ -356,7 +360,7 @@ ps2_table       word    %111_11111_111_11111    '00
                 word    %111_11111_100_00010    '46             9
                 word    %111_11111_111_11111    '47
                 word    %111_11111_111_11111    '48
-                word    %111_11111_111_11111    '49             .
+                word    %111_11111_111_00100    '49             .
                 word    %111_11111_111_11111    '4A     (/)     /
                 word    %111_11111_110_00010    '4B             l
                 word    %111_11111_111_11111    '4C             ;
