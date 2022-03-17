@@ -1197,7 +1197,7 @@ DAT             ' palette
 DAT             ' VGA Driver LUT resident code
 
 vga_init
-                setcmod #%01_0_000_0            ' enable colorspace conversion
+                setcmod #%01_0_000_1            ' enable colorspace conversion
                 setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
                 setci   ##VGA_INTENSITY << 16   ' g
                 setcq   ##VGA_INTENSITY << 08   ' b
@@ -1216,6 +1216,7 @@ vga_init
                 drvl    vga_pn
 
                 xor     vga_pn,#4|(3<<6)        ' leave av_base pointing to pin +4 (vertical sync)
+                drvh    vga_pn
 
         _ret_   mov     ijmp1,##vga_field       ' set up streamer-empty interrupt
 

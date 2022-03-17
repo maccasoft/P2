@@ -819,8 +819,8 @@ zk_donmi
 
                 add     zk_cycles,#10
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
-                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
         if_nz   incmod  zk_pc,zk_ffffh
+                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
 
@@ -1648,7 +1648,7 @@ video_driver
 ' VGA Driver
 '
 vga_init
-                setcmod #%01_0_000_0          ' enable colorspace conversion
+                setcmod #%01_0_000_1          ' enable colorspace conversion
                 setcy   ##VGA_INTENSITY << 24 ' r      set colorspace for rgb
                 setci   ##VGA_INTENSITY << 16 ' g
                 setcq   ##VGA_INTENSITY << 08 ' b
@@ -1667,10 +1667,9 @@ vga_init
                 drvl    vga_pn
 
                 xor     vga_pn,#4|(3<<6)    ' leave av_base pointing to pin +4 (vertical sync)
+                drvh    vga_pn
 
-vga_field       callpa  #24, #.border       ' top border
-
-                mov     ptra, zx_screen
+vga_field       mov     ptra, zx_screen
                 mov     ptrb, zx_attribute
 
                 incmod  _fc, #60            ' blink frequency
@@ -1706,6 +1705,8 @@ vga_field       callpa  #24, #.border       ' top border
                 wrlong  #%0_11111110, #@zk_irq_mem
 
                 callpa  #33, #.blank        ' front porch
+
+                callpa  #24, #.border       ' top border
 
                 jmp     #vga_field          ' frame loop
 
@@ -1765,7 +1766,7 @@ vga_field       callpa  #24, #.border       ' top border
                 xcont   vga_bs, #0          ' do before-sync part of scan line
                 xzero   vga_ds, #1          ' do sync part of scan line
                 xcont   vga_as, #0          ' do after-sync part of scan line
-                xcont   vga_vi, _bc         ' do visible part of scan line (blank)
+                xcont   vga_vi, _bc         ' do visible part of scan line
         _ret_   djnz    pa, #.border
 
 .blank          xcont   vga_bs, #0          ' do before-sync part of scan line
@@ -1791,8 +1792,6 @@ cvbs_init
                 drvl    cvbs_pn             ' enable dac output(s)
 
 cvbs_field
-                callpa  #(VIDEO == PAL ? 48 : 24), #.border ' top border
-
                 mov     ptra, zx_screen
                 mov     ptrb, zx_attribute
 
@@ -1871,7 +1870,9 @@ cvbs_field
 
                 wrlong  #%0_11111110, #@zk_irq_mem
 
-                callpa  #(VIDEO == PAL ? 8 : 10), #.blank ' after-visible blank lines
+                callpa  #(VIDEO == PAL ? 8 : 10), #.blank ' before-visible blank lines
+
+                callpa  #(VIDEO == PAL ? 48 : 24), #.border ' top border
 
                 jmp     #cvbs_field         ' frame loop
 

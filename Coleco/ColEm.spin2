@@ -1773,10 +1773,10 @@ DAT             ' TMS9918
 
 tms_driver
                 add     ptrb, ##@tms_palette - @tms_driver
-                setq2   #511                    ' load video driver into lut
+                setq2   #511                    ' load video drivers into lut
                 rdlong  0, ptrb
 
-                call    #\(VIDEO == VGA ? vga_init : cvbs_init) ' start VGA driver
+                call    #\(VIDEO == VGA ? vga_init : cvbs_init) ' start video driver
 
                 mov     scol, #0
                 xcont   #10,#0                  ' do streamer instruction to start interrupt sequence
@@ -2256,7 +2256,7 @@ tms_palette
 ' VGA Driver
 '
 vga_init
-                setcmod #%01_0_000_0            ' enable colorspace conversion
+                setcmod #%01_0_000_1            ' enable colorspace conversion
                 setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
                 setci   ##VGA_INTENSITY << 16   ' g
                 setcq   ##VGA_INTENSITY << 08   ' b
@@ -2275,6 +2275,7 @@ vga_init
                 drvl    vga_pn
 
                 xor     vga_pn,#4|(3<<6)        ' leave av_base pointing to pin +4 (vertical sync)
+                drvh    vga_pn
 
                 mov     ijmp1,##vga_field       ' set up streamer-empty interrupt
         _ret_   setint1 #10
