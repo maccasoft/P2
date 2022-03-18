@@ -830,7 +830,7 @@ zk_doirq
 zk_donmi
                 skipf   ##%0_0_1111_1_000000
 
-                add     zk_cycles,#10
+                add     zk_cycles,#11
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
         if_nz   incmod  zk_pc,zk_ffffh
                 andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
@@ -1011,7 +1011,8 @@ zk_portin
                 ' zk_ea   = port
                 ' zk_tmp8 = data
                 add     zk_cycles, #4
-                getbyte zk_tmp8, zk_ea, #1 ' floating bus default
+                getrnd  zk_tmp8
+                and     zk_tmp8, #$FF
                 testbn  zk_ea, #0       wz
         if_nz   ret     wcz
                 getbyte zk_memtmp0, zk_ea, #1
@@ -1629,7 +1630,7 @@ zk_halt
 
 CON ' ZiKore Z80 constants
 
-    ZK_CLOCK      = VIDEO == PAL ? 3_546_893 : 3_579_545
+    ZK_CLOCK      = 3_500_000
     ZK_HLOP       = 1 << 10
 
     ZK_CARRY_BIT  = 0
@@ -1685,8 +1686,8 @@ vga_init
 vga_field       mov     ptra, zx_screen
                 mov     ptrb, zx_attribute
 
-                incmod  _fc, #60            ' blink frequency
-                cmp     _fc, #30        wc
+                incmod  _fc, #32            ' blink frequency
+                cmp     _fc, #16        wc
 
                 mov     pa, #3
 .block          mov     _rc, #8
@@ -1808,7 +1809,7 @@ cvbs_field
                 mov     ptra, zx_screen
                 mov     ptrb, zx_attribute
 
-                incmod  _fc, #(VIDEO == PAL ? 50 : 60) ' blink frequency
+                incmod  _fc, #32            ' blink frequency
 
                 mov     pa, #3
 .block          mov     _rc, #8
@@ -1828,7 +1829,7 @@ cvbs_field
                 movbyts _bc, #0
                 xcont   cvbs_bv, _bc        ' do left border
 
-                cmp     _fc, #(VIDEO == PAL ? 25 : 30) wc
+                cmp     _fc, #16    wc
 
                 rep     @.loop, #32
                 rdbyte  t0, ptrb++
