@@ -82,10 +82,9 @@ ps2_driver
                 jmp     #ps2_locks
 
 ps2_reset
-ps2_loop        and     ps2_state, #$07     ' keep locks state
+                wrlong  coleco_ctrls, #@coleco_ctrls
 
-'                getct   ps2_tout            ' safety timeout
-'                addct1  ps2_tout, ##_CLKFREQ / 10
+ps2_loop        and     ps2_state, #$07     ' keep locks state
 
 .l1             call    #ps2_receive
                 getbyte ps2_code, ps2_data, #0
@@ -245,69 +244,76 @@ ps2_ext0        call    #ps2_receive
 ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
                 getct   ps2_tout            ' hold clock for 128us (must be > 100us)
                 addct1  ps2_tout, ps2_us128 ' |
-                waitct1                     ' |
+                jnct1   #$
                 drvl    #PS2_DATA_PIN       ' pull data low
                 getct   ps2_tout            ' hold data for 4us
                 addct1  ps2_tout, ps2_us4   ' |
-                waitct1                     ' |
+                jnct1   #$
 
                 fltl    #PS2_CLOCK_PIN      ' release clock
                 getct   ps2_tout            ' allow pin to float
                 addct1  ps2_tout, ps2_us1   ' |
-                waitct1                     ' |
+                jnct1   #$
 
                 test    ps2_data, #$FF  wc  ' append parity
                 muxnc   ps2_data, #$100     ' |
                 bith    ps2_data, #9        ' append stop bit
 
                 getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ##_CLKFREQ / 10
+                addct1  ps2_tout, ps2_us2000
 
                 mov     ps2_bits, #10
 .l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
-        'if_nz   jct1    #ps2_reset          ' | check timeout
-        if_nz   jmp     #.l1
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l1                ' |
                 shr     ps2_data, #1    wc  ' output data bit
-                drvc    #PS2_DATA_PIN
+                drvc    #PS2_DATA_PIN       ' |
 .l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
-        'if_z    jct1    #ps2_reset          ' | check timeout
-        if_z    jmp     #.l2
-                djnz    ps2_bits, #.l1
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    ps2_bits, #.l1      ' another bit ?
 
                 fltl    #PS2_DATA_PIN
 
 .l3             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data low
-        if_z    testpn  #PS2_DATA_PIN   wz
-        'if_nz   jct1    #ps2_reset          ' | check timeout
-        if_nz   jmp     #.l3
+        if_z    testpn  #PS2_DATA_PIN   wz  ' |
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l3                ' |
 
 .l4             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data high
-        if_nz   testpn  #PS2_DATA_PIN   wz
-        'if_z    jct1    #ps2_reset          ' | check timeout
-        if_z    jmp     #.l4
+        if_nz   testpn  #PS2_DATA_PIN   wz  ' |
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l4                ' |
 
                 ' Fall through to receive ack
 
-ps2_receive     mov     ps2_bits, #11
+ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
+        if_nz   jmp     #ps2_receive        ' |
+
+                getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us2000
+
+                mov     ps2_bits, #11
 .l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
-        'if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jct1    #ps2_reset          ' | check timeout
         if_nz   jmp     #.l1                ' |
                 testp   #PS2_DATA_PIN   wc  ' sample data
-                rcr     ps2_data, #1
+                rcr     ps2_data, #1        ' |
 .l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
-        'if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jct1    #ps2_reset          ' | check timeout
         if_z    jmp     #.l2                ' |
                 djnz    ps2_bits, #.l1      ' another bit?
 
                 shr     ps2_data, #22       ' align byte
                 test    ps2_data, #$1FF wc  ' test parity
-        if_nc   jmp     #ps2_reset
-        _ret_   and     ps2_data, #$FF
+        if_nc   jmp     #ps2_reset          ' |
+        _ret_   and     ps2_data, #$FF      ' ok
 
 
 ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
 ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
 ps2_us128       long    _CLKFREQ / 1000_000 * 128   ' 128 usec.
+ps2_us2000      long    _CLKFREQ / 1000_000 * 4000  ' 2000 usec.
 
 ps2_bits        long    0
 ps2_code        long    0
