@@ -31,15 +31,16 @@ DAT             ' Startup
                 wrlong  t0, ptra++
                 djnz    pa, #.l1
 
-                coginit #1, ##@video_driver     'start video on cog #1
+sys_reset
+                cogstop #1
+                cogstop #2
 
-                getct   pa                      ' delay to allow monitor to settle
-                addct1  pa, ##_CLKFREQ
-                waitct1
+                coginit #1, ##@video_driver ' start video on cog #1
+                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
 
-                coginit #2, ##@zk_cogbase       'start Z80 on cog #2
+                coginit #2, ##@zk_cogbase   ' start Z80 on cog #2
 
-                jmp     #\ps2_driver            'cog #0 (this) PS/2 keyboard
+                jmp     #\ps2_driver        ' cog #0 (this) PS/2 keyboard
 
 ' Shared variables
 
@@ -145,9 +146,8 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
 
                 test    ps2_shift, #LEFT_GUI  wz ' check reset key combination
         if_nz   test    ps2_shift, #RIGHT_GUI wz ' |
-        if_nz   coginit #2, ##@zk_cogbase        ' restart Z80 on cog #2
         if_nz   andn    ps2_shift, #LEFT_GUI|RIGHT_GUI
-        if_nz   jmp     #ps2_reset
+        if_nz   jmp     #sys_reset               ' jump to system reset
 
                 testb   ps2_state, #28  wc      ' extended code
                 rcl     ps2_code, #1            '   to bit 0
