@@ -803,7 +803,6 @@ zk_i2a
 
 zk_irqret       '' RETI/RETN
                 '' These are literally the same
-                add     zk_cycles,#6
                 testb   zk_irqenable,#ZK_IFF2_BIT wc
                 bitc    zk_irqenable,#ZK_IFF1_BIT
                 call    #\zk_pop16
@@ -823,6 +822,7 @@ zk_irqon
         _ret_   or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
 
 zk_doirq
+                add     zk_cycles,#2
                 test    zk_irqenable,#(1<<ZK_IM2_BIT)  wz
         if_z    skipf   ##%0_1_1111_0_000000_1111
         if_nz   skipf   ##%0_1_0000_1_000000_11
@@ -830,7 +830,7 @@ zk_doirq
 zk_donmi
                 skipf   ##%0_0_1111_1_000000
 
-                add     zk_cycles,#11
+                add     zk_cycles,#5
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
         if_nz   incmod  zk_pc,zk_ffffh
                 andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
