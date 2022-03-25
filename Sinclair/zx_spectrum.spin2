@@ -3,10 +3,11 @@
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
 
     Based on ZiKore Z80 Emulator by Ada Gottensträter
+    with modifications by Marco Maccaferri
 }
 CON
 
-    _CLKFREQ      = 210_000_000
+    _CLKFREQ      = 280_000_000
 
     VIDEO         = PAL ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
@@ -463,6 +464,11 @@ zk_cogbase
                 mov     zk_cycles, #1
 
 zk_nextop
+                add     zk_tstates, zk_cycles
+
+                call    #\ula_advance
+                mov     ula_state_done, #0
+
                 mul     zk_cycles, zk_cycletime
                 addct1  zk_lastwait, zk_cycles
                 waitct1
@@ -482,13 +488,30 @@ zk_nextop
                 testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
         if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
-                testbn  zk_irqenable,#ZK_IFF1_BIT wz
-        if_z    jmp     #.skip
-                testb   zk_irq_ctl, #8      wc  ' C = old IRQ
+{
+                cmpsub  zk_tstates, ##69888 wc
+                testb   zk_irqenable,#ZK_IFF1_BIT wz
+        if_11   mov     ula_state, ##0-(224*64)
+        if_11   mov     ula_blocks, #3
+        if_11   mov     ula_rows, #8
+        if_11   mov     ula_scans, #8
+        if_11   mov     ptra, ##@z80_0000+$4000
+        if_11   mov     ptrb, ##@z80_0000+$4000+32*192
+        if_11   jmp     #\zk_doirq
+}
+
+                testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
                 rdlong  zk_irq_ctl, #@zk_irq_mem
-                testb   zk_irq_ctl, #8      wz  ' Z = current IRQ
-        if_01   jmp     #\zk_doirq              ' jump if 0 -> 1 transition
-.skip
+                testb   zk_irq_ctl, #8            andz ' Z = EI and IRQ
+
+        if_x1   mov     ula_state, ##0-(VIDEO == PAL ? (224*64) : (40*64))
+        if_x1   mov     ula_blocks, #3
+        if_x1   mov     ula_rows, #8
+        if_x1   mov     ula_scans, #8
+        if_x1   mov     ptra, ##@z80_0000+$4000
+        if_x1   mov     ptrb, ##@z80_0000+$4000+32*192
+
+        if_x1   jmp     #\zk_doirq                     ' jump if Z=1
 
                 mov     zk_temphl, zk_hl
                 mov     zk_hlptr, #zk_hl
@@ -822,7 +845,7 @@ zk_irqon
         _ret_   or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
 
 zk_doirq
-                add     zk_cycles,#2
+                'add     zk_cycles,#2
                 test    zk_irqenable,#(1<<ZK_IM2_BIT)  wz
         if_z    skipf   ##%0_1_1111_0_000000_1111
         if_nz   skipf   ##%0_1_0000_1_000000_11
@@ -959,11 +982,18 @@ zk_readcode
                 'setword zk_pc,#0,#1
                 ' fall through
 zk_read8
+                call    #\ula_advance
+
+                getbyte zk_tmp0, zk_ea, #1
+                cmp     zk_tmp0, #$40   wcz
+        if_ae   cmpr    zk_tmp0, #$7F   wcz
+        if_ae   add     zk_cycles, ula_cycles
+
                 add     zk_cycles,#3
-                mov     zk_tmp8, #$FF
                 getword pa, zk_ea, #0
                 add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
+
                 ret     wcz
 
 zk_readcode16
@@ -985,12 +1015,19 @@ zk_write16
 zk_write8hl
                 getword zk_ea,zk_tempidx,#0
 zk_write8
-                add     zk_cycles, #3
                 getword pa, zk_ea, #0
                 cmp     pa, zk_ram_start    wcz
-         if_b   ret     wcz
-                add     pa, zk_ram
-                wrbyte  zk_tmp8, pa
+        if_ae   add     pa, zk_ram
+        if_ae   wrbyte  zk_tmp8, pa
+
+                call    #\ula_advance
+
+                getbyte zk_tmp0, zk_ea, #1
+                cmp     zk_tmp0, #$40   wcz
+        if_ae   cmpr    zk_tmp0, #$7F   wcz
+        if_ae   add     zk_cycles, ula_cycles
+
+                add     zk_cycles, #3
                 ret     wcz
 
 zk_ram_start    long    $4000
@@ -1010,23 +1047,37 @@ zk_portout
 zk_portin
                 ' zk_ea   = port
                 ' zk_tmp8 = data
-                add     zk_cycles, #4
-                getbyte zk_tmp8, zk_ea, #0
+                add     zk_cycles, #2
+                mov     zk_tmp8, #$FF
+                call    #\ula_advance
+                add     zk_cycles, #2
+
                 testbn  zk_ea, #0       wz
-        if_nz   ret     wcz
-                getbyte zk_memtmp0, zk_ea, #1
-                xor     zk_memtmp0, #$FF
-                encod   zk_memtmp0, zk_memtmp0
-                add     zk_memtmp0, #@zx_keys
-                rdbyte  zk_tmp8, zk_memtmp0
-                testp   #ZX_EAR         wc  ' ear
-                bitc    zk_tmp8, #6         ' |
+        if_z    getbyte zk_tmp0, zk_ea, #1
+        if_z    xor     zk_tmp0, #$FF
+        if_z    encod   zk_tmp0, zk_tmp0
+        if_z    add     zk_tmp0, #@zx_keys
+        if_z    rdbyte  zk_tmp8, zk_tmp0
+        if_z    testp   #ZX_EAR         wc  ' ear
+        if_z    bitc    zk_tmp8, #6         ' |
+        if_z    add     zk_cycles, ula_cycles
                 ret     wcz
+
+ula_state       long    0
+ula_state_done  long    0
+
+ula_blocks      long    0
+ula_rows        long    0
+ula_scans       long    0
+ula_col         long    0
+
+ula_cycles      long    0
 
 zk_ffffh        long    $FFFF
 zk_18000h       long    $18000
 zk_bit31        long    negx
 
+zk_tstates      long    0
 zk_cycles       long    0
 zk_pc           long    $0000
 
@@ -1062,8 +1113,8 @@ zk_tmp16        res     1
 zk_optmp0       res     1
 zk_optmp1       res     1
 
-zk_memtmp0      res     1
-'zk_memtmp1      res     1
+zk_tmp0         res     1
+zk_tmp1         res     1
 'zk_memtmp2      res     1
 'zk_memtmp3      res     1
 zk_tmp8         res     1 ' memory read/write value
@@ -1625,9 +1676,73 @@ zk_halt
 
                 fit     $400
 
+                orgh
+
+ula_advance
+                sub     ula_state, ula_state_done
+                add     ula_state, zk_cycles
+                mov     ula_state_done, zk_cycles
+
+.l1             cmps    ula_state, #8   wcz
+        if_ae   sub     ula_state, #8
+        if_ae   add     ula_col, #2
+        if_ae   add     ptra, #2
+        if_ae   add     ptrb, #2
+        if_ae   jmp     #.l1
+
+                cmpsub  ula_col, #32    wc
+        if_1x   sub     ula_state, #224-128
+        if_1x   sub     ptra, #32
+        if_1x   sub     ptrb, #32
+        if_1x   sub     ula_scans, #1   wz
+        if_10   add     ptra, #256
+        if_11   sub     ptra, ##$700-32
+        if_11   add     ptrb, #32
+        if_11   mov     ula_scans, #8
+
+        if_11   sub     ula_rows, #1    wz
+        if_11   add     ptra, ##2048-256
+        if_11   mov     ula_rows, #8
+
+        if_11   sub     ula_blocks, #1  wz
+        if_11   sub     ptra, ##32*192
+        if_11   sub     ptrb, ##32*24
+        if_11   mov     ula_blocks, #3
+
+                mov     ula_cycles, #0
+                mov     zk_tmp8, #$FF
+
+                cmp     ula_state, #0   wz
+        if_z    mov     ula_cycles, #6
+
+                cmp     ula_state, #1   wz
+        if_z    mov     ula_cycles, #5
+        if_z    rdbyte  zk_tmp8, ptra[0]
+
+                cmp     ula_state, #2   wz
+        if_z    mov     ula_cycles, #4
+        if_z    rdbyte  zk_tmp8, ptrb[0]
+
+                cmp     ula_state, #3   wz
+        if_z    mov     ula_cycles, #3
+        if_z    rdbyte  zk_tmp8, ptra[1]
+
+                cmp     ula_state, #4   wz
+        if_z    mov     ula_cycles, #2
+        if_z    rdbyte  zk_tmp8, ptrb[1]
+
+                cmp     ula_state, #5   wz
+        if_z    mov     ula_cycles, #1
+
+                cmp     ula_state, #6   wz
+
+                cmp     ula_state, #7   wz
+
+                ret
+
 CON ' ZiKore Z80 constants
 
-    ZK_CLOCK      = 3_500_000
+    ZK_CLOCK      = VIDEO == PAL ? 3_500_000 : 3_528_000
     ZK_HLOP       = 1 << 10
 
     ZK_CARRY_BIT  = 0
@@ -1708,12 +1823,12 @@ vga_field       mov     ptra, zx_screen
                 callpa  #10, #.blank        ' back porch
 
                 wrlong  #%1_11111110, #@zk_irq_mem
+                waitx   ##round(float(_CLKFREQ) / float(ZK_CLOCK)) * 32
+                wrlong  #%0_11111110, #@zk_irq_mem
 
                 drvnot  vga_pn              ' vertical sync on
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
-
-                wrlong  #%0_11111110, #@zk_irq_mem
 
                 callpa  #33, #.blank        ' front porch
 
@@ -1727,7 +1842,7 @@ vga_field       mov     ptra, zx_screen
                 xcont   vga_as, #0          ' do before-visible part of scan line
 
                 rdbyte  _bc, #@zx_border
-                and     _bc, #%00000_111
+                and     _bc, #$07
                 movbyts _bc, #0
                 xcont   vga_bv, _bc         ' do left border
 
@@ -1770,7 +1885,7 @@ vga_field       mov     ptra, zx_screen
                 xcont   vga_as, #0          ' do after-sync part of scan line
 
                 rdbyte  _bc, #@zx_border
-                and     _bc, #%00000_111
+                and     _bc, #$07
                 movbyts _bc, #0
                 xcont   vga_vi, _bc         ' do visible part of scan line
 
@@ -1869,19 +1984,20 @@ cvbs_field
                 add     ptra, ##2048-256
                 djnz    pa, #.block
 
-                callpa  #(VIDEO == PAL ? 48 : 24), #.border ' bottom border
+                callpa  #(VIDEO == PAL ? 48 : 25), #.border ' bottom border
 
-                callpa  #(VIDEO == PAL ? 8 : 2), #.blank ' after-visible blank lines
-
-                wrlong  #%1_11111110, #@zk_irq_mem
+                callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' after-visible blank lines
 
                 callpa  #6, #.vhigh                      ' initial high vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
-                callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
 
+                wrlong  #%1_11111110, #@zk_irq_mem       ' IRQ
+                waitx   ##round(float(_CLKFREQ) / float(ZK_CLOCK)) * 32
                 wrlong  #%0_11111110, #@zk_irq_mem
 
-                callpa  #(VIDEO == PAL ? 8 : 10), #.blank ' before-visible blank lines
+                callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
+
+                callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
 
                 callpa  #(VIDEO == PAL ? 48 : 24), #.border ' top border
 
@@ -1948,23 +2064,23 @@ cvbs_ca         long    VIDEO == PAL ? PAL_CA : NTSC_CQ             ' colorspace
 cvbs_cf         long   (VIDEO == PAL ? PAL_CF : NTSC_CF) frac _CLKFREQ ' colorspace frequency setting
 cvbs_xf         long    VIDEO == PAL ? PAL_XF : NTSC_XF             ' streamer frequency setting
 
-cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  11 :  10)    ' streamer command: before-sync
-cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  33 :  27)    ' streamer command: during-sync
-cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   6 :   4)    ' streamer command: before-colorburst
-cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  15)    ' streamer command: during-colorburst
-cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :   9)    ' streamer command: after-colorburst
-cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 352 : 313)    ' streamer command: during-blank
+cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  11 :  11)    ' streamer command: before-sync
+cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  33 :  33)    ' streamer command: during-sync
+cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   6 :   6)    ' streamer command: before-colorburst
+cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  16)    ' streamer command: during-colorburst
+cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :  30)    ' streamer command: after-colorburst
+cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 352 : 352)    ' streamer command: during-blank
 
-cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  48 :  28)    ' streamer command: before-visible
+cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  48 :  48)    ' streamer command: before-visible
 cvbs_dv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                     4         ' streamer command: during-visible
-cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  48 :  29)    ' streamer command: after-visible
-cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ? 352 : 313)    ' streamer command: visible
+cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  48 :  48)    ' streamer command: after-visible
+cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ? 352 : 352)    ' streamer command: visible
 
-cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  14)    ' streamer command: high-vsync-low
-cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 208 : 175)    ' streamer command: high-vsync-high
+cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  16)    ' streamer command: high-vsync-low
+cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 208 : 208)    ' streamer command: high-vsync-high
 
-cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 191 : 161)    ' streamer command: low-vsync-low
-cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  33 :  28)    ' streamer command: low-vsync-high
+cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 191 : 191)    ' streamer command: low-vsync-low
+cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  33 :  33)    ' streamer command: low-vsync-high
 
 cvbs_pn         long    CVBS_PIN            ' pin(s)
 
@@ -2046,9 +2162,9 @@ CON ' CVBS constants
     NTSC_CB         = $809000_01                            ' colorburst reference color
     NTSC_CF         = 3_579_545                             ' colorburst frequency
     NTSC_CC         = 227.5                                 ' color cycles per line * 4 to preserve fraction
-    NTSC_X_TOTAL    = 378
+    'NTSC_X_TOTAL    = 448
 
-    NTSC_DOTF       = (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
+    NTSC_DOTF       = 7_000_000 * 128                       ' ZX dot frequency
     NTSC_XF         = ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
 
     PAL             = 2
