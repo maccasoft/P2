@@ -7,7 +7,7 @@
 }
 CON
 
-    _CLKFREQ      = 280_000_000
+    _CLKFREQ      = 210_000_000
 
     VIDEO         = PAL ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
@@ -26,18 +26,19 @@ DAT             ' Startup
                 drvl    #56
                 drvl    #57
 
-                mov     pa, ##48*1024/4
-                mov     ptra, ##@z80_0000+$4000 ' initialize memory with random values
-.l1             getrnd  t0
-                wrlong  t0, ptra++
-                djnz    pa, #.l1
-
 sys_reset
-                cogstop #1
+                cogid   #2      wc          ' check if user reset
                 cogstop #2
 
-                coginit #1, ##@video_driver ' start video on cog #1
-                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                mov     t0, #0
+                mov     pa, ##48*1024/4
+                mov     ptra, ##@z80_4000   ' initialize memory
+.l1     if_nc   getrnd  t0                  '   with random values if power on
+                wrlong  t0, ptra++          '   0 if user reset
+                djnz    pa, #.l1
+
+        if_nc   coginit #1, ##@video_driver ' start video on cog #1
+        if_nc   waitx   ##_CLKFREQ          ' delay to allow monitor to settle
 
                 coginit #2, ##@zk_cogbase   ' start Z80 on cog #2
 
@@ -456,7 +457,7 @@ zk_cogbase
                 rdlong  0, ptrb
 
 zk_nextop
-                call    #\ula_advance
+                call    #\zx_ula_advance
                 mov     ula_state_done, #0
 
                 mul     zk_cycles, zk_cycletime
@@ -485,8 +486,8 @@ zk_nextop
         if_x1   mov     ula_blocks, #3
         if_x1   mov     ula_rows, #8
         if_x1   mov     ula_scans, #8
-        if_x1   mov     ptra, ##@z80_0000+$4000
-        if_x1   mov     ptrb, ##@z80_0000+$4000+32*192
+        if_x1   mov     ptra, ##@z80_4000
+        if_x1   mov     ptrb, ##@z80_4000+32*192
         if_x1   jmp     #\zk_doirq                     ' jump if Z=1
 
                 mov     zk_temphl, zk_hl
@@ -927,6 +928,39 @@ zk_setrpa       jmprel  pa
                 altd    zk_hlptr
         _ret_   mov     0-0,zk_temphl
 
+zk_scf
+                modc    _clr wc
+zk_ccf
+                testb   zk_flags,#ZK_CARRY_BIT wc
+                bitnc   zk_flags,#ZK_CARRY_BIT
+                bitc    zk_flags,#ZK_HALF_BIT
+                bitl    zk_flags,#ZK_NMODE_BIT
+                setq    #ZK_XYMASK
+        _ret_   muxq    zk_flags,zk_accu
+
+zk_ld_abs       '' LD A,(imm16) and LD (imm16),A
+                call    #\zk_readcode16
+                mov     zk_ea,zk_tmp16
+zk_a_and_ptr    '' A and (BC)/(DE) ops
+                getword zk_ea,zk_debc,#0 ' get BC
+                getword zk_ea,zk_debc,#1 ' get DE
+                call    #\zk_read8
+        _ret_   mov     zk_accu,zk_tmp8
+                mov     zk_tmp8,zk_accu
+                jmp     #\zk_write8
+
+zk_regmove
+                push    #zk_setry
+                jmp     #\zk_getrz
+
+zk_loadimm8
+                push    #zk_setry
+                jmp     #\zk_readcode
+
+zk_halt
+                or      zk_irqenable,#(1<<ZK_HALT_BIT)
+        _ret_   decmod  zk_pc,zk_ffffh
+
 zk_push16
                 add     zk_cycles,#1
                 sub     zk_sp,#2
@@ -961,7 +995,7 @@ zk_read8
                 getbyte zk_tmp0, zk_ea, #1
                 cmp     zk_tmp0, #$40   wcz
         if_ae   cmpr    zk_tmp0, #$7F   wcz
-        if_ae   call    #\ula_advance
+        if_ae   call    #\zx_ula_advance
         if_ae   add     zk_cycles, ula_cycles
 
                 add     zk_cycles,#3
@@ -999,7 +1033,7 @@ zk_write8
                 getbyte zk_tmp0, zk_ea, #1
                 cmp     zk_tmp0, #$40   wcz
         if_ae   cmpr    zk_tmp0, #$7F   wcz
-        if_ae   call    #\ula_advance
+        if_ae   call    #\zx_ula_advance
         if_ae   add     zk_cycles, ula_cycles
 
                 add     zk_cycles, #2
@@ -1013,10 +1047,7 @@ zk_portout
                 ' zk_tmp8 = data
                 add     zk_cycles, #4
                 testbn  zk_ea, #0       wz
-        if_z    wrbyte  zk_tmp8, #@zx_border
-        if_z    testb   zk_tmp8, #4     wc  ' speaker
-        if_z    testb   zk_tmp8, #3     orc ' mic
-        if_z    drvc    #ZX_MIC             ' |
+        if_z    jmp     #\zx_ula_write
                 ret     wcz
 
 zk_portin
@@ -1024,18 +1055,12 @@ zk_portin
                 ' zk_tmp8 = data
                 add     zk_cycles, #2
                 mov     zk_tmp8, #$FF
-                call    #\ula_advance
+                call    #\zx_ula_advance
                 add     zk_cycles, #2
 
                 testbn  zk_ea, #0       wz
-        if_z    getbyte zk_tmp0, zk_ea, #1
-        if_z    xor     zk_tmp0, #$FF
-        if_z    encod   zk_tmp0, zk_tmp0
-        if_z    add     zk_tmp0, #@zx_keys
-        if_z    rdbyte  zk_tmp8, zk_tmp0
-        if_z    testp   #ZX_EAR         wc  ' ear
-        if_z    bitc    zk_tmp8, #6         ' |
         if_z    add     zk_cycles, ula_cycles
+        if_z    jmp     #\zx_ula_read
                 ret     wcz
 
 zk_ffffh        long    $FFFF
@@ -1615,44 +1640,7 @@ zk_ld_abs16     '' LD HL,(imm16) and LD (imm16),HL
                 altd    zk_hlptr
         _ret_   mov     zk_sp,zk_tmp16
 
-zk_scf
-                modc    _clr wc
-zk_ccf
-                testb   zk_flags,#ZK_CARRY_BIT wc
-                bitnc   zk_flags,#ZK_CARRY_BIT
-                bitc    zk_flags,#ZK_HALF_BIT
-                bitl    zk_flags,#ZK_NMODE_BIT
-                setq    #ZK_XYMASK
-        _ret_   muxq    zk_flags,zk_accu
-
-zk_ld_abs       '' LD A,(imm16) and LD (imm16),A
-                call    #\zk_readcode16
-                mov     zk_ea,zk_tmp16
-zk_a_and_ptr    '' A and (BC)/(DE) ops
-                getword zk_ea,zk_debc,#0 ' get BC
-                getword zk_ea,zk_debc,#1 ' get DE
-                call    #\zk_read8
-        _ret_   mov     zk_accu,zk_tmp8
-                mov     zk_tmp8,zk_accu
-                jmp     #\zk_write8
-
-zk_regmove
-                push    #zk_setry
-                jmp     #\zk_getrz
-
-zk_loadimm8
-                push    #zk_setry
-                jmp     #\zk_readcode
-
-zk_halt
-                or      zk_irqenable,#(1<<ZK_HALT_BIT)
-        _ret_   decmod  zk_pc,zk_ffffh
-
-'                fit     $400
-
-                orgh
-
-ula_advance
+zx_ula_advance
                 sub     ula_state, ula_state_done
                 add     ula_state, zk_cycles
                 mov     ula_state_done, zk_cycles
@@ -1697,6 +1685,8 @@ ula_advance
         if_z    rdbyte  zk_tmp8, ptrb[1]
 
                 ret     wcz
+
+                fit     $400
 
 CON ' ZiKore Z80 constants
 
@@ -2122,8 +2112,8 @@ CON ' CVBS constants
     NTSC_CC         = 227.5                                 ' color cycles per line * 4 to preserve fraction
     NTSC_X_TOTAL    = 378
 
-    NTSC_DOTF       = (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
-    NTSC_XF         = ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
+    'NTSC_DOTF       = (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
+    NTSC_XF         = $03A00B6D    ' ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
 
     PAL             = 2
     PAL_BLANK_LEV   = 43.0                                  ' levels
@@ -2165,8 +2155,27 @@ CON ' CVBS constants
 DAT             ' I/O Hub-exec code
                 orgh
 
+zx_ula_write
+                wrbyte  zk_tmp8, #@zx_border
+                testb   zk_tmp8, #4     wc  ' speaker
+                testb   zk_tmp8, #3     orc ' mic
+                drvc    #ZX_MIC             ' |
+                ret     wcz
+
+zx_ula_read
+                getbyte zk_tmp0, zk_ea, #1
+                xor     zk_tmp0, #$FF
+                encod   zk_tmp0, zk_tmp0
+                add     zk_tmp0, #@zx_keys
+                rdbyte  zk_tmp8, zk_tmp0
+                testp   #ZX_EAR         wc  ' ear
+                bitc    zk_tmp8, #6         ' |
+                ret     wcz
+
 DAT             ' Z80 Memory Space
                 orgh
 
 z80_0000        file    "48.rom"
+                orgh    z80_0000 + $4000
+z80_4000
                 ' Locations below used as Z80 RAM
