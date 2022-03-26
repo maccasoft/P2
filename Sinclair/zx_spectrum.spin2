@@ -482,7 +482,7 @@ zk_nextop
                 testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
                 rdlong  zk_irq_ctl, #@zk_irq_mem
                 testb   zk_irq_ctl, #8            andz ' Z = EI and IRQ
-        if_x1   mov     ula_state, ##0-(VIDEO == PAL ? (224*64) : (40*64))
+        if_x1   mov     ula_state, ##0-(VIDEO == PAL ? (224*64) : (224*40))
         if_x1   mov     ula_blocks, #3
         if_x1   mov     ula_rows, #8
         if_x1   mov     ula_scans, #8
@@ -999,7 +999,6 @@ zk_read8
         if_ae   add     zk_cycles, ula_cycles
 
                 add     zk_cycles,#3
-                mov     zk_tmp8, #$FF
                 getword pa, zk_ea, #0
                 add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
@@ -1025,9 +1024,10 @@ zk_write8hl
                 getword zk_ea,zk_tempidx,#0
 zk_write8
                 getword pa, zk_ea, #0
-                cmp     pa, zk_ram_start    wcz
+                cmp     pa, zx_ram_start    wcz
         if_ae   add     pa, zk_ram
         if_ae   wrbyte  zk_tmp8, pa
+
                 add     zk_cycles, #1
 
                 getbyte zk_tmp0, zk_ea, #1
@@ -1040,7 +1040,7 @@ zk_write8
 
                 ret     wcz
 
-zk_ram_start    long    $4000
+zx_ram_start    long    $4000
 
 zk_portout
                 ' zk_ea   = port
@@ -1932,9 +1932,9 @@ cvbs_field
                 add     ptra, ##2048-256
                 djnz    pa, #.block
 
-                callpa  #(VIDEO == PAL ? 48 : 24), #.border ' bottom border
+                callpa  #(VIDEO == PAL ? 48 : 25), #.border ' bottom border
 
-                callpa  #(VIDEO == PAL ? 8 : 2), #.blank ' after-visible blank lines
+                callpa  #(VIDEO == PAL ? 8 : 6), #.blank ' after-visible blank lines
 
                 callpa  #6, #.vhigh                      ' initial high vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
@@ -1945,7 +1945,7 @@ cvbs_field
 
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
 
-                callpa  #(VIDEO == PAL ? 8 : 10), #.blank ' before-visible blank lines
+                callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
 
                 callpa  #(VIDEO == PAL ? 48 : 24), #.border ' top border
 
@@ -1978,11 +1978,13 @@ cvbs_field
                 xcont   cvbs_db, #1         ' blank line
         _ret_   djnz    pa, #.blank
 
-.vhigh          xcont   cvbs_hl, #2
+.vhigh          xcont   cvbs_bs,#1
+                xcont   cvbs_hl, #2
                 xcont   cvbs_hh, #1
         _ret_   djnz    pa, #.vhigh
 
-.vlow           xcont   cvbs_ll, #2
+.vlow           xcont   cvbs_bs,#1
+                xcont   cvbs_ll, #2
                 xcont   cvbs_lh, #1
         _ret_   djnz    pa, #.vlow
 
@@ -2012,28 +2014,28 @@ cvbs_ca         long    VIDEO == PAL ? PAL_CA : NTSC_CQ             ' colorspace
 cvbs_cf         long   (VIDEO == PAL ? PAL_CF : NTSC_CF) frac _CLKFREQ ' colorspace frequency setting
 cvbs_xf         long    VIDEO == PAL ? PAL_XF : NTSC_XF             ' streamer frequency setting
 
-cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  11 :  10)    ' streamer command: before-sync
-cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  33 :  27)    ' streamer command: during-sync
-cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   6 :   4)    ' streamer command: before-colorburst
-cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  15)    ' streamer command: during-colorburst
-cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :   9)    ' streamer command: after-colorburst
-cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 352 : 313)    ' streamer command: during-blank
+cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  11 :  11)    ' streamer command: before-sync
+cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  32 :  33)    ' streamer command: during-sync
+cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   7 :   5)    ' streamer command: before-colorburst
+cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  17)    ' streamer command: during-colorburst
+cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :  30)    ' streamer command: after-colorburst
+cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +                   352         ' streamer command: during-blank
 
-cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  48 :  28)    ' streamer command: before-visible
+cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                    48         ' streamer command: before-visible
 cvbs_dv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                     4         ' streamer command: during-visible
-cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  48 :  29)    ' streamer command: after-visible
-cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ? 352 : 313)    ' streamer command: visible
+cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                    48         ' streamer command: after-visible
+cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                   352         ' streamer command: visible
 
-cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  14)    ' streamer command: high-vsync-low
-cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 208 : 175)    ' streamer command: high-vsync-high
+cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  16)    ' streamer command: high-vsync-low
+cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 197 : 197)    ' streamer command: high-vsync-high
 
-cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 191 : 161)    ' streamer command: low-vsync-low
-cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  33 :  28)    ' streamer command: low-vsync-high
+cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 191 : 191)    ' streamer command: low-vsync-low
+cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  22 :  22)    ' streamer command: low-vsync-high
 
 cvbs_pn         long    CVBS_PIN            ' pin(s)
 
-zx_screen       long    @z80_0000 + $4000
-zx_attribute    long    @z80_0000 + $4000 + 6144
+zx_screen       long    @z80_4000
+zx_attribute    long    @z80_4000 + 32*192
 
 _vx             long    0
 _sc             long    0
@@ -2109,11 +2111,11 @@ CON ' CVBS constants
 
     NTSC_CB         = $809000_01                            ' colorburst reference color
     NTSC_CF         = 3_579_545                             ' colorburst frequency
-    NTSC_CC         = 227.5                                 ' color cycles per line * 4 to preserve fraction
-    NTSC_X_TOTAL    = 378
+    'NTSC_CC         = 227.5                                 ' color cycles per line * 4 to preserve fraction
+    'NTSC_X_TOTAL    = 448
 
-    'NTSC_DOTF       = (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
-    NTSC_XF         = $03A00B6D    ' ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
+    NTSC_DOTF       = 7_048_950 * 128 ' (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
+    NTSC_XF         = ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
 
     PAL             = 2
     PAL_BLANK_LEV   = 43.0                                  ' levels
