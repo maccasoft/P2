@@ -7,8 +7,6 @@
 }
 CON
 
-    _CLKFREQ      = 210_000_000
-
     VIDEO         = PAL ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
     CVBS_PIN      = 32+7*3 addpins 1 ' 53+54
@@ -18,6 +16,8 @@ CON
 
     ZX_MIC        = 0   ' OUT
     ZX_EAR        = 1   ' IN
+
+    _CLKFREQ      = VIDEO == PAL ? 210_000_000 : 240_000_000
 
 DAT             ' Startup
                 org     $000
@@ -456,11 +456,17 @@ zk_cogbase
                 setq2   #511
                 rdlong  0, ptrb
 
+                getct   zk_lastwait
+
 zk_nextop
                 call    #\zx_ula_advance
                 mov     ula_state_done, #0
 
                 mul     zk_cycles, zk_cycletime
+                add     zk_cycles, zk_fractime
+                getbyte zk_fractime, zk_cycles, #0
+                shr     zk_cycles, #8
+
                 addct1  zk_lastwait, zk_cycles
                 waitct1
 
@@ -1024,7 +1030,7 @@ zk_write8hl
                 getword zk_ea,zk_tempidx,#0
 zk_write8
                 getword pa, zk_ea, #0
-                cmp     pa, zx_ram_start    wcz
+                cmp     pa, ##$4000     wcz
         if_ae   add     pa, zk_ram
         if_ae   wrbyte  zk_tmp8, pa
 
@@ -1039,8 +1045,6 @@ zk_write8
                 add     zk_cycles, #2
 
                 ret     wcz
-
-zx_ram_start    long    $4000
 
 zk_portout
                 ' zk_ea   = port
@@ -1098,7 +1102,9 @@ ula_col         long    0
 
 ula_cycles      long    0
 
-zk_cycletime    long    round(float(_CLKFREQ) / float(ZK_CLOCK))
+zk_cycletime    long    round(float(_CLKFREQ) / float(ZK_CLOCK) * 256.0)
+zk_fractime     long    0
+
 zk_lastwait     res     1
 
 zk_opcode       res     1
@@ -1690,7 +1696,7 @@ zx_ula_advance
 
 CON ' ZiKore Z80 constants
 
-    ZK_CLOCK      = 3_500_000
+    ZK_CLOCK      = VIDEO == PAL ? 3_500_000 : 3_527_500
     ZK_HLOP       = 1 << 10
 
     ZK_CARRY_BIT  = 0
@@ -1770,12 +1776,12 @@ vga_field       mov     ptra, zx_screen
 
                 callpa  #10, #.blank        ' back porch
 
-                wrlong  #%1_11111110, #@zk_irq_mem
-
                 drvnot  vga_pn              ' vertical sync on
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
 
+                wrlong  #%1_11111110, #@zk_irq_mem       ' IRQ
+                waitx   ##round(float(_CLKFREQ) / float(ZK_CLOCK)) * 32
                 wrlong  #%0_11111110, #@zk_irq_mem
 
                 callpa  #33, #.blank        ' front porch
@@ -1934,7 +1940,7 @@ cvbs_field
 
                 callpa  #(VIDEO == PAL ? 48 : 25), #.border ' bottom border
 
-                callpa  #(VIDEO == PAL ? 8 : 6), #.blank ' after-visible blank lines
+                callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' after-visible blank lines
 
                 callpa  #6, #.vhigh                      ' initial high vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
@@ -2083,6 +2089,8 @@ CON ' VGA constants
 
 CON ' CVBS constants
 
+    CLK_I           = 31 - encod _CLKFREQ
+
     NTSC            = 1
     NTSC_BLANK_LEV  = 40.0                                  ' levels
     NTSC_BLACK_LEV  = NTSC_BLANK_LEV + 7.5
@@ -2114,7 +2122,7 @@ CON ' CVBS constants
     'NTSC_CC         = 227.5                                 ' color cycles per line * 4 to preserve fraction
     'NTSC_X_TOTAL    = 448
 
-    NTSC_DOTF       = 7_048_950 * 128 ' (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
+    NTSC_DOTF       = 7_055_000 * 128 ' (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
     NTSC_XF         = ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
 
     PAL             = 2
@@ -2149,10 +2157,8 @@ CON ' CVBS constants
     'PAL_CC          = 283.75                                ' color cycles per line
     'PAL_X_TOTAL     = 448
 
-    PAL_DOTF        = 7_000_000 * 128                       ' ZX dot frequency
+    PAL_DOTF        = 7_000_000 * 128 ' (PAL_X_TOTAL * PAL_CF * 128) / PAL_CC                     ' ZX dot frequency
     PAL_XF          = ((PAL_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
-
-    CLK_I           = 31 - encod _CLKFREQ
 
 DAT             ' I/O Hub-exec code
                 orgh
