@@ -7,7 +7,9 @@
 }
 CON
 
-    VIDEO         = PAL ' video mode VGA, NTSC or PAL
+    _CLKFREQ      = 240_000_000
+
+    VIDEO         = VGA ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
     CVBS_PIN      = 32+7*3 addpins 1 ' 53+54
 
@@ -16,8 +18,6 @@ CON
 
     ZX_MIC        = 0   ' OUT
     ZX_EAR        = 1   ' IN
-
-    _CLKFREQ      = VIDEO == PAL ? 210_000_000 : 240_000_000
 
 DAT             ' Startup
                 org     $000
@@ -30,11 +30,9 @@ sys_reset
                 cogid   #2      wc          ' check if user reset
                 cogstop #2
 
-                mov     t0, #0
                 mov     pa, ##48*1024/4
                 mov     ptra, ##@z80_4000   ' initialize memory
-.l1     if_nc   getrnd  t0                  '   with random values if power on
-                wrlong  t0, ptra++          '   0 if user reset
+.l1             wrlong  #0, ptra++          '   0 if user reset
                 djnz    pa, #.l1
 
         if_nc   coginit #1, ##@video_driver ' start video on cog #1
@@ -456,11 +454,15 @@ zk_cogbase
                 setq2   #511
                 rdlong  0, ptrb
 
+                waitatn ' sync with video
+                waitatn ' |
+
                 getct   zk_lastwait
 
 zk_nextop
                 call    #\zx_ula_advance
                 mov     ula_state_done, #0
+                subs    ula_cnt, zk_cycles
 
                 mul     zk_cycles, zk_cycletime
                 add     zk_cycles, zk_fractime
@@ -470,31 +472,26 @@ zk_nextop
                 addct1  zk_lastwait, zk_cycles
                 waitct1
 
-'                mul     zk_cycles, zk_cycletime
-'                add     zk_cycles, zk_lastwait
-'                getct   pa
-'                sub     zk_cycles, pa
-'                cmps    zk_cycles, #1   wc
-'        if_ae   waitx   zk_cycles
-'                getct   zk_lastwait
+                mov     zk_cycles, #0
 
-                mov     zk_cycles, #1
+'                testb   zk_nmi_ctl, #8      wc  ' C = old NMI
+'                rdlong  zk_nmi_ctl, #@zk_nmi_mem
+'                testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
+'        if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
-                testb   zk_nmi_ctl, #8      wc  ' C = old NMI
-                rdlong  zk_nmi_ctl, #@zk_nmi_mem
-                testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
-        if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
+                cmps    ula_cnt, #0         wcz ' simulated interrupt
+        if_a    jmp     #.skip
+                add     ula_cnt, ##(VIDEO == PAL ? (224*312) : (224*264))
 
                 testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
-                rdlong  zk_irq_ctl, #@zk_irq_mem
-                testb   zk_irq_ctl, #8            andz ' Z = EI and IRQ
-        if_x1   mov     ula_state, ##0-(VIDEO == PAL ? (224*64) : (224*40))
+        if_x1   mov     ula_state, ##-(VIDEO == PAL ? (224*64) : (224*40) - 1)
         if_x1   mov     ula_blocks, #3
         if_x1   mov     ula_rows, #8
         if_x1   mov     ula_scans, #8
         if_x1   mov     ptra, ##@z80_4000
         if_x1   mov     ptrb, ##@z80_4000+32*192
         if_x1   jmp     #\zk_doirq                     ' jump if Z=1
+.skip
 
                 mov     zk_temphl, zk_hl
                 mov     zk_hlptr, #zk_hl
@@ -503,6 +500,7 @@ zk_nextop
                 incmod  zk_refresh, #127
 
                 call    #zk_readcode
+                add     zk_cycles, #1
 zk_run_op       mov     zk_opcode, zk_tmp8
                 'debug(uhex_byte(zk_opcode))
                 rdlut   zk_opimpl, zk_opcode
@@ -828,7 +826,7 @@ zk_irqon
         _ret_   or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
 
 zk_doirq
-                add     zk_cycles,#1 '2+10
+                add     zk_cycles,#1
                 test    zk_irqenable,#(1<<ZK_IM2_BIT)  wz
         if_z    skipf   ##%0_1_1111_0_000000_1111
         if_nz   skipf   ##%0_1_0000_1_000000_11
@@ -836,7 +834,7 @@ zk_doirq
 zk_donmi
                 skipf   ##%0_0_1111_1_000000
 
-                add     zk_cycles,#4
+                add     zk_cycles,#5
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
         if_nz   incmod  zk_pc,zk_ffffh
                 andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
@@ -934,6 +932,22 @@ zk_setrpa       jmprel  pa
                 altd    zk_hlptr
         _ret_   mov     0-0,zk_temphl
 
+zk_regmove
+                push    #zk_setry
+                jmp     #\zk_getrz
+
+zk_loadimm8
+                push    #zk_setry
+                jmp     #\zk_readcode
+
+zk_ex_af        '' EX AF,AF'
+                xor     zk_accu,zk_altaccu
+                xor     zk_altaccu,zk_accu
+                xor     zk_accu,zk_altaccu
+                xor     zk_flags,zk_altflags
+                xor     zk_altflags,zk_flags
+        _ret_   xor     zk_flags,zk_altflags
+
 zk_scf
                 modc    _clr wc
 zk_ccf
@@ -954,18 +968,6 @@ zk_a_and_ptr    '' A and (BC)/(DE) ops
         _ret_   mov     zk_accu,zk_tmp8
                 mov     zk_tmp8,zk_accu
                 jmp     #\zk_write8
-
-zk_regmove
-                push    #zk_setry
-                jmp     #\zk_getrz
-
-zk_loadimm8
-                push    #zk_setry
-                jmp     #\zk_readcode
-
-zk_halt
-                or      zk_irqenable,#(1<<ZK_HALT_BIT)
-        _ret_   decmod  zk_pc,zk_ffffh
 
 zk_push16
                 add     zk_cycles,#1
@@ -998,17 +1000,12 @@ zk_readcode
                 'setword zk_pc,#0,#1
                 ' fall through
 zk_read8
-                getbyte zk_tmp0, zk_ea, #1
-                cmp     zk_tmp0, #$40   wcz
-        if_ae   cmpr    zk_tmp0, #$7F   wcz
-        if_ae   call    #\zx_ula_advance
-        if_ae   add     zk_cycles, ula_cycles
-
-                add     zk_cycles,#3
+                call    #\ula_contend_ram
                 getword pa, zk_ea, #0
                 add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
                 ret     wcz
+
 
 zk_readcode16
                 call    #zk_readcode
@@ -1033,38 +1030,26 @@ zk_write8
                 cmp     pa, ##$4000     wcz
         if_ae   add     pa, zk_ram
         if_ae   wrbyte  zk_tmp8, pa
-
-                add     zk_cycles, #1
-
-                getbyte zk_tmp0, zk_ea, #1
-                cmp     zk_tmp0, #$40   wcz
-        if_ae   cmpr    zk_tmp0, #$7F   wcz
-        if_ae   call    #\zx_ula_advance
-        if_ae   add     zk_cycles, ula_cycles
-
-                add     zk_cycles, #2
-
+                call    #\ula_contend_ram
                 ret     wcz
 
 zk_portout
                 ' zk_ea   = port
                 ' zk_tmp8 = data
-                add     zk_cycles, #4
-                testbn  zk_ea, #0       wz
-        if_z    jmp     #\zx_ula_write
+                testb   zk_ea, #0       wz
+        if_x0   call    #\zx_ula_write
+                call    #\ula_contend_port
                 ret     wcz
 
 zk_portin
                 ' zk_ea   = port
                 ' zk_tmp8 = data
-                add     zk_cycles, #2
                 mov     zk_tmp8, #$FF
-                call    #\zx_ula_advance
-                add     zk_cycles, #2
+                call    #\ula_contend_port
 
-                testbn  zk_ea, #0       wz
-        if_z    add     zk_cycles, ula_cycles
-        if_z    jmp     #\zx_ula_read
+                testb   zk_ea, #0       wz
+        if_x0   add     zk_cycles, ula_cycles
+        if_x0   jmp     #\zx_ula_read
                 ret     wcz
 
 zk_ffffh        long    $FFFF
@@ -1092,7 +1077,8 @@ zk_irqenable    long    0
 
 zk_ram          long    @z80_0000
 
-ula_state       long    0
+ula_cnt         long    (VIDEO == PAL ? (224*312)+1680 : (224*264))
+ula_state       long    -(VIDEO == PAL ? (224*64)+1680 : (224*40))
 ula_state_done  long    0
 
 ula_blocks      long    0
@@ -1510,26 +1496,7 @@ zk_cmath16
         _ret_   mov     0-0,zk_temphl
 
 zk_daa
-                mov     zk_optmp0,#$00
-                mov     zk_tmp8,zk_accu
-                cmpr    zk_tmp8,#$99 wc
-                testb   zk_flags,#ZK_CARRY_BIT orc
-        if_c    add     zk_optmp0,#$60
-                bitc    zk_flags,#ZK_CARRY_BIT
-                getnib  zk_optmp1,zk_tmp8,#0
-                cmpr    zk_optmp1,#$9 wc
-                testb   zk_flags,#ZK_HALF_BIT orc
-        if_c    add     zk_optmp0,#$06
-                testb   zk_flags,#ZK_NMODE_BIT wc
-                sumc    zk_accu,zk_optmp0
-                and     zk_accu,#255 wcz
-                bitz    zk_flags,#ZK_ZERO_BIT
-                bitnc   zk_flags,#ZK_OVER_BIT ' Parity?
-                testb   zk_accu,#4 wc
-                testb   zk_tmp8,#4 xorc
-                bitc    zk_flags,#ZK_HALF_BIT
-                setq    #ZK_SIGNXYMASK
-        _ret_   muxq    zk_flags,zk_accu
+                jmp     #\zk_daa_hub
 
 zk_immlogic
                 call    #\zk_readcode
@@ -1613,14 +1580,6 @@ zk_ex_dehl      '' EX DE,HL
         _ret_   mov     zk_hl,zk_optmp0
 
 
-zk_ex_af        '' EX AF,AF'
-                xor     zk_accu,zk_altaccu
-                xor     zk_altaccu,zk_accu
-                xor     zk_accu,zk_altaccu
-                xor     zk_flags,zk_altflags
-                xor     zk_altflags,zk_flags
-        _ret_   xor     zk_flags,zk_altflags
-
 zk_ex_hlstk     '' EX (SP),HL
                 add     zk_cycles,#3 ' Should be 19. 19 - 4 - 4*3 = 3
                 mov     zk_ea,zk_sp
@@ -1645,6 +1604,38 @@ zk_ld_abs16     '' LD HL,(imm16) and LD (imm16),HL
         _ret_   setword zk_debc,zk_tmp16,#1 ' set DE
                 altd    zk_hlptr
         _ret_   mov     zk_sp,zk_tmp16
+
+zk_halt
+                or      zk_irqenable,#(1<<ZK_HALT_BIT)
+        _ret_   decmod  zk_pc,zk_ffffh
+
+ula_contend_port
+                skipf   #%100000
+ula_contend_ram
+                testb   zk_ea, #15      wc  ' C=A15   PORT/RAM
+                testb   zk_ea, #14      wz  ' Z=A14   PORT/RAM
+        if_01   call    #\zx_ula_advance            ' PORT/RAM
+        if_01   add     zk_cycles, ula_cycles       ' PORT/RAM
+                add     zk_cycles, #1               ' PORT/RAM
+        _ret_   add     zk_cycles, #2               '      RAM
+
+                testb   zk_ea, #0       wz          ' PORT
+                call    #\zx_ula_advance
+        if_x0   add     zk_cycles, ula_cycles
+        if_x0   add     zk_cycles, #3
+        if_x0   ret
+
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #14      wz  ' Z=A14
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+        _ret_   add     zk_cycles, #1
 
 zx_ula_advance
                 sub     ula_state, ula_state_done
@@ -1693,6 +1684,31 @@ zx_ula_advance
                 ret     wcz
 
                 fit     $400
+
+                orgh
+
+zk_daa_hub
+                mov     zk_optmp0,#$00
+                mov     zk_tmp8,zk_accu
+                cmpr    zk_tmp8,#$99 wc
+                testb   zk_flags,#ZK_CARRY_BIT orc
+        if_c    add     zk_optmp0,#$60
+                bitc    zk_flags,#ZK_CARRY_BIT
+                getnib  zk_optmp1,zk_tmp8,#0
+                cmpr    zk_optmp1,#$9 wc
+                testb   zk_flags,#ZK_HALF_BIT orc
+        if_c    add     zk_optmp0,#$06
+                testb   zk_flags,#ZK_NMODE_BIT wc
+                sumc    zk_accu,zk_optmp0
+                and     zk_accu,#255 wcz
+                bitz    zk_flags,#ZK_ZERO_BIT
+                bitnc   zk_flags,#ZK_OVER_BIT ' Parity?
+                testb   zk_accu,#4 wc
+                testb   zk_tmp8,#4 xorc
+                bitc    zk_flags,#ZK_HALF_BIT
+                setq    #ZK_SIGNXYMASK
+        _ret_   muxq    zk_flags,zk_accu
+
 
 CON ' ZiKore Z80 constants
 
@@ -1780,9 +1796,7 @@ vga_field       mov     ptra, zx_screen
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
 
-                wrlong  #%1_11111110, #@zk_irq_mem       ' IRQ
-                waitx   ##round(float(_CLKFREQ) / float(ZK_CLOCK)) * 32
-                wrlong  #%0_11111110, #@zk_irq_mem
+                cogatn  #1 << 2
 
                 callpa  #33, #.blank        ' front porch
 
@@ -1944,12 +1958,9 @@ cvbs_field
 
                 callpa  #6, #.vhigh                      ' initial high vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
-
-                wrlong  #%1_11111110, #@zk_irq_mem       ' IRQ
-                waitx   ##round(float(_CLKFREQ) / float(ZK_CLOCK)) * 32
-                wrlong  #%0_11111110, #@zk_irq_mem
-
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
+
+                cogatn  #1 << 2
 
                 callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
 
