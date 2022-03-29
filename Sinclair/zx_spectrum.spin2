@@ -468,10 +468,9 @@ zk_nextop
                 subs    ula_cnt, zk_cycles
 
                 mul     zk_cycles, zk_cycletime
-                add     zk_cycles, zk_fractime
-                getbyte zk_fractime, zk_cycles, #0
-                shr     zk_cycles, #8
-
+'                add     zk_cycles, zk_fractime
+'                getbyte zk_fractime, zk_cycles, #0
+'                shr     zk_cycles, #8
                 addct1  zk_lastwait, zk_cycles
                 waitct1
 
@@ -485,6 +484,8 @@ zk_nextop
                 cmps    ula_cnt, #0         wcz ' simulated interrupt
         if_a    jmp     #.skip
                 add     ula_cnt, ##(VIDEO == PAL ? (224*312) : (224*264))
+                waitatn
+                getct   zk_lastwait
 
                 testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
 '                rdlong  zk_irq_ctl, #@zk_irq_mem
@@ -1093,8 +1094,8 @@ ula_col         long    0
 
 ula_cycles      long    0
 
-zk_cycletime    long    round(float(_CLKFREQ) / float(ZK_CLOCK) * 256.0)
-zk_fractime     long    0
+zk_cycletime    long    _CLKFREQ / ZK_CLOCK ' round(float(_CLKFREQ) / float(ZK_CLOCK) * 256.0)
+'zk_fractime     long    0
 
 zk_lastwait     res     1
 
