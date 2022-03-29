@@ -456,10 +456,6 @@ zk_cogbase
 
                 waitatn ' sync with video
                 waitatn ' |
-'.l1             rdlong  zk_irq_ctl, #@zk_irq_mem
-'                testb   zk_irq_ctl, #8              wz
-'        if_x0   jmp     #.l1
-
                 getct   zk_lastwait
 
 zk_nextop
@@ -468,9 +464,6 @@ zk_nextop
                 subs    ula_cnt, zk_cycles
 
                 mul     zk_cycles, zk_cycletime
-'                add     zk_cycles, zk_fractime
-'                getbyte zk_fractime, zk_cycles, #0
-'                shr     zk_cycles, #8
                 addct1  zk_lastwait, zk_cycles
                 waitct1
 
@@ -484,16 +477,10 @@ zk_nextop
                 cmps    ula_cnt, #0         wcz ' simulated interrupt
         if_a    jmp     #.skip
                 add     ula_cnt, ##(VIDEO == PAL ? (224*312) : (224*264))
-                waitatn
-                getct   zk_lastwait
+                waitatn                         ' we are slightly faster than video, wait
+                getct   zk_lastwait             ' update clock reference
 
                 testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
-'                rdlong  zk_irq_ctl, #@zk_irq_mem
-'                testb   zk_irq_ctl, #8            andz ' Z = EI and IRQ
-'        if_x1   mov     ula_state, ##-(VIDEO == PAL ? (224*64) : (224*40)) + 1
-'        if_x1   mov     ula_blocks, #3
-'        if_x1   mov     ula_rows, #8
-'        if_x1   mov     ula_scans, #8
         if_x1   mov     ptra, ##@z80_4000
         if_x1   mov     ptrb, ##@z80_4000+32*192
         if_x1   jmp     #\zk_doirq                     ' jump if Z=1
@@ -1095,7 +1082,6 @@ ula_col         long    0
 ula_cycles      long    0
 
 zk_cycletime    long    _CLKFREQ / ZK_CLOCK ' round(float(_CLKFREQ) / float(ZK_CLOCK) * 256.0)
-'zk_fractime     long    0
 
 zk_lastwait     res     1
 
@@ -1111,9 +1097,6 @@ zk_optmp0       res     1
 zk_optmp1       res     1
 
 zk_tmp0         res     1
-'zk_memtmp1      res     1
-'zk_memtmp2      res     1
-'zk_memtmp3      res     1
 zk_tmp8         res     1 ' memory read/write value
 zk_ea           res     1 ' remapped EA
 zk_irq_ctl      res     1
@@ -1803,10 +1786,7 @@ vga_field       mov     ptra, zx_screen
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
 
-                cogatn  #1 << 2
-'                wrlong  #%1_11111110, #@zk_irq_mem       ' IRQ
-'                waitx   ##round(float(_CLKFREQ) / float(ZK_CLOCK)) * 32
-'                wrlong  #%0_11111110, #@zk_irq_mem
+                cogatn  #1 << 2             ' vsync atn to Z80 cog (#2)
 
                 callpa  #33, #.blank        ' front porch
 
@@ -1970,10 +1950,7 @@ cvbs_field
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
 
-                cogatn  #1 << 2
-'                wrlong  #%1_11111110, #@zk_irq_mem       ' IRQ
-'                waitx   ##round(float(_CLKFREQ) / float(ZK_CLOCK)) * 32
-'                wrlong  #%0_11111110, #@zk_irq_mem
+                cogatn  #1 << 2             ' vsync atn to Z80 cog (#2)
 
                 callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
 
