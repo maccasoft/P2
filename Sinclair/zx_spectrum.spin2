@@ -9,9 +9,9 @@ CON
 
     _CLKFREQ      = 240_000_000
 
-    VIDEO         = VGA ' video mode VGA, NTSC or PAL
+    VIDEO         = PAL ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
-    CVBS_PIN      = 32+7*3 addpins 1 ' 53+54
+    CVBS_PIN      = 53 addpins 1 ' 53=CVBS/Y, 54=C
 
     PS2_DATA_PIN  = 25
     PS2_CLOCK_PIN = 24
@@ -474,17 +474,17 @@ zk_nextop
 
                 mov     zk_cycles, #0
 
-'                testb   zk_nmi_ctl, #8      wc  ' C = old NMI
-'                rdlong  zk_nmi_ctl, #@zk_nmi_mem
-'                testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
-'        if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
+                testb   zk_nmi_ctl, #8      wc  ' C = old NMI
+                rdlong  zk_nmi_ctl, #@zk_nmi_mem
+                testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
+        if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
                 cmps    ula_cnt, #0         wcz ' simulated interrupt
         if_a    jmp     #.skip
                 add     ula_cnt, ##(VIDEO == PAL ? (224*312) : (224*264))
 
                 testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
-        if_x1   mov     ula_state, ##-(VIDEO == PAL ? (224*64) : (224*40) - 1)
+        if_x1   mov     ula_state, ##-(VIDEO == PAL ? (224*64) : (224*40)) + 1
         if_x1   mov     ula_blocks, #3
         if_x1   mov     ula_rows, #8
         if_x1   mov     ula_scans, #8
@@ -1077,8 +1077,8 @@ zk_irqenable    long    0
 
 zk_ram          long    @z80_0000
 
-ula_cnt         long    (VIDEO == PAL ? (224*312)+1680 : (224*264))
-ula_state       long    -(VIDEO == PAL ? (224*64)+1680 : (224*40))
+ula_cnt         long    (VIDEO == PAL ? (224*312) : (224*264))
+ula_state       long    -(VIDEO == PAL ? (224*64) : (224*40))
 ula_state_done  long    0
 
 ula_blocks      long    0
@@ -1667,6 +1667,7 @@ zx_ula_advance
         if_11   sub     ptra, ##32*192
         if_11   sub     ptrb, ##32*24
         if_11   mov     ula_blocks, #3
+        if_11   sub     ula_state, ##(VIDEO == PAL ? (224*56) : (224*32)) + 1
 
                 mov     ula_cycles, #6
                 sub     ula_cycles, ula_state   wc
