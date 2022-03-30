@@ -1,8 +1,8 @@
 {
-    ZX Spectrum Emulator
+    ZX Spectrum 128K Emulator
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
 
-    Based on ZiKore Z80 Emulator by Ada Gottensträter
+    Based on ZiKore Z80 and AY-3-8912 emulators by Ada Gottensträter
     with modifications by Marco Maccaferri
 }
 CON
@@ -15,6 +15,9 @@ CON
 
     PS2_DATA_PIN  = 25
     PS2_CLOCK_PIN = 24
+
+    AUDIO_LEFT_PIN  = 48
+    AUDIO_RIGHT_PIN = 49
 
     ZX_MIC        = 0   ' OUT
     ZX_EAR        = 1   ' IN
@@ -30,10 +33,15 @@ sys_reset
                 cogid   #2      wc          ' check if user reset
                 cogstop #2
 
+                mov     pa, #4
+                mov     ptra, #@ay_registers ' initialize memory
+.l1             wrlong  #0, ptra++
+                djnz    pa, #.l1
+
                 mov     pa, ##128*1024/4
                 mov     ptra, ##@zx_ram     ' initialize memory
-.l1             wrlong  #0, ptra++          '   0 if user reset
-                djnz    pa, #.l1
+.l2             wrlong  #0, ptra++
+                djnz    pa, #.l2
 
                 wrlong  ##@zx_ram + ($4000 * 5), #@zx_screen
                 wrlong  ##@zx_ram + ($4000 * 5) + (32 * 192), #@zx_attribute
@@ -43,6 +51,9 @@ sys_reset
         if_nc   waitx   ##_CLKFREQ          ' delay to allow monitor to settle
 
                 coginit #2, ##@zk_cogbase   ' start Z80 on cog #2
+
+                setq    #@ay_registers
+                coginit #3, ##@ay_emu       ' start AY-3-8912 on cog #3
 
                 jmp     #\ps2_driver        ' cog #0 (this) PS/2 keyboard
 
@@ -67,6 +78,8 @@ zx_keys         byte    $FF[8]              ' 000  V  C  X  Z  CS
                                             ' 101  Y  U  I  O  P
                                             ' 110  H  J  K  L  ENTER
                                             ' 111  B  N  M SS  SPACE
+
+ay_registers    byte    $00[16]
 
 '
 ' PS/2 Keyboard river
@@ -1018,6 +1031,9 @@ zk_portout
                 testb   zk_ea, #15      wc
                 testb   zk_ea, #1       wz
         if_00   call    #\zx_ula_map_write
+                testb   zk_ea, #14      wc
+        if_10   call    #\zx_ay_reg_select
+        if_00   call    #\zx_ay_reg_write
                 call    #\ula_contend_port
                 ret     wcz
 
@@ -1030,6 +1046,9 @@ zk_portin
                 testb   zk_ea, #0       wz
         if_x0   add     zk_cycles, ula_cycles
         if_x0   jmp     #\zx_ula_read
+                testb   zk_ea, #14      wc
+                testb   zk_ea, #1       wz
+        if_10   jmp     #\zx_ay_reg_read
                 ret     wcz
 
 zk_ffffh        long    $FFFF
@@ -1059,6 +1078,7 @@ zk_mem_0000     long    @zx_rom0
 zk_mem_4000     long    @zx_ram + $4000 * 5 ' bank 5
 zk_mem_8000     long    @zx_ram + $4000 * 2 ' bank 2
 zk_mem_C000     long    @zx_ram + $4000 * 0 ' bank 0
+zx_ay_reg       long    0
 
 ula_cnt         long    (VIDEO == PAL ? (224*312) : (224*264))
 ula_state       long    -(VIDEO == PAL ? (224*64) : (224*40))+1
@@ -1728,7 +1748,7 @@ zk_optable      '' Opcode table
 
 CON ' ZiKore Z80 constants
 
-    ZK_CLOCK      = VIDEO == PAL ? 3_500_000 : 3_527_500
+    ZK_CLOCK      = VIDEO == PAL ? 3_546_900 : 3_527_500
     ZK_HLOP       = 1 << 10
 
     ZK_CARRY_BIT  = 0
@@ -2185,6 +2205,266 @@ CON ' CVBS constants
     PAL_DOTF        = 7_000_000 * 128 ' (PAL_X_TOTAL * PAL_CF * 128) / PAL_CC                     ' ZX dot frequency
     PAL_XF          = ((PAL_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
 
+DAT ' AY-3-8912 cog code
+                org     $000
+
+ay_emu
+                fltl    leftp
+                fltl    rightp
+                wrpin   r1,leftp
+                wrpin   r1,rightp
+                wxpin   sampleRate,leftp
+                wxpin   sampleRate,rightp
+                wypin   dac_center,leftp
+                wypin   dac_center,rightp
+                drvh    leftp
+                drvh    rightp
+
+' Read all AY registers from hub memory and convert
+' them to more convenient representations.
+mainLoop
+getRegisters
+                setq    #4-1
+                rdlong  temp1,ptra
+                getword frequency1, temp1,#0                ' reg 0+1
+                shl     frequency1, #20
+                getword frequency2, temp1,#1                ' reg 2+3
+                shl     frequency2, #20
+                getword frequency3, temp2,#0                ' reg 4+5
+                shl     frequency3, #20
+                getbyte noisePeriod, temp2,#2               ' reg 6
+                and     noisePeriod, #$1f
+                fge     noisePeriod, #2
+                shl     noisePeriod, #20
+                getbyte enableRegister, temp2,#3            ' reg 7
+                setd    oscValues, enableRegister
+                getbyte amplitude1, temp3,#0                ' reg 8
+                getbyte amplitude2, temp3,#1                ' reg 9
+                getbyte amplitude3, temp3,#2                ' reg 10
+                getbyte envelopePeriod, temp4,#0            ' reg 12
+                rolbyte envelopePeriod, temp3,#3            ' reg 11
+                shl     envelopePeriod, #16             wz
+        if_z    mov     envelopePeriod, half_period         ' 0 == half the period of 1
+                getbyte envelopeShape, temp4,#1             ' reg 13
+
+' Calculate AY samples channel 1-3 and store in out1-out3
+                mov      mixOut, dac_center                  '  DC offset
+
+'        Envelope shaping -> envelopeAmplitude
+Envelope      sub      envCounter, envSubValue           wc ' Handle envelope incrementation
+  if_c        add      envCounter, envelopePeriod
+  if_c        add      envelopeValue, envelopeInc
+              fle      envCounter, envelopePeriod
+
+              test     envelopeShape, #16                wz ' Handle envelope "reset bit" ( Extra bit added by Ahle2 )
+  if_z        neg      envelopeValue, #0
+  if_z        mov      envelopeInc, #1
+  if_z        mov      envCounter, envelopePeriod
+  if_z        or       envelopeShape, #16
+  if_z        wrbyte   envelopeShape, ptra[13/1]            '<-IMPORTANT, sets bit 5 ("reset bit") of envelope shape register in hub ram
+
+              test     envelopeShape, #8                 wc ' Handle envelope continue = 0
+              test     envelopeShape, #4                 wz
+ if_nc_and_z  mov      envelopeShape, #9
+ if_nc_and_nz mov      envelopeShape, #15
+
+              test     envelopeShape, #2                 wz ' Sets the envelope hold level
+              muxz     envHoldLevel, #15                    '
+
+              test     envelopeValue, #16                wz ' Check if > 15
+              test     envelopeShape, #1                 wc ' Check hold bit
+  if_nz_and_c mov      envelopeInc, #0                      ' Hold envelope
+  if_nz_and_c mov      envelopeValue, envHoldLevel          '
+
+  if_nz       test     envelopeShape, #2                 wc ' Check and handle envelope alternation
+  if_nz_and_c neg      envelopeInc, envelopeInc
+  if_nz_and_c add      envelopeValue, envelopeInc
+
+              mov      envelopeAmplitude, envelopeValue
+              test     envelopeShape, #4                 wc ' Check and handle envelope invertion (attack)
+  if_nc       xor      envelopeAmplitude, #15               '(Move Value or ~Value to envelopeAmplitude)
+
+
+'     Waveform shaping noise -> bit 3 of oscValues
+Noise1        sub      phaseAccumulatorN, noiseSubValue  wc ' Noise generator
+  if_nc       jmp      #Env1
+              add      phaseAccumulatorN, noisePeriod
+              test     noiseValue, noiseTap              wc
+              muxc     noiseValue, noiseMSB
+              shr      noiseValue, #1                    wc
+  if_c        xor      oscValues, #8
+
+
+'            Waveform shaping channel 1 -> out1
+Env1          test     amplitude1, #16                   wz ' Selects envelope or fixed amplitude
+  if_nz       mov      amplitude1, envelopeAmplitude        ' depending on bit 5 of amplitude register 1
+
+Square1       cmp      frequency1, freqRef               wc
+  if_nc       sub      phaseAccumulator1, oscSubValue    wc ' Square wave generator
+  if_c        add      phaseAccumulator1, frequency1        ' channel 1
+  if_c        xor      oscValues, #1
+
+              test     oscValues, mask513                wz ' Handles mixing of channel 1
+  if_nz       test     oscValues, mask4104               wz
+              getnib   arg1, amplitude1,#0
+              alts     arg1,#amplitudeTable
+              sumnz    mixOut, 0-0                          ' Tone on/off, Noise on/off
+  'if_z       mov      out1, r1                             ' out1 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
+
+'            Waveform shaping channel 2 -> out2
+
+Env2          test     amplitude2, #16                   wz ' Selects envelope or fixed amplitude
+  if_nz       mov      amplitude2, envelopeAmplitude        ' depending on bit 5 of amplitude register 2
+
+Square2       cmp      frequency2, freqRef               wc
+  if_nc       sub      phaseAccumulator2, oscSubValue    wc ' Square wave generator
+  if_c        add      phaseAccumulator2, frequency2        ' channel 2
+  if_c        xor      oscValues, #2
+
+              test     oscValues, mask1026               wz ' Handles mixing of channel 2
+  if_nz       test     oscValues, mask8200               wz
+              getnib   arg1, amplitude2,#0
+              alts     arg1,#amplitudeTable
+              sumnz    mixOut, 0-0                          ' Tone on/off, Noise on/off
+  'if_z       mov      out2, r1                             ' out2 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
+
+
+'            Waveform shaping channel 3 -> out3
+Env3          test     amplitude3, #16                   wz ' Selects envelope or fixed amplitude
+  if_nz       mov      amplitude3, envelopeAmplitude        ' depending on bit 5 of amplitude register 3
+              mov      arg1, amplitude3
+
+Square3       cmp      frequency3, freqRef               wc
+  if_nc       sub      phaseAccumulator3, oscSubValue    wc ' Square wave generator
+  if_c        add      phaseAccumulator3, frequency3        ' channel 3
+  if_c        xor      oscValues, #4
+
+              test     oscValues, mask2052               wz ' Handles mixing of channel 3
+  if_nz       test     oscValues, mask16392              wz
+              getnib   arg1, amplitude3,#0
+              alts     arg1,#amplitudeTable
+              sumnz    mixOut, 0-0                          ' Tone on/off, Noise on/off
+  'if_z       mov      out3, r1                             ' out3 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
+
+'      Mix channels and update FRQA/FRQB PWM-values
+mixer
+              'testp   rightp   wc
+              'drvc #38 ' light LED if too slow
+              testp    rightp   wc
+  if_nc       jmp #$-1
+              wypin    mixOut,leftp
+              wypin    mixOut,rightp
+              jmp      #mainLoop
+
+'    Variables, tables, masks and reference values
+amplitudeTable      long trunc(AMPLITUDE_LEVEL_0)
+                    long trunc(AMPLITUDE_LEVEL_1)
+                    long trunc(AMPLITUDE_LEVEL_2)
+                    long trunc(AMPLITUDE_LEVEL_3)
+                    long trunc(AMPLITUDE_LEVEL_4)
+                    long trunc(AMPLITUDE_LEVEL_5)
+                    long trunc(AMPLITUDE_LEVEL_6)
+                    long trunc(AMPLITUDE_LEVEL_7)
+                    long trunc(AMPLITUDE_LEVEL_8)
+                    long trunc(AMPLITUDE_LEVEL_9)
+                    long trunc(AMPLITUDE_LEVEL_A)
+                    long trunc(AMPLITUDE_LEVEL_B)
+                    long trunc(AMPLITUDE_LEVEL_C)
+                    long trunc(AMPLITUDE_LEVEL_D)
+                    long trunc(AMPLITUDE_LEVEL_E)
+                    long trunc(AMPLITUDE_LEVEL_F)
+
+'Masks and reference values
+mask513             long 513
+mask1026            long 1026
+mask2052            long 2052
+mask4104            long 4104
+mask8200            long 8200
+mask16392           long 16392
+mask32bit           long $ffffffff
+mask16bit           long $ffff
+half_period         long $00008000
+val31bit            long $80000000
+noiseMSB            long 1 << NOISE_MSB
+noiseTap            long NOISE_TAP
+sampleRate          long _CLKFREQ / SAMPLE_RATE
+freqRef             long 10<<20
+dac_center          long $7F80
+leftp               long AUDIO_LEFT_PIN
+rightp              long AUDIO_RIGHT_PIN
+
+'Setup and subroutine parameters
+arg1                long 0
+r1                  long P_DAC_75R_2V|P_OE|P_DAC_DITHER_PWM
+
+'AY variables
+noiseValue          long $ffff
+envCounter          long 1
+envSubValue         long ENV_CORR
+oscSubValue         long OSC_CORR
+noiseSubValue       long NOISE_CORR
+envelopeValue       long 0
+envelopeInc         long 1
+envHoldLevel        res  1
+oscValues           res  1
+amplitude1          res  1
+amplitude2          res  1
+amplitude3          res  1
+envelopeAmplitude   res  1
+enableRegister      res  1
+envelopeShape       res  1
+frequency1          res  1
+frequency2          res  1
+frequency3          res  1
+envelopePeriod      res  1
+noisePeriod         res  1
+phaseAccumulatorN   res  1
+phaseAccumulator1   res  1
+phaseAccumulator2   res  1
+phaseAccumulator3   res  1
+mixOut              res  1
+temp1               res  1
+temp2               res  1
+temp3               res  1
+temp4               res  1
+                    fit 496
+
+CON ' AY-3-8912 constants
+
+    ' WARNING !!
+    ' Don't alter the constants below unless you know what you are doing
+    '-------------------------------------------------------------------
+    PSG_FREQ    = 1_773_400.0              ' Clock frequency input on the emulated AY chip
+    SAMPLE_RATE = round(PSG_FREQ/ 16.0)    ' Sample rate of AYcog (PSG_FREQ/ 16.0 is the HW-accurate value)
+
+    OSC_CORR    = trunc(1.05 * PSG_FREQ * ((PSG_FREQ/ 16.0)/float(SAMPLE_RATE))) ' Relative oscillator frequency (Where does the 1.05 come from?)
+    NOISE_CORR  = OSC_CORR>>1              ' Relative noise frequency
+    ENV_CORR    = OSC_CORR>>5              ' Relative envelope timing
+
+    NOISE_TAP = %1001                      ' LFSR noise constants
+    NOISE_MSB = 17                         '
+
+    VOLUME_CORRECTION = 0.7                ' Volume correction value
+    MAX_AMPLITUDE       = float($7F7F / 4) ' maxDACvalue / numberOfChannels (this makes room for maximum "swing" on all channels)
+    AMPLITUDE_DAMP_FACTOR = 0.75           ' The damp factor between each volume step
+
+    AMPLITUDE_LEVEL_F = MAX_AMPLITUDE     * VOLUME_CORRECTION
+    AMPLITUDE_LEVEL_E = AMPLITUDE_LEVEL_F * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_D = AMPLITUDE_LEVEL_E * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_C = AMPLITUDE_LEVEL_D * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_B = AMPLITUDE_LEVEL_C * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_A = AMPLITUDE_LEVEL_B * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_9 = AMPLITUDE_LEVEL_A * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_8 = AMPLITUDE_LEVEL_9 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_7 = AMPLITUDE_LEVEL_8 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_6 = AMPLITUDE_LEVEL_7 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_5 = AMPLITUDE_LEVEL_6 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_4 = AMPLITUDE_LEVEL_5 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_3 = AMPLITUDE_LEVEL_4 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_2 = AMPLITUDE_LEVEL_3 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_1 = AMPLITUDE_LEVEL_2 * AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_0 = 0.0
+
 DAT             ' I/O Hub-exec code
                 orgh
 
@@ -2207,7 +2487,7 @@ zx_ula_read
 
 zx_ula_map_write
                 rdbyte  zk_tmp0, #@zx_map
-                testb   zk_tmp0, #5     wz  ' bit 5 = 1, no firther changes allowed
+                testb   zk_tmp0, #5     wz  ' bit 5 = 1, no further changes allowed
         if_01   ret     wcz
                 wrbyte  zk_tmp8, #@zx_map
 
@@ -2226,6 +2506,20 @@ zx_ula_map_write
                 and     zk_mem_C000, #%00000_111 ' bit 2-0 = ram bank
                 shl     zk_mem_C000, #14
                 add     zk_mem_C000, ##@zx_ram
+                ret     wcz
+
+zx_ay_reg_select
+                getbyte zx_ay_reg, zk_tmp8, #0
+                and     zx_ay_reg, #$0F
+                add     zx_ay_reg, #@ay_registers
+                ret     wcz
+
+zx_ay_reg_write
+                wrbyte  zk_tmp8, zx_ay_reg
+                ret     wcz
+
+zx_ay_reg_read
+                rdbyte  zk_tmp8, zx_ay_reg
                 ret     wcz
 
 DAT             ' Z80 Memory Space
