@@ -494,9 +494,11 @@ zk_nextop
 
                 call    #zk_readcode
                 add     zk_cycles, #1
-zk_run_op       mov     zk_opcode, zk_tmp8
+                mov     zk_opcode, zk_tmp8
                 'debug(uhex_byte(zk_opcode))
-                rdlut   zk_opimpl, zk_opcode
+                shl     zk_tmp8, #2
+                add     zk_tmp8, ##@zk_optable
+                rdlong  zk_opimpl, zk_tmp8
                 'debug(uhex_long(zk_opimpl))
                 bitl    zk_opimpl, #10 wcz ' first instruction can't be skipped, use as flag for (HL) ops
                 push    #zk_nextop
@@ -513,7 +515,9 @@ zk_ixprefix
 
                 call    #zk_readcode
                 mov     zk_opcode, zk_tmp8
-                rdlut   zk_opimpl, zk_opcode
+                shl     zk_tmp8, #2
+                add     zk_tmp8, ##@zk_optable
+                rdlong  zk_opimpl, zk_tmp8
                 bitl    zk_opimpl, #10 wcz ' first instruction can't be skipped, use as flag for (HL) ops
         if_nc   jmp     #.nodisplace
                 ' handle index displacement
@@ -925,43 +929,6 @@ zk_setrpa       jmprel  pa
                 altd    zk_hlptr
         _ret_   mov     0-0,zk_temphl
 
-zk_regmove
-                push    #zk_setry
-                jmp     #\zk_getrz
-
-zk_loadimm8
-                push    #zk_setry
-                jmp     #\zk_readcode
-
-zk_ex_af        '' EX AF,AF'
-                xor     zk_accu,zk_altaccu
-                xor     zk_altaccu,zk_accu
-                xor     zk_accu,zk_altaccu
-                xor     zk_flags,zk_altflags
-                xor     zk_altflags,zk_flags
-        _ret_   xor     zk_flags,zk_altflags
-
-zk_scf
-                modc    _clr wc
-zk_ccf
-                testb   zk_flags,#ZK_CARRY_BIT wc
-                bitnc   zk_flags,#ZK_CARRY_BIT
-                bitc    zk_flags,#ZK_HALF_BIT
-                bitl    zk_flags,#ZK_NMODE_BIT
-                setq    #ZK_XYMASK
-        _ret_   muxq    zk_flags,zk_accu
-
-zk_ld_abs       '' LD A,(imm16) and LD (imm16),A
-                call    #\zk_readcode16
-                mov     zk_ea,zk_tmp16
-zk_a_and_ptr    '' A and (BC)/(DE) ops
-                getword zk_ea,zk_debc,#0 ' get BC
-                getword zk_ea,zk_debc,#1 ' get DE
-                call    #\zk_read8
-        _ret_   mov     zk_accu,zk_tmp8
-                mov     zk_tmp8,zk_accu
-                jmp     #\zk_write8
-
 zk_push16
                 add     zk_cycles,#1
                 sub     zk_sp,#2
@@ -998,7 +965,6 @@ zk_read8
                 add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
                 ret     wcz
-
 
 zk_readcode16
                 call    #zk_readcode
@@ -1106,8 +1072,418 @@ zk_nmi_ctl      res     1
 
 DAT             ' ZiKore Z80 LUT resident code
                 org     $200
+zk_lutbase
 
-zk_lutbase      '' Opcode table
+zk_rolla        mov     zk_tmp8,zk_accu
+zk_shiftop
+                andn    zk_flags,#(1<<ZK_HALF_BIT)|(1<<ZK_NMODE_BIT)
+
+                bitl    zk_tmp8,#7 wcz  ' left + SRA
+                bitz    zk_tmp8,#7 addbits 1 ' only SRA
+                bitl    zk_tmp8,#0 wcz  ' right
+                modc    _set wc ' only SLL
+                modc    _clr wc ' only SLA
+
+                testb   zk_flags,#ZK_CARRY_BIT wc' only RL/RR
+                bitz    zk_flags,#ZK_CARRY_BIT
+
+                rcl     zk_tmp8,#1 wz   ' left
+                bitc    zk_tmp8,#8     ' right (not SRA/SRL)
+                shr     zk_tmp8,#1 wz   ' right
+
+                setq    #ZK_XYMASK
+                setq    #ZK_SIGNXYMASK
+                muxq    zk_flags,zk_tmp8
+
+        _ret_   mov     zk_accu,zk_tmp8
+
+                bitz    zk_flags,#ZK_ZERO_BIT
+                test    zk_tmp8,#$FF wc
+        _ret_   bitnc   zk_flags,#ZK_OVER_BIT
+
+zk_cio
+                mov     zk_optmp1,zk_opcode
+                and     zk_optmp1,#7<<3
+                cmp     zk_optmp1,#6<<3 wz
+                mov     zk_tmp8,#0
+        if_nz   call    #\zk_getry
+                getword zk_ea,zk_debc,#0
+zk_immio
+                call    #\zk_readcode
+                mov     zk_ea,zk_tmp8
+                setbyte zk_ea,zk_accu,#1
+
+                mov     zk_tmp8,zk_accu
+                jmp     #\zk_portout
+
+                call    #\zk_portin
+        _ret_   mov     zk_accu,zk_tmp8
+
+                and     zk_tmp8,#$FF wcz
+                bitz    zk_flags,#ZK_ZERO_BIT
+                bitnc   zk_flags,#ZK_OVER_BIT
+                andn    zk_flags,#(1<<ZK_HALF_BIT)|(1<<ZK_NMODE_BIT)
+                setq    #ZK_SIGNXYMASK
+                muxq    zk_flags,zk_tmp8
+
+                cmp     zk_optmp1,#6<<3 wz
+        if_z    ret
+                jmp     #\zk_setry
+
+zk_incdec8
+                call    #\zk_getry
+                mov     zk_optmp0,#1
+zk_math8
+                call    #\zk_getrz
+zk_immmath
+                call    #\zk_readcode
+                mov     zk_optmp0,zk_tmp8
+                mov     zk_tmp8,zk_accu
+
+                modc    _clr wc
+                testb   zk_flags,#ZK_CARRY_BIT wc
+
+                ' Flag helper gunk
+                mov     zk_optmp1,zk_tmp8
+
+                addx    zk_tmp8,zk_optmp0
+                bitl    zk_flags,#ZK_NMODE_BIT
+                subx    zk_tmp8,zk_optmp0
+                bith    zk_flags,#ZK_NMODE_BIT
+
+                xor     zk_optmp1,zk_tmp8
+                test    zk_tmp8,#$100 wc
+                bitc    zk_flags,#ZK_CARRY_BIT
+                and     zk_tmp8,#255 wz
+
+                setq    #ZK_SIGNXYMASK
+                muxq    zk_flags,zk_tmp8
+                ' Special nonsense for CP
+                setq    #ZK_XYMASK
+                muxq    zk_flags,zk_optmp0
+
+                mov     zk_accu,zk_tmp8
+                call    #\zk_setry
+
+                xor     zk_optmp1,zk_optmp0
+                bitz    zk_flags,#ZK_ZERO_BIT
+                testb   zk_optmp1,#4 wc
+                bitc    zk_flags,#ZK_HALF_BIT
+                test    zk_optmp1,#$180 wc
+        _ret_   bitc    zk_flags,#ZK_OVER_BIT
+
+zk_neg
+                cmp     zk_accu,#$80 wz
+                bitz    zk_flags,#ZK_OVER_BIT
+                testb   zk_accu,#4 wz
+                subr    zk_accu,#0 wc
+                bitc    zk_flags,#ZK_CARRY_BIT
+                testb   zk_accu,#4 xorz
+                bitz    zk_flags,#ZK_HALF_BIT
+                and     zk_accu,#$FF wz
+                bitz    zk_flags,#ZK_ZERO_BIT
+                bith    zk_flags,#ZK_NMODE_BIT
+                setq    #ZK_SIGNXYMASK
+        _ret_   muxq    zk_flags,zk_accu
+
+
+zk_cpl
+                xor     zk_accu,#$FF
+                or      zk_flags,#(1<<ZK_HALF_BIT)|(1<<ZK_NMODE_BIT)
+                setq    #ZK_XYMASK
+        _ret_   muxq    zk_flags,zk_accu
+
+zk_math16
+                modc    _clr wc
+zk_cmath16
+                testb   zk_flags,#ZK_CARRY_BIT wc
+
+                getword zk_tmp16,zk_debc,#0 ' get BC
+                getword zk_tmp16,zk_debc,#1 ' get DE
+                mov     zk_tmp16,zk_temphl      ' get HL/I*
+                mov     zk_tmp16,zk_sp          ' get SP
+
+                mov     zk_optmp1,zk_temphl
+                xor     zk_optmp1,zk_tmp16
+
+                addx    zk_temphl,zk_tmp16
+                bitl    zk_flags,#ZK_NMODE_BIT
+                subx    zk_temphl,zk_tmp16
+                bith    zk_flags,#ZK_NMODE_BIT
+
+                xor     zk_optmp1,zk_temphl
+                and     zk_temphl,zk_ffffh wz
+
+                bitz    zk_flags,#ZK_ZERO_BIT
+                test    zk_optmp1,zk_18000h wc
+                bitc    zk_flags,#ZK_OVER_BIT
+
+                getbyte pa,zk_temphl,#1
+                setq    #ZK_SIGNXYMASK
+                setq    #ZK_XYMASK
+                muxq    zk_flags,pa
+
+                testb   zk_optmp1,#12 wc
+                bitc    zk_flags,#ZK_HALF_BIT
+                testb   zk_optmp1,#16 wc
+                bitc    zk_flags,#ZK_CARRY_BIT
+
+                add     zk_cycles,#7
+
+                altd    zk_hlptr
+        _ret_   mov     0-0,zk_temphl
+
+zk_daa
+                mov     zk_optmp0,#$00
+                mov     zk_tmp8,zk_accu
+                cmpr    zk_tmp8,#$99 wc
+                testb   zk_flags,#ZK_CARRY_BIT orc
+        if_c    add     zk_optmp0,#$60
+                bitc    zk_flags,#ZK_CARRY_BIT
+                getnib  zk_optmp1,zk_tmp8,#0
+                cmpr    zk_optmp1,#$9 wc
+                testb   zk_flags,#ZK_HALF_BIT orc
+        if_c    add     zk_optmp0,#$06
+                testb   zk_flags,#ZK_NMODE_BIT wc
+                sumc    zk_accu,zk_optmp0
+                and     zk_accu,#255 wcz
+                bitz    zk_flags,#ZK_ZERO_BIT
+                bitnc   zk_flags,#ZK_OVER_BIT ' Parity?
+                testb   zk_accu,#4 wc
+                testb   zk_tmp8,#4 xorc
+                bitc    zk_flags,#ZK_HALF_BIT
+                setq    #ZK_SIGNXYMASK
+        _ret_   muxq    zk_flags,zk_accu
+
+zk_immlogic
+                call    #\zk_readcode
+zk_logic
+                call    #\zk_getrz
+
+                and     zk_accu,zk_tmp8 wcz
+                or      zk_accu,zk_tmp8 wcz
+                xor     zk_accu,zk_tmp8 wcz
+
+                bitnc   zk_flags,#ZK_OVER_BIT ' parity
+                bitz    zk_flags,#ZK_ZERO_BIT
+                andn    zk_flags,#(1<<ZK_CARRY_BIT)|(1<<ZK_NMODE_BIT)|(1<<ZK_HALF_BIT)
+                bith    zk_flags,#ZK_HALF_BIT ' Only for AND
+                setq    #ZK_SIGNXYMASK
+        _ret_   muxq    zk_flags,zk_accu
+
+zk_pushaf
+                getbyte zk_tmp16,zk_accu,#0
+                rolbyte zk_tmp16,zk_flags,#0
+
+zk_incdec16
+                add     zk_cycles,#2
+zk_pushbc       getword zk_tmp16,zk_debc,#0 ' get BC
+zk_pushde       getword zk_tmp16,zk_debc,#1 ' get DE
+zk_pushhl       mov     zk_tmp16,zk_temphl      ' get HL/I*
+                mov     zk_tmp16,zk_sp          ' get SP
+
+                jmp     #\zk_push16
+
+                add     zk_tmp16,#1
+                sub     zk_tmp16,#1
+
+zk_loadimm16
+                call    #\zk_readcode16
+                mov     zk_ea,zk_tmp16   ' for LDs with (imm16)
+                call    #\zk_read16     ' ^^
+                jmp     #\zk_write16     ' ^^
+zk_poppair
+                call    #\zk_pop16
+
+        _ret_   setword zk_debc,zk_tmp16,#0 ' set BC
+        _ret_   setword zk_debc,zk_tmp16,#1 ' set DE
+                altd    zk_hlptr
+        _ret_   setword zk_sp,zk_tmp16,#0   ' set SP/HL/I*
+
+                getbyte zk_accu,zk_tmp16,#1   ' set A
+        _ret_   getbyte zk_flags,zk_tmp16,#0  ' set F
+
+zk_jr           '' JR and DJNZ
+                call    #\zk_readcode
+
+                getbyte pa,zk_debc,#1
+                sub     pa,#1 wz
+                setbyte zk_debc,pa,#1
+                add     zk_cycles,#1
+
+                testb   zk_flags,#ZK_ZERO_BIT wz
+                testb   zk_flags,#ZK_CARRY_BIT wz
+
+                modz    _nz wz
+        if_z    call    #\zk_nextop
+                ' branch taken
+                add     zk_cycles,#5
+                signx   zk_tmp8,#7
+        _ret_   add     zk_pc,zk_tmp8
+
+zk_exx          '' EXX
+                xor     zk_debc,zk_altdebc
+                xor     zk_altdebc,zk_debc
+                xor     zk_debc,zk_altdebc
+                ' Note: not affected by IX/IY substitution
+                xor     zk_hl,zk_althl
+                xor     zk_althl,zk_hl
+        _ret_   xor     zk_hl,zk_althl
+
+zk_ex_dehl      '' EX DE,HL
+                ' Note: not affected by IX/IY substitution
+                getword zk_optmp0,zk_debc,#1
+                setword zk_debc,zk_hl,#1
+        _ret_   mov     zk_hl,zk_optmp0
+
+
+zk_ex_hlstk     '' EX (SP),HL
+                add     zk_cycles,#3 ' Should be 19. 19 - 4 - 4*3 = 3
+                mov     zk_ea,zk_sp
+                call    #\zk_read16
+                altd    zk_hlptr
+                mov     0-0,zk_tmp16
+                mov     zk_tmp16,zk_temphl
+                jmp     #\zk_write16
+
+zk_ld_abs16     '' LD HL,(imm16) and LD (imm16),HL
+                call    #\zk_readcode16
+                mov     zk_ea,zk_tmp16
+
+                getword zk_tmp16,zk_debc,#0 ' get BC
+                getword zk_tmp16,zk_debc,#1 ' get DE
+                mov     zk_tmp16,zk_temphl ' get HL/I*
+                mov     zk_tmp16,zk_sp ' get SP
+                jmp     #\zk_write16
+
+                call    #\zk_read16
+        _ret_   setword zk_debc,zk_tmp16,#0 ' set BC
+        _ret_   setword zk_debc,zk_tmp16,#1 ' set DE
+                altd    zk_hlptr
+        _ret_   mov     zk_sp,zk_tmp16
+
+zk_scf
+                modc    _clr wc
+zk_ccf
+                testb   zk_flags,#ZK_CARRY_BIT wc
+                bitnc   zk_flags,#ZK_CARRY_BIT
+                bitc    zk_flags,#ZK_HALF_BIT
+                bitl    zk_flags,#ZK_NMODE_BIT
+                setq    #ZK_XYMASK
+        _ret_   muxq    zk_flags,zk_accu
+
+zk_ld_abs       '' LD A,(imm16) and LD (imm16),A
+                call    #\zk_readcode16
+                mov     zk_ea,zk_tmp16
+zk_a_and_ptr    '' A and (BC)/(DE) ops
+                getword zk_ea,zk_debc,#0 ' get BC
+                getword zk_ea,zk_debc,#1 ' get DE
+                call    #\zk_read8
+        _ret_   mov     zk_accu,zk_tmp8
+                mov     zk_tmp8,zk_accu
+                jmp     #\zk_write8
+
+zk_regmove
+                push    #zk_setry
+                jmp     #\zk_getrz
+
+zk_loadimm8
+                push    #zk_setry
+                jmp     #\zk_readcode
+
+zk_ex_af        '' EX AF,AF'
+                xor     zk_accu,zk_altaccu
+                xor     zk_altaccu,zk_accu
+                xor     zk_accu,zk_altaccu
+                xor     zk_flags,zk_altflags
+                xor     zk_altflags,zk_flags
+        _ret_   xor     zk_flags,zk_altflags
+
+zk_halt
+                or      zk_irqenable,#(1<<ZK_HALT_BIT)
+        _ret_   decmod  zk_pc,zk_ffffh
+
+ula_contend_port
+                skipf   #%100000
+ula_contend_ram
+                testb   zk_ea, #15      wc  ' C=A15   PORT/RAM
+                testb   zk_ea, #14      wz  ' Z=A14   PORT/RAM
+        if_01   call    #\zx_ula_advance            ' PORT/RAM
+        if_01   add     zk_cycles, ula_cycles       ' PORT/RAM
+                add     zk_cycles, #1               ' PORT/RAM
+        _ret_   add     zk_cycles, #2               '      RAM
+
+                testb   zk_ea, #0       wz          ' PORT
+                call    #\zx_ula_advance
+        if_x0   add     zk_cycles, ula_cycles
+        if_x0   add     zk_cycles, #3
+        if_x0   ret
+
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #14      wz  ' Z=A14
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+        _ret_   add     zk_cycles, #1
+
+zx_ula_advance
+                sub     ula_state, ula_state_done
+                add     ula_state, zk_cycles
+                mov     ula_state_done, zk_cycles
+
+.l1             cmps    ula_state, #8   wcz
+        if_ae   sub     ula_state, #8
+        if_ae   add     ula_col, #2
+        if_ae   add     ptra, #2
+        if_ae   add     ptrb, #2
+        if_ae   jmp     #.l1
+
+                cmpsub  ula_col, #32    wc
+        if_1x   sub     ula_state, #224-128
+        if_1x   sub     ptra, #32
+        if_1x   sub     ptrb, #32
+        if_1x   sub     ula_scans, #1   wz
+        if_10   add     ptra, #256
+        if_11   sub     ptra, ##$700-32
+        if_11   add     ptrb, #32
+        if_11   mov     ula_scans, #8
+
+        if_11   sub     ula_rows, #1    wz
+        if_11   add     ptra, ##2048-256
+        if_11   mov     ula_rows, #8
+
+        if_11   sub     ula_blocks, #1  wz
+        if_11   sub     ptra, ##32*192
+        if_11   sub     ptrb, ##32*24
+        if_11   mov     ula_blocks, #3
+        if_11   sub     ula_state, ##(VIDEO == PAL ? (224*120) : (224*72))
+
+                mov     ula_cycles, #6
+                sub     ula_cycles, ula_state   wc
+        if_c    mov     ula_cycles, #0
+
+                cmp     ula_state, #1   wz
+        if_z    rdbyte  zk_tmp8, ptra[0]
+                cmp     ula_state, #2   wz
+        if_z    rdbyte  zk_tmp8, ptrb[0]
+                cmp     ula_state, #3   wz
+        if_z    rdbyte  zk_tmp8, ptra[1]
+                cmp     ula_state, #4   wz
+        if_z    rdbyte  zk_tmp8, ptrb[1]
+
+                ret     wcz
+
+                fit     $400
+
+DAT             ' ZiKore Z80 opcode table
+                orgh
+
+zk_optable      '' Opcode table
                 long    zk_nextop                                           ' $00: NOP
                 long    zk_loadimm16 + (%0000_1_111_0<<10)                  ' $01: LD BC,imm16
                 long    zk_a_and_ptr + (%001110<<10)                        ' $02: LD (BC),A
@@ -1324,380 +1700,6 @@ zk_lutbase      '' Opcode table
                 long    zk_iyprefix + (%10<<10)              ' $FD: IY prefix
                 long    zk_immmath + (%11_00_00_0000_0011_0_10_00_0<<10) ' $FE: CP imm8
                 long    zk_rst                               ' $FF: RST 38h
-
-zk_rolla        mov     zk_tmp8,zk_accu
-zk_shiftop
-                andn    zk_flags,#(1<<ZK_HALF_BIT)|(1<<ZK_NMODE_BIT)
-
-                bitl    zk_tmp8,#7 wcz  ' left + SRA
-                bitz    zk_tmp8,#7 addbits 1 ' only SRA
-                bitl    zk_tmp8,#0 wcz  ' right
-                modc    _set wc ' only SLL
-                modc    _clr wc ' only SLA
-
-                testb   zk_flags,#ZK_CARRY_BIT wc' only RL/RR
-                bitz    zk_flags,#ZK_CARRY_BIT
-
-                rcl     zk_tmp8,#1 wz   ' left
-                bitc    zk_tmp8,#8     ' right (not SRA/SRL)
-                shr     zk_tmp8,#1 wz   ' right
-
-                setq    #ZK_XYMASK
-                setq    #ZK_SIGNXYMASK
-                muxq    zk_flags,zk_tmp8
-
-        _ret_   mov     zk_accu,zk_tmp8
-
-                bitz    zk_flags,#ZK_ZERO_BIT
-                test    zk_tmp8,#$FF wc
-        _ret_   bitnc   zk_flags,#ZK_OVER_BIT
-
-zk_cio
-                mov     zk_optmp1,zk_opcode
-                and     zk_optmp1,#7<<3
-                cmp     zk_optmp1,#6<<3 wz
-                mov     zk_tmp8,#0
-        if_nz   call    #\zk_getry
-                getword zk_ea,zk_debc,#0
-zk_immio
-                call    #\zk_readcode
-                mov     zk_ea,zk_tmp8
-                setbyte zk_ea,zk_accu,#1
-
-                mov     zk_tmp8,zk_accu
-                jmp     #\zk_portout
-
-                call    #\zk_portin
-        _ret_   mov     zk_accu,zk_tmp8
-
-                and     zk_tmp8,#$FF wcz
-                bitz    zk_flags,#ZK_ZERO_BIT
-                bitnc   zk_flags,#ZK_OVER_BIT
-                andn    zk_flags,#(1<<ZK_HALF_BIT)|(1<<ZK_NMODE_BIT)
-                setq    #ZK_SIGNXYMASK
-                muxq    zk_flags,zk_tmp8
-
-                cmp     zk_optmp1,#6<<3 wz
-        if_z    ret
-                jmp     #\zk_setry
-
-zk_incdec8
-                call    #\zk_getry
-                mov     zk_optmp0,#1
-zk_math8
-                call    #\zk_getrz
-zk_immmath
-                call    #\zk_readcode
-                mov     zk_optmp0,zk_tmp8
-                mov     zk_tmp8,zk_accu
-
-                modc    _clr wc
-                testb   zk_flags,#ZK_CARRY_BIT wc
-
-                ' Flag helper gunk
-                mov     zk_optmp1,zk_tmp8
-
-                addx    zk_tmp8,zk_optmp0
-                bitl    zk_flags,#ZK_NMODE_BIT
-                subx    zk_tmp8,zk_optmp0
-                bith    zk_flags,#ZK_NMODE_BIT
-
-                xor     zk_optmp1,zk_tmp8
-                test    zk_tmp8,#$100 wc
-                bitc    zk_flags,#ZK_CARRY_BIT
-                and     zk_tmp8,#255 wz
-
-                setq    #ZK_SIGNXYMASK
-                muxq    zk_flags,zk_tmp8
-                ' Special nonsense for CP
-                setq    #ZK_XYMASK
-                muxq    zk_flags,zk_optmp0
-
-                mov     zk_accu,zk_tmp8
-                call    #\zk_setry
-
-                xor     zk_optmp1,zk_optmp0
-                bitz    zk_flags,#ZK_ZERO_BIT
-                testb   zk_optmp1,#4 wc
-                bitc    zk_flags,#ZK_HALF_BIT
-                test    zk_optmp1,#$180 wc
-        _ret_   bitc    zk_flags,#ZK_OVER_BIT
-
-zk_neg
-                cmp     zk_accu,#$80 wz
-                bitz    zk_flags,#ZK_OVER_BIT
-                testb   zk_accu,#4 wz
-                subr    zk_accu,#0 wc
-                bitc    zk_flags,#ZK_CARRY_BIT
-                testb   zk_accu,#4 xorz
-                bitz    zk_flags,#ZK_HALF_BIT
-                and     zk_accu,#$FF wz
-                bitz    zk_flags,#ZK_ZERO_BIT
-                bith    zk_flags,#ZK_NMODE_BIT
-                setq    #ZK_SIGNXYMASK
-        _ret_   muxq    zk_flags,zk_accu
-
-
-zk_cpl
-                xor     zk_accu,#$FF
-                or      zk_flags,#(1<<ZK_HALF_BIT)|(1<<ZK_NMODE_BIT)
-                setq    #ZK_XYMASK
-        _ret_   muxq    zk_flags,zk_accu
-
-zk_math16
-                modc    _clr wc
-zk_cmath16
-                testb   zk_flags,#ZK_CARRY_BIT wc
-
-                getword zk_tmp16,zk_debc,#0 ' get BC
-                getword zk_tmp16,zk_debc,#1 ' get DE
-                mov     zk_tmp16,zk_temphl      ' get HL/I*
-                mov     zk_tmp16,zk_sp          ' get SP
-
-                mov     zk_optmp1,zk_temphl
-                xor     zk_optmp1,zk_tmp16
-
-                addx    zk_temphl,zk_tmp16
-                bitl    zk_flags,#ZK_NMODE_BIT
-                subx    zk_temphl,zk_tmp16
-                bith    zk_flags,#ZK_NMODE_BIT
-
-                xor     zk_optmp1,zk_temphl
-                and     zk_temphl,zk_ffffh wz
-
-                bitz    zk_flags,#ZK_ZERO_BIT
-                test    zk_optmp1,zk_18000h wc
-                bitc    zk_flags,#ZK_OVER_BIT
-
-                getbyte pa,zk_temphl,#1
-                setq    #ZK_SIGNXYMASK
-                setq    #ZK_XYMASK
-                muxq    zk_flags,pa
-
-                testb   zk_optmp1,#12 wc
-                bitc    zk_flags,#ZK_HALF_BIT
-                testb   zk_optmp1,#16 wc
-                bitc    zk_flags,#ZK_CARRY_BIT
-
-                add     zk_cycles,#7
-
-                altd    zk_hlptr
-        _ret_   mov     0-0,zk_temphl
-
-zk_daa
-                jmp     #\zk_daa_hub
-
-zk_immlogic
-                call    #\zk_readcode
-zk_logic
-                call    #\zk_getrz
-
-                and     zk_accu,zk_tmp8 wcz
-                or      zk_accu,zk_tmp8 wcz
-                xor     zk_accu,zk_tmp8 wcz
-
-                bitnc   zk_flags,#ZK_OVER_BIT ' parity
-                bitz    zk_flags,#ZK_ZERO_BIT
-                andn    zk_flags,#(1<<ZK_CARRY_BIT)|(1<<ZK_NMODE_BIT)|(1<<ZK_HALF_BIT)
-                bith    zk_flags,#ZK_HALF_BIT ' Only for AND
-                setq    #ZK_SIGNXYMASK
-        _ret_   muxq    zk_flags,zk_accu
-
-zk_pushaf
-                getbyte zk_tmp16,zk_accu,#0
-                rolbyte zk_tmp16,zk_flags,#0
-
-zk_incdec16
-                add     zk_cycles,#2
-zk_pushbc       getword zk_tmp16,zk_debc,#0 ' get BC
-zk_pushde       getword zk_tmp16,zk_debc,#1 ' get DE
-zk_pushhl       mov     zk_tmp16,zk_temphl      ' get HL/I*
-                mov     zk_tmp16,zk_sp          ' get SP
-
-                jmp     #\zk_push16
-
-                add     zk_tmp16,#1
-                sub     zk_tmp16,#1
-
-zk_loadimm16
-                call    #\zk_readcode16
-                mov     zk_ea,zk_tmp16   ' for LDs with (imm16)
-                call    #\zk_read16     ' ^^
-                jmp     #\zk_write16     ' ^^
-zk_poppair
-                call    #\zk_pop16
-
-        _ret_   setword zk_debc,zk_tmp16,#0 ' set BC
-        _ret_   setword zk_debc,zk_tmp16,#1 ' set DE
-                altd    zk_hlptr
-        _ret_   setword zk_sp,zk_tmp16,#0   ' set SP/HL/I*
-
-                getbyte zk_accu,zk_tmp16,#1   ' set A
-        _ret_   getbyte zk_flags,zk_tmp16,#0  ' set F
-
-zk_jr           '' JR and DJNZ
-                call    #\zk_readcode
-
-                getbyte pa,zk_debc,#1
-                sub     pa,#1 wz
-                setbyte zk_debc,pa,#1
-                add     zk_cycles,#1
-
-                testb   zk_flags,#ZK_ZERO_BIT wz
-                testb   zk_flags,#ZK_CARRY_BIT wz
-
-                modz    _nz wz
-        if_z    call    #\zk_nextop
-                ' branch taken
-                add     zk_cycles,#5
-                signx   zk_tmp8,#7
-        _ret_   add     zk_pc,zk_tmp8
-
-zk_exx          '' EXX
-                xor     zk_debc,zk_altdebc
-                xor     zk_altdebc,zk_debc
-                xor     zk_debc,zk_altdebc
-                ' Note: not affected by IX/IY substitution
-                xor     zk_hl,zk_althl
-                xor     zk_althl,zk_hl
-        _ret_   xor     zk_hl,zk_althl
-
-zk_ex_dehl      '' EX DE,HL
-                ' Note: not affected by IX/IY substitution
-                getword zk_optmp0,zk_debc,#1
-                setword zk_debc,zk_hl,#1
-        _ret_   mov     zk_hl,zk_optmp0
-
-
-zk_ex_hlstk     '' EX (SP),HL
-                add     zk_cycles,#3 ' Should be 19. 19 - 4 - 4*3 = 3
-                mov     zk_ea,zk_sp
-                call    #\zk_read16
-                altd    zk_hlptr
-                mov     0-0,zk_tmp16
-                mov     zk_tmp16,zk_temphl
-                jmp     #\zk_write16
-
-zk_ld_abs16     '' LD HL,(imm16) and LD (imm16),HL
-                call    #\zk_readcode16
-                mov     zk_ea,zk_tmp16
-
-                getword zk_tmp16,zk_debc,#0 ' get BC
-                getword zk_tmp16,zk_debc,#1 ' get DE
-                mov     zk_tmp16,zk_temphl ' get HL/I*
-                mov     zk_tmp16,zk_sp ' get SP
-                jmp     #\zk_write16
-
-                call    #\zk_read16
-        _ret_   setword zk_debc,zk_tmp16,#0 ' set BC
-        _ret_   setword zk_debc,zk_tmp16,#1 ' set DE
-                altd    zk_hlptr
-        _ret_   mov     zk_sp,zk_tmp16
-
-zk_halt
-                or      zk_irqenable,#(1<<ZK_HALT_BIT)
-        _ret_   decmod  zk_pc,zk_ffffh
-
-ula_contend_port
-                skipf   #%100000
-ula_contend_ram
-                testb   zk_ea, #15      wc  ' C=A15   PORT/RAM
-                testb   zk_ea, #14      wz  ' Z=A14   PORT/RAM
-        if_01   call    #\zx_ula_advance            ' PORT/RAM
-        if_01   add     zk_cycles, ula_cycles       ' PORT/RAM
-                add     zk_cycles, #1               ' PORT/RAM
-        _ret_   add     zk_cycles, #2               '      RAM
-
-                testb   zk_ea, #0       wz          ' PORT
-                call    #\zx_ula_advance
-        if_x0   add     zk_cycles, ula_cycles
-        if_x0   add     zk_cycles, #3
-        if_x0   ret
-
-                testb   zk_ea, #15      wc  ' C=A15
-                testb   zk_ea, #14      wz  ' Z=A14
-        if_01   call    #\zx_ula_advance
-        if_01   add     zk_cycles, ula_cycles
-                add     zk_cycles, #1
-        if_01   call    #\zx_ula_advance
-        if_01   add     zk_cycles, ula_cycles
-                add     zk_cycles, #1
-        if_01   call    #\zx_ula_advance
-        if_01   add     zk_cycles, ula_cycles
-        _ret_   add     zk_cycles, #1
-
-zx_ula_advance
-                sub     ula_state, ula_state_done
-                add     ula_state, zk_cycles
-                mov     ula_state_done, zk_cycles
-
-.l1             cmps    ula_state, #8   wcz
-        if_ae   sub     ula_state, #8
-        if_ae   add     ula_col, #2
-        if_ae   add     ptra, #2
-        if_ae   add     ptrb, #2
-        if_ae   jmp     #.l1
-
-                cmpsub  ula_col, #32    wc
-        if_1x   sub     ula_state, #224-128
-        if_1x   sub     ptra, #32
-        if_1x   sub     ptrb, #32
-        if_1x   sub     ula_scans, #1   wz
-        if_10   add     ptra, #256
-        if_11   sub     ptra, ##$700-32
-        if_11   add     ptrb, #32
-        if_11   mov     ula_scans, #8
-
-        if_11   sub     ula_rows, #1    wz
-        if_11   add     ptra, ##2048-256
-        if_11   mov     ula_rows, #8
-
-        if_11   sub     ula_blocks, #1  wz
-        if_11   sub     ptra, ##32*192
-        if_11   sub     ptrb, ##32*24
-        if_11   mov     ula_blocks, #3
-        if_11   sub     ula_state, ##(VIDEO == PAL ? (224*120) : (224*72))
-
-                mov     ula_cycles, #6
-                sub     ula_cycles, ula_state   wc
-        if_c    mov     ula_cycles, #0
-
-                cmp     ula_state, #1   wz
-        if_z    rdbyte  zk_tmp8, ptra[0]
-                cmp     ula_state, #2   wz
-        if_z    rdbyte  zk_tmp8, ptrb[0]
-                cmp     ula_state, #3   wz
-        if_z    rdbyte  zk_tmp8, ptra[1]
-                cmp     ula_state, #4   wz
-        if_z    rdbyte  zk_tmp8, ptrb[1]
-
-                ret     wcz
-
-                fit     $400
-
-                orgh
-
-zk_daa_hub
-                mov     zk_optmp0,#$00
-                mov     zk_tmp8,zk_accu
-                cmpr    zk_tmp8,#$99 wc
-                testb   zk_flags,#ZK_CARRY_BIT orc
-        if_c    add     zk_optmp0,#$60
-                bitc    zk_flags,#ZK_CARRY_BIT
-                getnib  zk_optmp1,zk_tmp8,#0
-                cmpr    zk_optmp1,#$9 wc
-                testb   zk_flags,#ZK_HALF_BIT orc
-        if_c    add     zk_optmp0,#$06
-                testb   zk_flags,#ZK_NMODE_BIT wc
-                sumc    zk_accu,zk_optmp0
-                and     zk_accu,#255 wcz
-                bitz    zk_flags,#ZK_ZERO_BIT
-                bitnc   zk_flags,#ZK_OVER_BIT ' Parity?
-                testb   zk_accu,#4 wc
-                testb   zk_tmp8,#4 xorc
-                bitc    zk_flags,#ZK_HALF_BIT
-                setq    #ZK_SIGNXYMASK
-        _ret_   muxq    zk_flags,zk_accu
 
 
 CON ' ZiKore Z80 constants
