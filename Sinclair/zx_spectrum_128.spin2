@@ -45,7 +45,6 @@ sys_reset
 
                 wrlong  ##@zx_ram + ($4000 * 5), #@zx_screen
                 wrlong  ##@zx_ram + ($4000 * 5) + (32 * 192), #@zx_attribute
-                wrlong  #0, #@zx_map
 
         if_nc   coginit #1, ##@video_driver ' start video on cog #1
         if_nc   waitx   ##_CLKFREQ          ' delay to allow monitor to settle
@@ -66,7 +65,6 @@ zx_screen       long    @zx_ram + ($4000 * 5)
 zx_attribute    long    @zx_ram + ($4000 * 5) + (32 * 192)
 
 zx_border       long    $00
-zx_map          long    $00
 
                                             '     D4 D3 D2 D1 D0
                                             '
@@ -1078,6 +1076,7 @@ zk_mem_0000     long    @zx_rom0
 zk_mem_4000     long    @zx_ram + $4000 * 5 ' bank 5
 zk_mem_8000     long    @zx_ram + $4000 * 2 ' bank 2
 zk_mem_C000     long    @zx_ram + $4000 * 0 ' bank 0
+zx_map          long    $00
 zx_ay_reg       long    0
 
 ula_cnt         long    (VIDEO == PAL ? (224*312) : (224*264))
@@ -2165,7 +2164,7 @@ CON ' CVBS constants
     NTSC_CB         = $809000_01                            ' colorburst reference color
     NTSC_CF         = 3_579_545                             ' colorburst frequency
     'NTSC_CC         = 227.5                                 ' color cycles per line * 4 to preserve fraction
-    'NTSC_X_TOTAL    = 448
+    'NTSC_X_TOTAL    = 228 * 2
 
     NTSC_DOTF       = 7_055_000 * 128 ' (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
     NTSC_XF         = ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
@@ -2200,7 +2199,7 @@ CON ' CVBS constants
     PAL_CB          = $FFC060_01                            ' colorburst reference color
     PAL_CF          = 4_433_618                             ' colorburst frequency
     'PAL_CC          = 283.75                                ' color cycles per line
-    'PAL_X_TOTAL     = 448
+    'PAL_X_TOTAL     = 228 * 2
 
     PAL_DOTF        = 7_000_000 * 128 ' (PAL_X_TOTAL * PAL_CF * 128) / PAL_CC                     ' ZX dot frequency
     PAL_XF          = ((PAL_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
@@ -2486,10 +2485,9 @@ zx_ula_read
                 ret     wcz
 
 zx_ula_map_write
-                rdbyte  zk_tmp0, #@zx_map
-                testb   zk_tmp0, #5     wz  ' bit 5 = 1, no further changes allowed
+                testb   zx_map, #5     wz  ' bit 5 = 1, no further changes allowed
         if_01   ret     wcz
-                wrbyte  zk_tmp8, #@zx_map
+                getbyte zx_map, zk_tmp8, #0
 
                 testb   zk_tmp8, #3     wz  ' bit 3 = normal / shadow screen display
         if_x0   mov     zk_tmp0, ##@zx_ram + $4000 * 5 ' bank 5
