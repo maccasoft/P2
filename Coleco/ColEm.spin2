@@ -2,24 +2,26 @@
     ColecoVision Console Emulator
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
 
-    Z80 Emulator by Ada Gottensträter
+    Based on ZiKore Z80 Emulator by Ada Gottensträter
+    with modifications by Marco Maccaferri
+
     TMS9918 Emulator by Marco Maccaferri
     SN76489 Emulator by by Johannes Ahlebrand port to P2 by Ada Gottensträter
     PS/2 Keyboard driver by Marco Maccaferri
 }
 CON
 
-    _CLKFREQ        = 250_000_000
+    _CLKFREQ = 250_000_000
 
-    VIDEO           = VGA ' video mode VGA, NTSC or PAL
-    VGA_PIN         = 8
-    CVBS_PIN        = 32+7*3 addpins 1 ' 53+54
+    VIDEO    = VGA ' video mode VGA, NTSC or PAL
+    VGA_PIN  = 8
+    CVBS_PIN = 53 addpins 1 ' 53=CVBS/Y, 54=C
 
-    PS2_DATA_PIN    = 25
-    PS2_CLOCK_PIN   = 24
+    PS2_DATA_PIN  = 25
+    PS2_CLOCK_PIN = 24
 
-    AUDIO_RIGHT_PIN = 49
     AUDIO_LEFT_PIN  = 48
+    AUDIO_RIGHT_PIN = 49
 
 DAT             ' Startup
                 org     $000
@@ -2185,20 +2187,25 @@ cvbs_cq         long    VIDEO == PAL ? PAL_CQ : NTSC_CQ             ' colorspace
 cvbs_ca         long    VIDEO == PAL ? PAL_CA : NTSC_CQ             ' colorspace q coefficients, alt for pal
 cvbs_cf         long   (VIDEO == PAL ? PAL_CF : NTSC_CF) frac _CLKFREQ ' colorspace frequency setting
 cvbs_xf         long    VIDEO == PAL ? PAL_XF : NTSC_XF             ' streamer frequency setting
+
 cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  10 :  10)    ' streamer command: before-sync
 cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :  27)    ' streamer command: during-sync
 cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   6 :   4)    ' streamer command: before-colorburst
 cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  15)    ' streamer command: during-colorburst
 cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  17 :   9)    ' streamer command: after-colorburst
+cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: during-blank
+
 cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  28)    ' streamer command: before-visible
 cvbs_dv         long    X_RFLONG_4X8_LUT|X_DACS_3_2_1_0 +                    256        ' streamer command: during-visible
 cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  29)    ' streamer command: after-visible
-cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: during-blank
-cvbs_hf         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 208 : 189)    ' streamer command: half-line
+cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: during-blank
+
 cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  14)    ' streamer command: high-vsync-low
 cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 183 : 165)    ' streamer command: high-vsync-high
+
 cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 177 : 161)    ' streamer command: low-vsync-low
 cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  21 :  18)    ' streamer command: low-vsync-high
+
 cvbs_pn         long    CVBS_PIN            ' pin(s)
 
 _md             long    0
@@ -2466,7 +2473,7 @@ cvbs_field
                 resi1                           ' |
                 xcont   cvbs_ac, #1             ' |
                 resi1                           ' |
-                xcont   cvbs_db, #1             ' blank line
+                xcont   cvbs_vi, scol           ' border line
                 resi1                           ' |
                 djnz    cy, #.border
                 jmp     pa
