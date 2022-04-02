@@ -1,0 +1,1688 @@
+{
+    COMPUKIT UK101 Emulator
+    Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
+}
+
+CON
+
+    _CLKFREQ    = 160_000_000
+
+    VGA_PIN       = 8
+
+    PS2_DATA_PIN  = 25
+    PS2_CLOCK_PIN = 24
+
+    ACIA_RX_PIN   = 63  { I }                 ' programming / debug
+    ACIA_TX_PIN   = 62  { O }
+    ACIA_BAUD     = 300
+
+DAT             ' Video + PS/2 COG resident code
+                org     $000
+
+video_driver
+                asmclk
+
+                add     ptrb, ##@video_driver_lut - @video_driver
+                setq2   #511
+                rdlong  0, ptrb             ' load palette into lut
+
+                call    #vga_init
+                mov     ijmp1,##vga_field   ' set up streamer-empty interrupt
+                setint1 #EVENT_XMT
+                xcont   #EVENT_XMT, #0      ' do streamer instruction to start interrupt sequence
+
+sys_reset
+                coginit #1, ##@cog_6502     ' start 6502 on cog #1
+
+                jmp     #ps2_driver         ' continue to PS/2 driver
+
+'
+'
+' Shared memory locations
+'
+uk101_keyboard  byte    %11111110   ' R0 %000
+                byte    %11111111   ' R1 %001
+                byte    %11111111   ' R2 %010
+                byte    %11111111   ' R3 %011
+                byte    %11111111   ' R4 %100
+                byte    %11111111   ' R5 %101
+                byte    %11111111   ' R6 %110
+                byte    %11111111   ' R7 %111
+
+'
+' PS/2 Keyboard river
+'
+ps2_driver
+                fltl    #PS2_DATA_PIN
+                fltl    #PS2_CLOCK_PIN
+
+                mov     ps2_data, #$F3      ' auto-repeat
+                call    #ps2_transmit
+                and     ps2_data, #%011_11111 ' slow 1s / 2cps
+                call    #ps2_transmit
+
+                mov     ps2_state, #%0_010  ' set caps lock on
+                jmp     #ps2_locks
+
+ps2_reset
+                setq    #2-1
+                wrlong  uk101_keyboard, #@uk101_keyboard
+
+ps2_loop        and     ps2_state, #%0_111  ' keep locks state
+
+.l1             call    #ps2_receive
+                getbyte ps2_code, ps2_data, #0
+
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #.l1
+
+                cmp     ps2_data, #$E0  wz
+        if_z    bith    ps2_state, #28
+        if_z    jmp     #ps2_ext0
+                cmp     ps2_data, #$E1  wz
+        if_z    bith    ps2_state, #29
+        if_z    jmp     #ps2_ext1
+
+ps2_ext_ret     testbn  ps2_state, #29  wz
+        if_nz   jmp     #ps2_loop           ' E1 codes are ignored
+
+                testb   ps2_state, #7   wc  ' release
+
+                cmp     ps2_code, #$14  wz  ' left control
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_CTRL
+
+                cmp     ps2_code, #$14  wz  ' right control
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_CTRL
+
+                cmp     ps2_code, #$12  wz  ' left shift
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_SHIFT
+                cmp     ps2_data, #$59  wz  ' right shift
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_SHIFT
+
+                cmp     ps2_code, #$11  wz  ' left alt
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_ALT
+
+                cmp     ps2_code, #$11  wz  ' right alt
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_ALT
+
+                cmp     ps2_code, #$1F  wz  ' left gui
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_GUI
+                cmp     ps2_code, #$27  wz  ' right gui
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_GUI
+
+                cmp     ps2_code, #$77  wz  ' num. lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #0       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+                cmp     ps2_code, #$58  wz  ' caps lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    jmp     #ps2_caps           ' | update state
+                cmp     ps2_code, #$7E  wz  ' scroll lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #2       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+
+                test    ps2_shift, #LEFT_GUI  wz ' check reset key combination
+        if_nz   test    ps2_shift, #RIGHT_GUI wz ' |
+        if_nz   andn    ps2_shift, #LEFT_GUI|RIGHT_GUI
+        if_nz   jmp     #sys_reset
+
+                testbn  ps2_state, #28  wc      ' extended code
+                rcl     ps2_code, #1            '   to bit 0
+                shl     ps2_code, #1
+
+                mov     ps2_key, ##@ps2_table
+                add     ps2_key, ps2_code
+                rdword  ps2_key, ps2_key    wz
+        if_z    jmp     #ps2_loop
+
+                testb   ps2_state, #7   wc      ' release
+
+                getnib  ps2_data, ps2_key, #2
+                mov     ps2_ptr, #@uk101_keyboard
+                add     ps2_ptr, ps2_data
+                rdbyte  ps2_temp, ps2_ptr
+                muxc    ps2_temp, ps2_key
+                wrbyte  ps2_temp, ps2_ptr
+                jmp     #ps2_loop
+
+ps2_caps        rdbyte  ps2_temp, #@uk101_keyboard
+                bitnot  ps2_temp, #0    wcz
+                wrbyte  ps2_temp, #@uk101_keyboard
+                bitc    ps2_state, #1
+                ' fall-through
+
+ps2_locks       mov     ps2_data, #$ED
+                call    #ps2_transmit
+                mov     ps2_data, #0
+                testb   ps2_state, #0   wz  ' num. lock
+                bitz    ps2_data, #1
+                testb   ps2_state, #1   wz  ' caps lock
+                bitz    ps2_data, #2
+                testb   ps2_state, #2   wz  ' scroll lock
+                bitz    ps2_data, #0
+                call    #ps2_transmit
+                jmp     #ps2_loop
+
+ps2_ext1        call    #ps2_receive
+                setbyte ps2_code, ps2_data, #1
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #ps2_ext1
+
+                ' fall through
+
+ps2_ext0        call    #ps2_receive
+                setbyte ps2_code, ps2_data, #0
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #ps2_ext0
+
+                jmp     #ps2_ext_ret
+
+ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
+                getct   ps2_tout            ' hold clock for 128us (must be > 100us)
+                addct1  ps2_tout, ps2_us128 ' |
+                jnct1   #$
+                drvl    #PS2_DATA_PIN       ' pull data low
+                getct   ps2_tout            ' hold data for 4us
+                addct1  ps2_tout, ps2_us4   ' |
+                jnct1   #$
+
+                fltl    #PS2_CLOCK_PIN      ' release clock
+                getct   ps2_tout            ' allow pin to float
+                addct1  ps2_tout, ps2_us1   ' |
+                jnct1   #$
+
+                test    ps2_data, #$FF  wc  ' append parity
+                muxnc   ps2_data, #$100     ' |
+                bith    ps2_data, #9        ' append stop bit
+
+                getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us2000
+
+                mov     ps2_bits, #10
+.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l1                ' |
+                shr     ps2_data, #1    wc  ' output data bit
+                drvc    #PS2_DATA_PIN       ' |
+.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    ps2_bits, #.l1      ' another bit ?
+
+                fltl    #PS2_DATA_PIN
+
+.l3             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data low
+        if_z    testpn  #PS2_DATA_PIN   wz  ' |
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l3                ' |
+
+.l4             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data high
+        if_nz   testpn  #PS2_DATA_PIN   wz  ' |
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l4                ' |
+
+                ' Fall through to receive ack
+
+ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
+        if_nz   jmp     #ps2_receive        ' |
+
+                getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us2000
+
+                mov     ps2_bits, #11
+.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l1                ' |
+                testp   #PS2_DATA_PIN   wc  ' sample data
+                rcr     ps2_data, #1        ' |
+.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    ps2_bits, #.l1      ' another bit?
+
+                shr     ps2_data, #22       ' align byte
+                test    ps2_data, #$1FF wc  ' test parity
+        if_nc   jmp     #ps2_reset          ' |
+        _ret_   and     ps2_data, #$FF      ' ok
+
+
+ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
+ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
+ps2_us128       long    _CLKFREQ / 1000_000 * 128   ' 128 usec.
+ps2_us2000      long    _CLKFREQ / 1000_000 * 4000  ' 2000 usec.
+
+ps2_bits        long    0
+ps2_code        long    0
+ps2_state       long    0
+ps2_shift       long    0
+ps2_key         long    0
+
+ps2_data        long    0
+ps2_tout        long    0
+ps2_temp        long    0
+ps2_ptr         long    0
+
+'
+'
+' Data
+'
+dacmode_s       long    P_DAC_124R_3V + P_CHANNEL ' %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
+dacmode_c       long    P_DAC_75R_2V + P_CHANNEL  ' %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
+
+vga_xf          long   (VGA_FPIX frac _CLKFREQ) >> 1             ' streamer frequency setting
+vga_bs          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  20    ' streamer command: before-sync
+vga_ds          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  64    ' streamer command: during-sync
+vga_as          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  44    ' streamer command: after sync
+vga_vi          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  + 400    ' streamer command: visible
+vga_bv          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  +   8    ' streamer command: before visible
+vga_dv          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  +   8    ' streamer command: during visible
+vga_av          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  +   8    ' streamer command: after visible
+vga_pn          long    VGA_PIN & $38       ' base pin
+
+_vx             long    0
+_vy             long    0
+
+_sl             long    0                   ' scanline counter
+_lb             long    0                   ' line buffer pointer
+_cp             long    0                   ' character pointer
+_bm             long    0[2]                ' character bitmap
+
+_ch             long    0
+_fc             long    0
+
+line_ret        long    0
+border_ret      long    0
+blank_ret       long    0
+
+                fit     $1F0
+
+DAT             ' VGA Driver LUT resident code
+                org     $200
+
+video_driver_lut
+
+vga_init
+                setcmod #%01_0_000_0            ' enable colorspace conversion
+                setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
+                setci   ##VGA_INTENSITY << 16   ' g
+                setcq   ##VGA_INTENSITY << 08   ' b
+                setxfrq vga_xf                  ' set transfer frequency
+
+                cogid   _vx                     ' insert cogid into dac modes
+                setnib  dacmode_s,_vx,#2
+                setnib  dacmode_c,_vx,#2
+
+                wrpin   dacmode_s,vga_pn        ' enable 123-ohm 3.3V dac mode in pin +0
+
+                xor     vga_pn,#2<<6|1          ' enable 75-ohm 2.0V dac mode in pins +1..3
+                wrpin   dacmode_c,vga_pn
+
+                xor     vga_pn,#3<<6 ^(2<<6|1)  ' make pins +0..3 outputs
+                drvl    vga_pn
+
+                xor     vga_pn,#4|(3<<6)        ' leave av_base pointing to pin +4 (vertical sync)
+        _ret_   drvl    vga_pn
+
+vga_field
+                mov     _sl, #0
+                mov     _vy, #128           ' visible lines
+                mov     ptra, ##@video_ram+12
+
+.loop           calld   line_ret, #.line
+                calld   line_ret, #.line
+                calld   line_ret, #.line
+                calld   line_ret, #.line
+
+                incmod  _sl, #7         wc
+        if_c    add     ptra, #64
+
+                djnz    _vy, #.loop
+
+                mov     _vy,#22                  'before-visible blank lines
+                calld   border_ret, #.border
+
+                mov     _vy, #1
+                calld   blank_ret, #.blank         ' back porch
+
+                drvnot  vga_pn                 ' vertical sync on
+                mov     _vy, #4
+                calld   blank_ret, #.blank
+                drvnot  vga_pn                 ' vertical sync off
+
+                mov     _vy, #23
+                calld   blank_ret, #.blank
+
+                mov     _vy,#22                  'before-visible blank lines
+                calld   border_ret, #.border
+
+                jmp     #vga_field              ' loop
+
+.line           xcont   vga_bs, #0             ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds, #1             ' do sync part of scan line
+                resi1
+                xcont   vga_as, #0             ' do before-visible part of scan line
+                resi1
+                xcont   vga_bv, #0             ' do left border
+                resi1
+
+                mov     _vx, #48
+.l1             rdbyte  _ch, ptra++
+                shl     _ch, #3
+                add     _ch, ##@chargen_rom
+                add     _ch, _sl
+                rdbyte  _ch, _ch
+                rev     _ch
+                shr     _ch, #24
+                xcont   vga_dv, _ch
+                resi1
+                djnz    _vx, #.l1
+                sub     ptra, #48
+
+                xcont   vga_av, #0             ' do right border
+                resi1
+                jmp     line_ret
+
+.border         xcont   vga_bs, #0             ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds, #1             ' do sync part of scan line
+                resi1
+                xcont   vga_as, #0             ' do before-visible part of scan line
+                resi1
+                xcont   vga_vi, #0             ' do visible part of scan line (blank)
+                resi1
+
+                xcont   vga_bs, #0             ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds, #1             ' do sync part of scan line
+                resi1
+                xcont   vga_as, #0             ' do before-visible part of scan line
+                resi1
+                xcont   vga_vi, #0             ' do visible part of scan line (blank)
+                resi1
+                djnz    _vy, #.border
+                jmp     border_ret
+
+.blank          xcont   vga_bs, #0             ' do before-sync part of scan line
+                resi1
+                xzero   vga_ds, #1             ' do sync part of scan line
+                resi1
+                xcont   vga_as, #0             ' do before-visible part of scan line
+                resi1
+                xcont   vga_vi, #0             ' do visible part of scan line (blank)
+                resi1
+                djnz    _vy, #.blank         ' loop if more blanks needed
+                jmp     blank_ret
+
+                long    0[$200 + ($F << 5) - $] ' align to streamer LUT offset
+
+                long    $00_00_00_00        ' background
+                long    $F0_F0_F0_00        ' foreground
+
+                fit     $400
+
+DAT             ' PS/2 Lookup table
+                orgh
+
+'       The keyboard matrix has the following layout:
+'
+'               C7    C6    C5    C4    C3    C2    C1    C0
+'                |     |     |     |     |     |     |     |
+'              ! |   " |   # |   $ |   % |   & |   ' |     |
+'              1 |   2 |   3 |   4 |   5 |   6 |   7 |     |
+'       R7 ------+-----+-----+-----+-----+-----+-----+-----+
+'              ( |   ) |(1)  |   * |   = | RUB |     |     |
+'              8 |   9 |   0 |   : |   - | OUT |     |     |
+'       R6 ------+-----+-----+-----+-----+-----+-----+-----+
+'              > |   \ |     |(2)  |     |     |     |     |
+'              . |   L |   O |   ^ |  CR |     |     |     |
+'       R5 ------+-----+-----+-----+-----+-----+-----+-----+
+'                |     |     |     |     |     |     |     |
+'              W |   E |   R |   T |   Y |   U |   I |     |
+'       R4 ------+-----+-----+-----+-----+-----+-----+-----+
+'                |     |     |     |     |  LF |   [ |     |
+'              S |   D |   F |   G |   H |   J |   K |     |
+'       R3 ------+-----+-----+-----+-----+-----+-----+-----+
+'                | ETX |     |     |     |   ] |   < |     |
+'              X |   C |   V |   B |   N |   M |   , |     |
+'       R2 ------+-----+-----+-----+-----+-----+-----+-----+
+'                |     |     |     |   ? |   + |   @ |     |
+'              Q |   A |   Z |space|   / |   ; |   P |     |
+'       R1 ------+-----+-----+-----+-----+-----+-----+-----+
+'           (3)  |     |(4)  |     |     | left|right|SHIFT|
+'                | CTRL|     |     |     |SHIFT|SHIFT| LOCK|
+'       R0 ------+-----+-----+-----+-----+-----+-----+-----+
+
+'                        ROW C7....C0   ROW C7....C0
+
+ps2_table       word    %000_00000000, %000_00000000    '00
+                word    %000_00000000, %000_00000000    '01             F9
+                word    %000_00000000, %000_00000000    '02
+                word    %000_00000000, %000_00000000    '03             F5
+                word    %000_00000000, %000_00000000    '04             F3
+                word    %000_00000000, %000_00000000    '05             F1
+                word    %000_00000000, %000_00000000    '06             F2
+                word    %000_00000000, %000_00000000    '07             F12
+                word    %000_00000000, %000_00000000    '08
+                word    %000_00000000, %000_00000000    '09             F10
+                word    %000_00000000, %000_00000000    '0A             F8
+                word    %000_00000000, %000_00000000    '0B             F6
+                word    %000_00000000, %000_00000000    '0C             F4
+                word    %000_00000000, %000_00000000    '0D             Tab
+                word    %000_00000000, %000_00000000    '0E             `
+                word    %000_00000000, %000_00000000    '0F
+                word    %000_00000000, %000_00000000    '10
+                word    %000_00000000, %000_00000000    '11     Alt-R   Alt-L
+                word    %000_00000000, %000_00000100    '12             Shift-L
+                word    %000_00000000, %000_00000000    '13
+                word    %000_01000000, %000_01000000    '14     Ctrl-R  Ctrl-L
+                word    %000_00000000, %001_10000000    '15             q
+                word    %000_00000000, %111_10000000    '16             1
+                word    %000_00000000, %000_00000000    '17
+                word    %000_00000000, %000_00000000    '18
+                word    %000_00000000, %000_00000000    '19
+                word    %000_00000000, %001_00100000    '1A             z
+                word    %000_00000000, %011_10000000    '1B             s
+                word    %000_00000000, %001_01000000    '1C             a
+                word    %000_00000000, %100_10000000    '1D             w
+                word    %000_00000000, %111_01000000    '1E             2
+                word    %000_00000000, %000_00000000    '1F     Win-L
+                word    %000_00000000, %000_00000000    '20
+                word    %000_00000000, %010_01000000    '21             c
+                word    %000_00000000, %010_10000000    '22             x
+                word    %000_00000000, %011_01000000    '23             d
+                word    %000_00000000, %100_01000000    '24             e
+                word    %000_00000000, %111_00010000    '25             4
+                word    %000_00000000, %111_00100000    '26             3
+                word    %000_00000000, %000_00000000    '27     Win-R
+                word    %000_00000000, %000_00000000    '28
+                word    %000_00000000, %001_00010000    '29             Space
+                word    %000_00000000, %010_00100000    '2A             v
+                word    %000_00000000, %011_00100000    '2B             f
+                word    %000_00000000, %100_00010000    '2C             t
+                word    %000_00000000, %100_00100000    '2D             r
+                word    %000_00000000, %111_00001000    '2E             5
+                word    %000_00000000, %000_00000000    '2F     Apps
+                word    %000_00000000, %000_00000000    '30
+                word    %000_00000000, %010_00001000    '31             n
+                word    %000_00000000, %010_00010000    '32             b
+                word    %000_00000000, %011_00001000    '33             h
+                word    %000_00000000, %011_00010000    '34             g
+                word    %000_00000000, %100_00001000    '35             y
+                word    %000_00000000, %111_00000100    '36             6
+                word    %000_00000000, %000_00000000    '37     Power
+                word    %000_00000000, %000_00000000    '38
+                word    %000_00000000, %000_00000000    '39
+                word    %000_00000000, %010_00000100    '3A             m
+                word    %000_00000000, %011_00000100    '3B             j
+                word    %000_00000000, %100_00000100    '3C             u
+                word    %000_00000000, %111_00000010    '3D             7
+                word    %000_00000000, %110_10000000    '3E             8
+                word    %000_00000000, %000_00000000    '3F     Sleep
+                word    %000_00000000, %000_00000000    '40
+                word    %000_00000000, %010_00000010    '41             ,
+                word    %000_00000000, %011_00000010    '42             k
+                word    %000_00000000, %100_00000010    '43             i
+                word    %000_00000000, %101_00100000    '44             o
+                word    %000_00000000, %110_00100000    '45             0
+                word    %000_00000000, %110_01000000    '46             9
+                word    %000_00000000, %000_00000000    '47
+                word    %000_00000000, %000_00000000    '48
+                word    %000_00000000, %101_10000000    '49             .
+                word    %000_00000000, %001_00001000    '4A     (/)     /
+                word    %000_00000000, %101_01000000    '4B             l
+                word    %000_00000000, %001_00000100    '4C             ;
+                word    %000_00000000, %001_00000010    '4D             p
+                word    %000_00000000, %110_00010000    '4E             -
+                word    %000_00000000, %000_00000000    '4F
+                word    %000_00000000, %000_00000000    '50
+                word    %000_00000000, %000_00000000    '51
+                word    %000_00000000, %000_00000000    '52             '
+                word    %000_00000000, %000_00000000    '53
+                word    %000_00000000, %101_00010000    '54             [
+                word    %000_00000000, %110_00001000    '55             =
+                word    %000_00000000, %000_00000000    '56
+                word    %000_00000000, %000_00000000    '57
+                word    %000_00000000, %000_00000000    '58             CapsLock
+                word    %000_00000000, %000_00000010    '59             Shift-R
+                word    %000_00000000, %101_00001000    '5A     (Enter) Enter
+                word    %000_00000000, %000_00000000    '5B             ]
+                word    %000_00000000, %000_00000000    '5C
+                word    %000_00000000, %000_00000000    '5D             \
+                word    %000_00000000, %000_00000000    '5E     WakeUp
+                word    %000_00000000, %000_00000000    '5F
+                word    %000_00000000, %000_00000000    '60
+                word    %000_00000000, %000_00000000    '61
+                word    %000_00000000, %000_00000000    '62
+                word    %000_00000000, %000_00000000    '63
+                word    %000_00000000, %000_00000000    '64
+                word    %000_00000000, %000_00000000    '65
+                word    %000_00000000, %110_00000100    '66             BackSpace
+                word    %000_00000000, %000_00000000    '67
+                word    %000_00000000, %000_00000000    '68
+                word    %000_00000000, %000_00000000    '69     End     (1)
+                word    %000_00000000, %000_00000000    '6A
+                word    %000_00000000, %000_00000000    '6B     Left    (4)
+                word    %000_00000000, %000_00000000    '6C     Home    (7)
+                word    %000_00000000, %000_00000000    '6D
+                word    %000_00000000, %000_00000000    '6E
+                word    %000_00000000, %000_00000000    '6F
+                word    %000_00000000, %000_00000000    '70     Insert  (0)
+                word    %000_00000000, %000_00000000    '71     Delete  (.)
+                word    %000_00000000, %000_00000000    '72     Down    (2)
+                word    %000_00000000, %000_00000000    '73             (5)
+                word    %000_00000000, %000_00000000    '74     Right   (6)
+                word    %000_00000000, %000_00000000    '75     Up      (8)
+                word    %000_00000000, %000_00000000    '76             Esc
+                word    %000_00000000, %000_00000000    '77             NumLock
+                word    %000_00000000, %000_00000000    '78             F11
+                word    %000_00000000, %000_00000000    '79             (+)
+                word    %000_00000000, %000_00000000    '7A     PageDn  (3)
+                word    %000_00000000, %000_00000000    '7B             (-)
+                word    %000_00000000, %000_00000000    '7C     PrScr   (*)
+                word    %000_00000000, %000_00000000    '7D     PageUp  (9)
+                word    %000_00000000, %000_00000000    '7E             ScrLock
+                word    %000_00000000, %000_00000000    '7F
+                word    %000_00000000, %000_00000000    '80
+                word    %000_00000000, %000_00000000    '81
+                word    %000_00000000, %000_00000000    '82
+                word    %000_00000000, %000_00000000    '83             F7
+
+CON             ' PS/2 constants
+
+    LEFT_CTRL   = %0000_0001
+    LEFT_SHIFT  = %0000_0010
+    LEFT_ALT    = %0000_0100
+    LEFT_GUI    = %0000_1000
+    RIGHT_CTRL  = %0001_0000
+    RIGHT_SHIFT = %0010_0000
+    RIGHT_ALT   = %0100_0000
+    RIGHT_GUI   = %1000_0000
+
+CON ' VGA constants
+
+    VGA_FPIX      = 20_000_000
+    VGA_INTENSITY = 80    '0..128
+
+DAT             ' Character generator ROM
+                orgh
+
+chargen_rom     file    "CHGUK101.ROM"
+
+DAT             ' 6502 COG resident code
+                org     $000
+
+cog_6502
+                add     ptrb, ##@lut_6502 - @cog_6502
+                setq2   #$200-1
+                rdlong  0, ptrb
+
+                call    #\io_init
+
+                getct   ts                  ' timer reference for clock throttling
+                mov     _I, #4              ' reset cycles
+
+                mov     _P, #%00110000      ' initial flags
+                mov     _S, #$FF            ' initial stack pointer
+
+                mov     ptrb, ##$FFFC       ' read reset vector
+                add     ptrb, ram_addr      ' |
+                rdword  ptrb, ptrb          ' |
+                add     ptrb, ram_addr      ' |
+
+                rep     @.loop, #8          ' ready to single-step
+                push    #.loop
+
+.loop           nop
+                nop
+
+                add     _T, _I              ' update total cycles count
+
+                mul     _I, _I_CLK          ' clock throttling
+                addct1  ts, _I              ' |
+                jnct1   #$                  ' |
+
+                rdbyte  t1, ptrb++          ' fetch instruction
+
+                rdlut   t1, t1              ' decode instruction
+
+                getnib  _I, t1, #7          ' get cycles count
+                setnib  t1, #0, #7          ' |
+
+                execf   t1                  ' execute instruction
+
+
+'
+'
+' Instructions
+'
+i_adc_abs       call    #\_fetch_abs        ' %1_1111110
+i_adc_abs_x     call    #\_fetch_abs_x      ' %1_111110
+i_adc_abs_y     call    #\_fetch_abs_y      ' %1_11110
+i_adc_ind_x     call    #\_fetch_ind_x      ' %1_1110
+i_adc_ind_y     call    #\_fetch_ind_y      ' %1_110
+i_adc_zpg       call    #\_fetch_zpg        ' %1_10
+i_adc_zpg_x     call    #\_fetch_zpg_x      ' %1_0
+i_adc_imm       rdbyte  t1, ptrb++          ' %0
+
+_adc            testb   _P, #REGP_C     wc
+
+                testb   _P, #REGP_D     wz
+        if_z    jmp     #_adc_dec
+
+                getbyte t3, _A, #0          ' t3 = sum
+                addx    t3, t1              ' |
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t2, _A, #0          ' t2 = ~(A ^ operand)
+                xor     t2, t1              ' |
+                xor     t2, #$FF            ' |
+                getbyte t4, _A, #0          ' t4 = A ^ sum
+                xor     t4, t3
+                and     t2, t4              ' t2 = ~(A ^ operand) & (A ^ sum)
+                testb   t2, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                testb   t3, #8          wz  ' affects C
+                bitz    _P, #REGP_C         ' |
+
+                getbyte _A, t3, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+_adc_dec        mov     t2, _A              ' t2 = lo
+                and     t2, #$0F
+                mov     t4, t1
+                and     t4, #$0F
+                addx    t2, t4
+
+                mov     t3, _A              ' t3 = hi
+                and     t3, #$F0
+                mov     t4, t1
+                and     t4, #$F0
+                add     t3, t4
+
+                cmp     t2, #$09        wcz
+        if_a    add     t2, #$06
+        if_a    add     t3, #$10
+
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t5, _A, #0          ' t5 = ~(A ^ operand)
+                xor     t5, t1              ' |
+                xor     t5, #$FF            ' |
+                getbyte t4, _A, #0          ' t4 = A ^ hi
+                xor     t4, t3
+                and     t5, t4              ' t5 = ~(A ^ operand) & (A ^ hi)
+                testb   t5, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                cmp     t3, #$90        wcz
+        if_a    add     t3, #$60
+
+                testb   t3, #8          wz  ' affects C
+                bitz    _P, #REGP_C         ' |
+
+                getnib  _A, t2, #0
+                add     _A, t3
+
+                and     _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+i_log_abs       call    #\_fetch_abs        ' %xxx_1_1111110
+i_log_zpg       call    #\_fetch_zpg        ' %xxx_1_111110
+i_log_abs_x     call    #\_fetch_abs_x      ' %xxx_1_11110
+i_log_abs_y     call    #\_fetch_abs_y      ' %xxx_1_1110
+i_log_ind_x     call    #\_fetch_ind_x      ' %xxx_1_110
+i_log_ind_y     call    #\_fetch_ind_y      ' %xxx_1_10
+i_log_zpg_x     call    #\_fetch_zpg_x      ' %xxx_1_0
+i_log_imm       rdbyte  t1, ptrb++          ' %xxx_0
+                and     t1, _A              '  110 AND
+                xor     t1, _A              '  101 EOR
+                or      t1, _A              '  011 ORA
+                getbyte _A, t1, #0
+                jmp     #_flags
+
+i_asl_abs       call    #\_fetch_abs        ' %01_000_1_1110
+i_asl_zpg       call    #\_fetch_zpg        ' %01_000_1_110
+i_asl_abs_x     call    #\_fetch_abs_x      ' %01_000_1_10
+i_asl_zpg_x     call    #\_fetch_zpg_x      ' %01_000_1_0
+i_asl           getbyte t1, _A, #0          ' %10_000_0
+
+                testb   t1, #7          wz
+                shl     t1, #1
+                bitz    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+                jmp     #_flags
+                                            '       SC NVZC
+i_branch        rdbyte  t1, ptrb++          ' BCC: %10_1110_0
+                                            ' BCS: %01_1110_0
+                                            ' BNE: %10_1101_0
+                                            ' BEQ: %01_1101_0
+                testb   _P, #REGP_C     wc  ' BPL: %10_0111_0
+                testb   _P, #REGP_Z     wc  ' BMI: %01_0111_0
+                testb   _P, #REGP_V     wc  ' BVC: %10_1011_0
+                testb   _P, #REGP_N     wc  ' BVS: %01_1011_0
+        if_c    ret                         ' Clear
+        if_nc   ret                         ' Set
+
+                add     _I, #1
+                sub     ptrb, ram_addr
+                signx   t1, #7
+                add     ptrb, t1
+                cmpsub  ptrb, ##$10000
+        _ret_   add     ptrb, ram_addr
+
+i_bit_abs       call    #\_fetch_abs
+i_bit_zpg       call    #\_fetch_zpg
+_bit            test    _A, t1          wz
+                bitz    _P, #REGP_Z
+                and     t1, #%11000000
+                and     _P, #%00111111
+        _ret_   or      _P, t1
+
+i_brk           add     ptrb, #1
+                sub     ptrb, ram_addr
+                getbyte t1, ptrb, #1        ' PCH -> (S)
+                call    #_push_t1
+                getbyte t1, ptrb, #0        ' PCL -> (S)
+                call    #_push_t1
+                getbyte t1, _P, #0          ' P -> (S)
+                bith    t1, #REGP_B         ' B=1
+                call    #_push_t1
+
+                bith    _P, #REGP_I         ' I=1
+
+                mov     t2, ##$FFFE
+                add     t2, ram_addr
+                rdword  ptrb, t2
+        _ret_   add     ptrb, ram_addr
+
+i_clc   _ret_   bitl    _P, #REGP_C
+i_cld   _ret_   bitl    _P, #REGP_D
+i_cli   _ret_   bitl    _P, #REGP_I
+i_clv   _ret_   bitl    _P, #REGP_V
+
+i_cmp_abs       call    #\_fetch_abs        ' %xxx_0_1_1111110
+i_cmp_abs_x     call    #\_fetch_abs_x      ' %xxx_0_1_111110
+i_cmp_abs_y     call    #\_fetch_abs_y      ' %xxx_0_1_11110
+i_cmp_ind_x     call    #\_fetch_ind_x      ' %xxx_0_1_1110
+i_cmp_ind_y     call    #\_fetch_ind_y      ' %xxx_0_1_110
+i_cmp_zpg       call    #\_fetch_zpg        ' %xxx_0_1_10
+i_cmp_zpg_x     call    #\_fetch_zpg_x      ' %xxx_0_1_0
+i_cmp_imm       rdbyte  t1, ptrb++          ' %xxx_00
+                mov     t2, t1
+                getbyte t1, _A, #0          '  110 CMP
+                getbyte t1, _X, #0          '  101 CPX
+                getbyte t1, _Y, #0          '  011 CPY
+                sub     t1, t2
+                testb   t1, #8          wz
+                bitnz   _P, #REGP_C
+                jmp     #_flags
+
+i_dec_zpg       call    #\_fetch_zpg        ' %xx_1110
+i_dec_abs_x     call    #\_fetch_abs_x      ' %xx_110
+i_dec_zpg_x     call    #\_fetch_zpg_x      ' %xx_10
+i_dec_abs       call    #\_fetch_abs        ' %xx_0
+                sub     t1, #1              '  10 DEC
+                add     t1, #1              '  01 INC
+                call    #\_write
+                jmp     #_flags
+
+                                            ' INX INY DEX DEY
+i_inde_xy       getbyte t1, _X, #0          '  0   1   0   1
+                getbyte t1, _Y, #0          '  1   0   1   0
+                add     t1, #1              '  0   0   1   1
+                sub     t1, #1              '  1   1   0   0
+                getbyte _X, t1, #0          '  0   1   0   1
+                getbyte _Y, t1, #0          '  1   0   1   0
+                jmp     #_flags
+
+i_jmp           rdword  ptrb, ptrb          ' 0 0
+                add     ptrb, ram_addr      ' 1 0
+                rdword  ptrb, ptrb          ' 1 0
+        _ret_   add     ptrb, ram_addr      ' 0 0
+
+i_jsr           rdword  t4, ptrb            ' t4 = new PC
+                add     ptrb, #1
+
+                sub     ptrb, ram_addr
+                getbyte t1, ptrb, #1        ' PCH -> (S)
+                call    #_push_t1
+                getbyte t1, ptrb, #0        ' PCL -> (S)
+                call    #_push_t1
+
+                mov     ptrb, t4
+        _ret_   add     ptrb, ram_addr
+
+i_ld_abs        call    #\_fetch_abs        ' %xxx_1_11111110
+i_ld_abs_x      call    #\_fetch_abs_x      ' %xxx_1_1111110
+i_ld_abs_y      call    #\_fetch_abs_y      ' %xxx_1_111110
+i_ld_zpg        call    #\_fetch_zpg        ' %xxx_1_11110
+i_ld_zpg_x      call    #\_fetch_zpg_x      ' %xxx_1_1110
+i_ld_zpg_y      call    #\_fetch_zpg_y      ' %xxx_1_110
+i_ld_ind_x      call    #\_fetch_ind_x      ' %xxx_1_10
+i_ld_ind_y      call    #\_fetch_ind_y      ' %xxx_1_0
+i_ld_imm        rdbyte  t1, ptrb++          ' %xxx_0
+                mov     _A, t1              '  110 LDA
+                mov     _X, t1              '  101 LDX
+                mov     _Y, t1              '  011 LDY
+                jmp     #_flags
+
+i_lsr_abs       call    #\_fetch_abs        ' %01_000_1_1110
+i_lsr_zpg       call    #\_fetch_zpg        ' %01_000_1_110
+i_lsr_abs_x     call    #\_fetch_abs_x      ' %01_000_1_10
+i_lsr_zpg_x     call    #\_fetch_zpg_x      ' %01_000_1_0
+i_lsr           getbyte t1, _A, #0          ' %10_000_0
+
+                testb   t1, #0          wz
+                shr     t1, #1
+                bitz    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+                jmp     #_flags
+
+i_nop           ret
+
+i_push          getbyte t1, _A, #0
+                getbyte t1, _P, #0
+                jmp     #_push_t1
+
+i_pla           call    #_pop_t1
+                getbyte _A, t1, #0
+                jmp     #_flags
+
+i_plp           call    #_pop_t1
+                getbyte _P, t1, #0
+        _ret_   or      _P, #%00110000      ' always on flags
+
+i_rol_abs       call    #\_fetch_abs        ' %01_00000_1_1110
+i_rol_zpg       call    #\_fetch_zpg        ' %01_00000_1_110
+i_rol_abs_x     call    #\_fetch_abs_x      ' %01_00000_1_10
+i_rol_zpg_x     call    #\_fetch_zpg_x      ' %01_00000_1_0
+i_rol           getbyte t1, _A, #0          ' %10_00000_0
+
+                testb   _P, #REGP_C     wc
+                testb   t1, #7          wz
+                shl     t1, #1
+                bitc    t1, #0
+                bitz    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+
+                jmp     #_flags
+
+
+i_ror_abs       call    #\_fetch_abs        ' %01_00000_1_1110
+i_ror_zpg       call    #\_fetch_zpg        ' %01_00000_1_110
+i_ror_abs_x     call    #\_fetch_abs_x      ' %01_00000_1_10
+i_ror_zpg_x     call    #\_fetch_zpg_x      ' %01_00000_1_0
+i_ror           getbyte t1, _A, #0          ' %10_00000_0
+
+                testb   _P, #REGP_C     wc
+                testb   t1, #0          wz
+                shr     t1, #1
+                bitc    t1, #7
+                bitz    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+
+                jmp     #_flags
+
+i_rti           call    #_pop_t1            ' (S) -> P
+                mov     _P, t1
+                ' fall-through
+i_rts           call    #_pop_t1            ' (S) -> PCL
+                getbyte ptrb, t1, #0        ' |
+                call    #_pop_t1            ' (S) -> PCH
+                setbyte ptrb, t1, #1        ' |
+                incmod  ptrb, ##$FFFF       ' PC = PC + 1 (skip if RTI)
+        _ret_   add     ptrb, ram_addr
+
+i_sbc_abs       call    #\_fetch_abs        ' %1_1111110
+i_sbc_abs_x     call    #\_fetch_abs_x      ' %1_111110
+i_sbc_abs_y     call    #\_fetch_abs_y      ' %1_11110
+i_sbc_ind_x     call    #\_fetch_ind_x      ' %1_1110
+i_sbc_ind_y     call    #\_fetch_ind_y      ' %1_110
+i_sbc_zpg       call    #\_fetch_zpg        ' %1_10
+i_sbc_zpg_x     call    #\_fetch_zpg_x      ' %1_0
+i_sbc_imm       rdbyte  t1, ptrb++          ' %0
+
+_sbc            testbn  _P, #REGP_C     wc
+
+                getbyte t3, _A, #0          ' t3 = sum
+                subx    t3, t1              ' |
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t2, _A, #0          ' t2 = (A ^ operand)
+                xor     t2, t1              ' |
+                getbyte t4, _A, #0          ' t4 = A ^ sum
+                xor     t4, t3
+                and     t2, t4              ' t2 = (A ^ operand) & (A ^ sum)
+                testb   t2, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                testb   t3, #8          wz  ' affects C
+                bitnz   _P, #REGP_C         ' |
+
+                test    t3, #$FF        wz  ' affects Z
+                bitz    _P, #REGP_Z         ' |
+
+                testb   _P, #REGP_D     wz
+        if_z    jmp     #_sbc_dec
+
+                getbyte _A, t3, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+_sbc_dec        mov     t2, _A              ' t2 = lo
+                and     t2, #$0F
+                mov     t4, t1
+                and     t4, #$0F
+                subx    t2, t4
+
+                mov     t3, _A              ' t3 = hi
+                and     t3, #$F0
+                mov     t4, t1
+                and     t4, #$F0
+                sub     t3, t4
+
+                test    t2, #$10        wz
+        if_nz   sub     t2, #$06
+        if_nz   sub     t3, #$01
+
+                test    t3, #$100       wz
+        if_nz   sub     t3, #$60
+
+                getbyte _A, t3, #0
+                setnib  _A, t2, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+i_sec   _ret_   bith    _P, #REGP_C
+i_sed   _ret_   bith    _P, #REGP_D
+i_sei   _ret_   bith    _P, #REGP_I
+
+i_st_abs        call    #\_fetch_abs        ' %xxx_11111110
+i_st_abs_x      call    #\_fetch_abs_x      ' %xxx_1111110
+i_st_abs_y      call    #\_fetch_abs_y      ' %xxx_111110
+i_st_zpg        call    #\_fetch_zpg        ' %xxx_11110
+i_st_zpg_x      call    #\_fetch_zpg_x      ' %xxx_1110
+i_st_zpg_y      call    #\_fetch_zpg_y      ' %xxx_110
+i_st_ind_x      call    #\_fetch_ind_x      ' %xxx_10
+i_st_ind_y      call    #\_fetch_ind_y      ' %xxx_0
+_st             mov     t1, _A              '  110 A
+                mov     t1, _X              '  101 X
+                mov     t1, _Y              '  011 Y
+                jmp     #\_write
+                                            ' TAX TAY TSX TXA TXS TYA
+i_taxya         getbyte t1, _A, #0          '  0   0   1   1   1   1
+                getbyte t1, _X, #0          '  1   1   1   0   0   1
+                getbyte t1, _Y, #0          '  1   1   1   1   1   0
+                getbyte t1, _S, #0          '  1   1   0   1   1   1
+                getbyte _A, t1, #0          '  1   1   1   0   1   0
+                getbyte _X, t1, #0          '  0   1   0   1   1   1
+                getbyte _Y, t1, #0          '  1   0   1   1   1   1
+                getbyte _S, t1, #0          '  1   1   1   1   0   1
+                jmp     #_flags             '                  1
+                ret
+
+'
+'
+' Common subroutines
+'
+_flags          test    t1, #$FF       wz   ' affects Z
+                bitz    _P, #REGP_Z         ' |
+                testb   t1, #7         wz   ' affects N
+        _ret_   bitz    _P, #REGP_N         ' |
+
+_fetch_abs      rdword  t2, ptrb++
+                jmp     #\_read
+
+_fetch_abs_x    rdword  t2, ptrb++
+
+                getbyte t3, t2, #0
+                add     t3, _X
+                cmp     t3, #$100       wc  ' page boundary
+        if_nc   add     _I, #1              ' add 1 cycle
+
+                add     t2, _X
+                jmp     #\_read
+
+_fetch_abs_y    rdword  t2, ptrb++
+
+                getbyte t3, t2, #0
+                add     t3, _Y
+                cmp     t3, #$100       wc  ' page boundary
+        if_nc   add     _I, #1              ' add 1 cycle
+
+                add     t2, _Y
+                jmp     #\_read
+
+_fetch_zpg      rdbyte  t2, ptrb++
+                jmp     #\_read
+
+_fetch_zpg_x    rdbyte  t2, ptrb++
+                add     t2, _X
+                and     t2, #$FF
+                jmp     #\_read
+
+_fetch_zpg_y    rdbyte  t2, ptrb++
+                add     t2, _Y
+                and     t2, #$FF
+                jmp     #\_read
+
+_fetch_ind_x    rdbyte  t3, ptrb++
+                add     t3, _X
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t2, t4
+                add     t3, #1
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t1, t4
+                setbyte t2, t1, #1
+                jmp     #\_read
+
+_fetch_ind_y    rdbyte  t3, ptrb++
+
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t2, t4              ' t2 = low
+                add     t3, #1
+
+                getbyte t4, t3, #0
+                add     t4, ram_addr
+                rdbyte  t1, t4              ' t1 = high
+
+                add     t2, _Y
+                cmp     t2, #$100       wc  ' page boundary
+        if_nc   add     _I, #1              ' add 1 cycle
+
+                shl     t1, #8
+                add     t2, t1
+                and     t2, ##$FFFF
+                jmp     #\_read
+
+_push_t1        getbyte t2, _S, #0
+                add     t2, #$100
+                add     t2, ram_addr
+                wrbyte  t1, t2
+        _ret_   decmod  _S, #$FF
+
+_pop_t1         incmod  _S, #$FF
+                getbyte t2, _S, #0
+                add     t2, #$100
+                add     t2, ram_addr
+        _ret_   rdbyte  t1, t2
+
+' 0000-1FFF RAM
+' A000-BFFF BASIC ROM
+' D000-D3FF VIDEO RAM
+' DC00-DFFF KEYBOARD I/O
+' F000-F001 ACIA (CASSETTE)
+' F800-FFFF MONITOR ROM
+
+_read           ' t1 = data
+                ' t2 = address
+                getbyte t5, t2, #1
+                cmp     t5, #$F0         wz ' ACIA (serial/cassette) F000-F001       11110000 0000000x
+        if_e    jmp     #acia_read
+                and     t5, #%111111_00
+                cmp     t5, #%110111_00  wz ' Keyboard               DC00-DFFF       110111xx xxxxxxxx
+        if_e    jmp     #keyboard_read
+                cmp     t5, #%110100_00  wz ' Display RAM (1K)       D000-D3FF       110100xx xxxxxxxx
+        if_e    jmp     #.ok
+                and     t5, #%11111_000
+                cmp     t5, #%11111_000  wz ' Monitor ROM (2K)       F800-FFFF       11111xxx xxxxxxxx
+        if_e    jmp     #.ok
+                and     t5, #%111_00000
+                cmp     t5, #%0000_0000  wz ' Program RAM (8K)       0000-0FFF       000xxxxx xxxxxxxx
+        if_e    jmp     #.ok
+                cmp     t5, #%101_00000  wz ' BASIC ROM (8K)         A000-BFFF       101xxxxx xxxxxxxx
+        if_e    jmp     #.ok
+        _ret_   mov     t1, #$FF
+
+.ok             getword t5, t2, #0
+                add     t5, ram_addr
+        _ret_   rdbyte  t1, t5
+
+_write          ' t1 = data
+                ' t2 = address
+                getbyte t5, t2, #1
+                cmp     t5, #$F0         wz ' ACIA (serial/cassette) F000-F001       11110000 0000000x
+        if_e    jmp     #acia_write
+                and     t5, #%111111_00
+                cmp     t5, #%110111_00  wz ' Keyboard               DC00-DFFF       110111xx xxxxxxxx
+        if_e    jmp     #keyboard_write
+                cmp     t5, #%110100_00  wz ' Display RAM (1K)       D000-D3FF       110100xx xxxxxxxx
+        if_e    jmp     #.ok
+                and     t5, #%111_00000
+                cmp     t5, #%0000_0000  wz ' Program RAM (8K)       0000-0FFF       000xxxxx xxxxxxxx
+        if_e    jmp     #.ok
+                ret
+
+.ok             getword t5, t2, #0
+                add     t5, ram_addr
+        _ret_   wrbyte  t1, t5
+
+i_halt          ret
+
+'
+'
+' Initialized
+'
+ram_addr        long    ram_6502
+
+'
+'
+' CPU Registers
+'
+_A              long    $00     ' 8-bit working registers
+_X              long    $00
+_Y              long    $00
+
+_S              long    $FF     ' 8-bit stack pointer
+
+_P              long    $20     ' 8-bit flag register
+                                '   7 = N - negative
+                                '   6 = V - overflow
+                                '   5 = ?
+                                '   4 = B - break
+                                '   3 = D - decimal
+                                '   2 = I - interrupt
+                                '   1 = Z - zero
+                                '   0 = C - carry
+
+_PC             long    $0000   ' 16-bit program counter
+
+_T              long    0       ' total cycles
+_I              long    0       ' instruction cycles
+_I_CLK          long    _CLKFREQ / 1_000_000 ' effective cycle frequency
+
+'
+'
+' UK101 Peripherals
+
+keyboard_row    long    $00
+
+acia_rxr        long    $00[2]
+acia_txr        long    $00[2]
+
+acia_clk        long    _CLKFREQ / ACIA_BAUD
+acia_clk2       long   (_CLKFREQ / ACIA_BAUD) / 2
+acia_clk16      long   (_CLKFREQ / ACIA_BAUD) / 16
+
+acia_tx_ct      long    0
+acia_rx_ct      long    0
+
+'
+'
+' Temporaries
+'
+t1              res     1
+t2              res     1
+t3              res     1
+t4              res     1
+t5              res     1
+
+ts              res     1
+
+                fit     $1F0
+
+DAT             ' 6502 LUT resident code
+                org     $200, $3F0
+
+lut_6502
+'
+' instruction         snippet                  skip pattern         cycles    encoding
+'--------------------------------------------------------------------------------------------
+                long  i_brk       |                      %0 << 10 | 7 << 28 ' 00 BRK
+                long  i_log_ind_x |              %011_1_110 << 10 | 2 << 28 ' 01 ORA ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 02
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 03
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 04
+                long  i_log_zpg   |           %011_1_111110 << 10 | 3 << 28 ' 05 ORA $nn
+                long  i_asl_zpg   |           %01_000_1_110 << 10 | 5 << 28 ' 06 ASL $nn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 07
+                long  i_push      |                     %01 << 10 | 3 << 28 ' 08 PHP
+                long  i_log_imm   |                  %011_0 << 10 | 2 << 28 ' 09 ORA #$nn
+                long  i_asl       |               %10_000_0 << 10 | 2 << 28 ' 0A ASL
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 0B
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 0C
+                long  i_log_abs   |          %011_1_1111110 << 10 | 4 << 28 ' 0D ORA $nnnn
+                long  i_asl_abs   |          %01_000_1_1110 << 10 | 6 << 28 ' 0E ASL $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 0F
+
+                long  i_branch    |              %10_0111_0 << 10 | 3 << 28 ' 10 BPL $nn
+                long  i_log_ind_y |               %011_1_10 << 10 | 2 << 28 ' 11 ORA ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 12
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 13
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 14
+                long  i_log_zpg_x |                %011_1_0 << 10 | 2 << 28 ' 15 ORA $nn,X
+                long  i_asl_zpg_x |             %01_000_1_0 << 10 | 6 << 28 ' 16 ASL $nn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 17
+                long  i_clc       |                      %0 << 10 | 2 << 28 ' 18 CLC
+                long  i_log_abs_y |             %011_1_1110 << 10 | 2 << 28 ' 19 ORA $nnnn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 1A
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 1B
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 1C
+                long  i_log_abs_x |            %011_1_11110 << 10 | 2 << 28 ' 1D ORA $nnnn,X
+                long  i_asl_abs_x |            %01_000_1_10 << 10 | 7 << 28 ' 1E ASL $nnnn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 1F
+
+                long  i_jsr       |                      %0 << 10 | 6 << 28 ' 20 JSR $nn
+                long  i_log_ind_x |              %110_1_110 << 10 | 6 << 28 ' 21 AND ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 22
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 23
+                long  i_bit_zpg   |                      %0 << 10 | 3 << 28 ' 24 BIT $nn
+                long  i_log_zpg   |           %110_1_111110 << 10 | 3 << 28 ' 25 AND $nn
+                long  i_rol_zpg   |         %01_00000_1_110 << 10 | 5 << 28 ' 26 ROL $nn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 27
+                long  i_plp       |                      %0 << 10 | 4 << 28 ' 28 PLP
+                long  i_log_imm   |                  %110_0 << 10 | 2 << 28 ' 29 AND #$nn
+                long  i_rol       |             %10_00000_0 << 10 | 2 << 28 ' 2A ROL
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 2B
+                long  i_bit_abs   |                     %10 << 10 | 4 << 28 ' 2C BIT $nnnn
+                long  i_log_abs   |          %110_1_1111110 << 10 | 4 << 28 ' 2D AND $nnnn
+                long  i_rol_abs   |        %01_00000_1_1110 << 10 | 4 << 28 ' 2E ROL $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 2F
+
+                long  i_branch    |              %01_0111_0 << 10 | 3 << 28 ' 30 BMI $nn
+                long  i_log_ind_y |               %110_1_10 << 10 | 5 << 28 ' 31 AND ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 32
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 33
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 34
+                long  i_log_zpg_x |                %110_1_0 << 10 | 4 << 28 ' 35 AND $nn,X
+                long  i_rol_zpg_x |           %01_00000_1_0 << 10 | 6 << 28 ' 36 ROL $nn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 37
+                long  i_sec       |                      %0 << 10 | 2 << 28 ' 38 SEC
+                long  i_log_abs_y |             %110_1_1110 << 10 | 4 << 28 ' 39 AND $nnnn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 3A
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 3B
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 3C
+                long  i_log_abs_x |            %110_1_11110 << 10 | 4 << 28 ' 3D AND $nnnn,X
+                long  i_rol_abs_x |          %01_00000_1_10 << 10 | 7 << 28 ' 3E ROL $nnnn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 3F
+
+                long  i_rti       |               %11000000 << 10 | 6 << 28 ' 40 RTI
+                long  i_log_ind_x |              %101_1_110 << 10 | 2 << 28 ' 41 EOR ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 42
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 43
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 44
+                long  i_log_zpg   |           %101_1_111110 << 10 | 3 << 28 ' 45 EOR $nn
+                long  i_lsr_zpg   |           %01_000_1_110 << 10 | 2 << 28 ' 46 LSR $nn
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' 47
+                long  i_push      |                     %10 << 10 | 3 << 28 ' 48 PHA
+                long  i_log_imm   |                  %101_0 << 10 | 2 << 28 ' 49 EOR #$nn
+                long  i_lsr       |               %10_000_0 << 10 | 2 << 28 ' 4A LSR
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 4B
+                long  i_jmp       |                   %0110 << 10 | 3 << 28 ' 4C JMP $nnnn
+                long  i_log_abs   |          %101_1_1111110 << 10 | 4 << 28 ' 4D EOR $nnnn
+                long  i_lsr_abs   |          %01_000_1_1110 << 10 | 6 << 28 ' 4E LSR $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 4F
+
+                long  i_branch    |              %10_1011_0 << 10 | 3 << 28 ' 50 BVC $nn
+                long  i_log_ind_y |               %101_1_10 << 10 | 2 << 28 ' 51 EOR ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 52
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 53
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 54
+                long  i_log_zpg_x |                %101_1_0 << 10 | 2 << 28 ' 55 EOR $nn,X
+                long  i_lsr_zpg_x |             %01_000_1_0 << 10 | 6 << 28 ' 56 LSR $nn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 57
+                long  i_cli       |                      %0 << 10 | 2 << 28 ' 58 CLI
+                long  i_log_abs_y |             %101_1_1110 << 10 | 2 << 28 ' 59 EOR $nnnn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 5A
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 5B
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 5C
+                long  i_log_abs_x |            %101_1_11110 << 10 | 2 << 28 ' 5D EOR $nnnn,X
+                long  i_lsr_abs_x |            %01_000_1_10 << 10 | 7 << 28 ' 5E LSR $nnnn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 5F
+
+                long  i_rts       |                      %0 << 10 | 6 << 28 ' 60 RTS
+                long  i_adc_ind_x |                 %1_1110 << 10 | 6 << 28 ' 61 ADC ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 62
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 63
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 64
+                long  i_adc_zpg   |                   %1_10 << 10 | 3 << 28 ' 65 ADC $nn
+                long  i_ror_zpg   |         %01_00000_1_110 << 10 | 5 << 28 ' 66 ROR $nn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 67
+                long  i_pla       |                      %0 << 10 | 4 << 28 ' 68 PLA
+                long  i_adc_imm   |                      %0 << 10 | 2 << 28 ' 69 ADC #$nn
+                long  i_ror       |             %10_00000_0 << 10 | 2 << 28 ' 6A ROR
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 6B
+                long  i_jmp       |                   %0000 << 10 | 5 << 28 ' 6C JMP ($nnnn)
+                long  i_adc_abs   |              %1_1111110 << 10 | 4 << 28 ' 6D ADC $nnnn
+                long  i_ror_abs   |        %01_00000_1_1110 << 10 | 6 << 28 ' 6E ROR $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 6F
+
+                long  i_branch    |              %01_1011_0 << 10 | 3 << 28 ' 70 BVS $nn
+                long  i_adc_ind_y |                  %1_110 << 10 | 5 << 28 ' 71 ADC ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 72
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 73
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 74
+                long  i_adc_zpg_x |                    %1_0 << 10 | 4 << 28 ' 75 ADC $nn,X
+                long  i_ror_zpg_x |           %01_00000_1_0 << 10 | 6 << 28 ' 76 ROR $nn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 77
+                long  i_sei       |                      %0 << 10 | 2 << 28 ' 78 SEI
+                long  i_adc_abs_y |                %1_11110 << 10 | 4 << 28 ' 79 AND $nnnn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 7A
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 7B
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 7C
+                long  i_adc_abs_x |               %1_111110 << 10 | 4 << 28 ' 7D ADC $nnnn,X
+                long  i_ror_abs_x |          %01_00000_1_10 << 10 | 7 << 28 ' 7E ROR $nnnn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 7F
+
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 80
+                long  i_st_ind_x  |                 %110_10 << 10 | 6 << 28 ' 81 STA ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 82
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 83
+                long  i_st_zpg    |              %011_11110 << 10 | 3 << 28 ' 84 STY $nn
+                long  i_st_zpg    |              %110_11110 << 10 | 3 << 28 ' 85 STA $nn
+                long  i_st_zpg    |              %101_11110 << 10 | 3 << 28 ' 86 STX $nn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 87
+                long  i_inde_xy   |               %01_01_01 << 10 | 2 << 28 ' 88 DEY
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 89
+                long  i_taxya     |              %1110_1101 << 10 | 2 << 28 ' 8A TXA
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 8B
+                long  i_st_abs    |           %011_11111110 << 10 | 4 << 28 ' 8C STY $nnnn
+                long  i_st_abs    |           %110_11111110 << 10 | 4 << 28 ' 8D STA $nnnn
+                long  i_st_abs    |           %101_11111110 << 10 | 4 << 28 ' 8E STX $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 8F
+
+                long  i_branch    |              %10_1110_0 << 10 | 3 << 28 ' 90 BCC $nn
+                long  i_st_ind_y  |                  %110_0 << 10 | 6 << 28 ' 91 STA ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 92
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 93
+                long  i_st_zpg_x  |               %011_1110 << 10 | 4 << 28 ' 94 STY $nn,X
+                long  i_st_zpg_x  |               %110_1110 << 10 | 4 << 28 ' 95 STA $nn,X
+                long  i_st_zpg_y  |                %101_110 << 10 | 4 << 28 ' 96 STX $nn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 97
+                long  i_taxya     |              %1110_1011 << 10 | 2 << 28 ' 98 TYA
+                long  i_st_abs_y  |             %110_111110 << 10 | 5 << 28 ' 99 STA $nnnn,Y
+                long  i_taxya     |            %1_0111_1101 << 10 | 2 << 28 ' 9A TXS
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 9B
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 9C
+                long  i_st_abs_x  |            %110_1111110 << 10 | 5 << 28 ' 9D STA $nnnn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 9E
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 9F
+
+                long  i_ld_imm    |                  %011_0 << 10 | 2 << 28 ' A0 LDY #nn
+                long  i_ld_ind_x  |               %110_1_10 << 10 | 6 << 28 ' A1 LDA ($nn,X)
+                long  i_ld_imm    |                  %101_0 << 10 | 2 << 28 ' A2 LDX #nn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' A3
+                long  i_ld_zpg    |            %011_1_11110 << 10 | 3 << 28 ' A4 LDY zpg
+                long  i_ld_zpg    |            %110_1_11110 << 10 | 3 << 28 ' A5 LDA zpg
+                long  i_ld_zpg    |            %101_1_11110 << 10 | 3 << 28 ' A6 LDX zpg
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' A7
+                long  i_taxya     |              %1011_1110 << 10 | 2 << 28 ' A8 TAY
+                long  i_ld_imm    |                  %110_0 << 10 | 2 << 28 ' A9 LDA #nn
+                long  i_taxya     |              %1101_1110 << 10 | 2 << 28 ' AA TAX
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' AB
+                long  i_ld_abs    |         %011_1_11111110 << 10 | 4 << 28 ' AC LDY nnnn
+                long  i_ld_abs    |         %110_1_11111110 << 10 | 4 << 28 ' AD LDA nnnn
+                long  i_ld_abs    |         %101_1_11111110 << 10 | 4 << 28 ' AE LDX nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' AF
+
+                long  i_branch    |              %01_1110_0 << 10 | 3 << 28 ' B0 BCS $nn
+                long  i_ld_ind_y  |                %110_1_0 << 10 | 5 << 28 ' B1 LDA ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' B2
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' B3
+                long  i_ld_zpg_x  |             %011_1_1110 << 10 | 4 << 28 ' B4 LDY $nn,Y
+                long  i_ld_zpg_x  |             %110_1_1110 << 10 | 4 << 28 ' B5 LDA $nn,X
+                long  i_ld_zpg_y  |              %101_1_110 << 10 | 4 << 28 ' B6 LDX $nn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' B7
+                long  i_clv       |                      %0 << 10 | 2 << 28 ' B8 CLV
+                long  i_ld_abs_y  |           %110_1_111110 << 10 | 4 << 28 ' B9 LDA $nnnn,Y
+                long  i_taxya     |              %1101_0111 << 10 | 2 << 28 ' BA TSX
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' BB
+                long  i_ld_abs_x  |          %011_1_1111110 << 10 | 4 << 28 ' BC LDY $nnnn,X
+                long  i_ld_abs_x  |          %110_1_1111110 << 10 | 4 << 28 ' BD LDA $nnnn,X
+                long  i_ld_abs_y  |           %101_1_111110 << 10 | 4 << 28 ' BE LDX $nnnn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' BF
+
+                long  i_cmp_imm   |                 %011_00 << 10 | 2 << 28 ' C0 CPY #$nn
+                long  i_cmp_ind_x |           %110_0_1_1110 << 10 | 6 << 28 ' C1 CMP ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' C2
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' C3
+                long  i_cmp_zpg   |             %011_0_1_10 << 10 | 3 << 28 ' C4 CPY $nn
+                long  i_cmp_zpg   |             %110_0_1_10 << 10 | 3 << 28 ' C5 CMP $nn
+                long  i_dec_zpg   |                %10_1110 << 10 | 5 << 28 ' C6 DEC $nn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' C7
+                long  i_inde_xy   |               %01_10_01 << 10 | 2 << 28 ' C8 INY
+                long  i_cmp_imm   |                 %110_00 << 10 | 2 << 28 ' C9 CMP #$nn
+                long  i_inde_xy   |               %10_01_10 << 10 | 2 << 28 ' CA DEX
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' CB
+                long  i_cmp_abs   |        %011_0_1_1111110 << 10 | 4 << 28 ' CC CPY $nnnn
+                long  i_cmp_abs   |        %110_0_1_1111110 << 10 | 4 << 28 ' CD CMP $nnnn
+                long  i_dec_abs   |                   %10_0 << 10 | 6 << 28 ' CE DEC $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' CF
+
+                long  i_branch    |              %10_1101_0 << 10 | 3 << 28 ' D0 BNE $mm
+                long  i_cmp_ind_y |            %110_0_1_110 << 10 | 2 << 28 ' D1 CMP ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' D2
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' D3
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' D4
+                long  i_cmp_zpg_x |              %110_0_1_0 << 10 | 2 << 28 ' D5 CMP $nn,X
+                long  i_dec_zpg_x |                  %10_10 << 10 | 6 << 28 ' D6 DEC $nn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' D7
+                long  i_cld       |                      %0 << 10 | 2 << 28 ' D8 CLD
+                long  i_cmp_abs_y |          %110_0_1_11110 << 10 | 4 << 28 ' D9 CMP $nnnn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' DA
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' DB
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' DC
+                long  i_cmp_abs_x |         %110_0_1_111110 << 10 | 4 << 28 ' DD CMP $nnnn,X
+                long  i_dec_abs_x |                 %10_110 << 10 | 7 << 28 ' DE DEC $nnnn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' DF
+
+                long  i_cmp_imm   |                 %101_00 << 10 | 2 << 28 ' E0 CPX #$nn
+                long  i_sbc_ind_x |                 %1_1110 << 10 | 6 << 28 ' E1 SBC ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' E2
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' E3
+                long  i_cmp_zpg   |             %101_0_1_10 << 10 | 3 << 28 ' E4 CPX $nn
+                long  i_sbc_zpg   |                   %1_10 << 10 | 3 << 28 ' E5 SBC #$nn
+                long  i_dec_zpg   |                %01_1110 << 10 | 5 << 28 ' E6 INC $nn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' E7
+                long  i_inde_xy   |               %10_10_10 << 10 | 2 << 28 ' E8 INX
+                long  i_sbc_imm   |                      %0 << 10 | 2 << 28 ' E9 SBC #$nn
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' EA NOP
+                long  i_halt      |                      %0 << 10 | 4 << 28 ' EB
+                long  i_cmp_abs   |        %101_0_1_1111110 << 10 | 2 << 28 ' EC CPX $nnnn
+                long  i_sbc_abs   |              %1_1111110 << 10 | 4 << 28 ' ED SBC $nnnn
+                long  i_dec_abs   |                   %01_0 << 10 | 6 << 28 ' EE INC $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' EF
+
+                long  i_branch    |              %01_1101_0 << 10 | 3 << 28 ' F0 BEQ $nn
+                long  i_sbc_ind_y |                  %1_110 << 10 | 5 << 28 ' F1 SBC ($nn),Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' F2
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' F3
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' F4
+                long  i_sbc_zpg_x |                    %1_0 << 10 | 4 << 28 ' F5 SBC $nn,X
+                long  i_dec_zpg_x |                  %01_10 << 10 | 6 << 28 ' F6 INC $nn,X
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' F7
+                long  i_sed       |                      %0 << 10 | 2 << 28 ' F8 SED
+                long  i_sbc_abs_y |                %1_11110 << 10 | 4 << 28 ' F9 SBC $nnnn,Y
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' FA
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' FB
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' FC
+                long  i_sbc_abs_x |               %1_111110 << 10 | 4 << 28 ' FD SBC $nnnn,X
+                long  i_dec_abs_x |                 %01_110 << 10 | 7 << 28 ' FE INC $nnnn
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' FF
+
+'
+'
+' I/O Routines
+
+io_init
+                flth    #ACIA_RX_PIN
+                drvh    #ACIA_TX_PIN
+
+                getct   acia_rx_ct
+                mov     ijmp2, ##acia_rx_isr
+                setint2 #EVENT_CT2
+                addct2  acia_rx_ct, acia_clk16
+
+                getct   acia_tx_ct
+                mov     ijmp3, ##acia_tx_isr
+                setint3 #EVENT_CT3
+                addct3  acia_tx_ct, acia_clk
+
+                ret
+
+keyboard_read
+                mov     t1, #$FF
+
+                rdlong  t4, #@uk101_keyboard
+                testbn  keyboard_row, #0    wz
+        if_z    getbyte t3, t4, #0
+        if_z    and     t1, t3
+                testbn  keyboard_row, #1    wz
+        if_z    getbyte t3, t4, #1
+        if_z    and     t1, t3
+                testbn  keyboard_row, #2    wz
+        if_z    getbyte t3, t4, #2
+        if_z    and     t1, t3
+                testbn  keyboard_row, #3    wz
+        if_z    getbyte t3, t4, #3
+        if_z    and     t1, t3
+
+                rdlong  t4, #@uk101_keyboard+4
+                testbn  keyboard_row, #4    wz
+        if_z    getbyte t3, t4, #0
+        if_z    and     t1, t3
+                testbn  keyboard_row, #5    wz
+        if_z    getbyte t3, t4, #1
+        if_z    and     t1, t3
+                testbn  keyboard_row, #6    wz
+        if_z    getbyte t3, t4, #2
+        if_z    and     t1, t3
+                testbn  keyboard_row, #7    wz
+        if_z    getbyte t3, t4, #3
+        if_z    and     t1, t3
+
+                ret
+
+keyboard_write
+        _ret_   getbyte keyboard_row, t1, #0
+
+acia_rx_isr
+                testp   #ACIA_RX_PIN        wc  ' test start bit
+        if_c    addct2  acia_rx_ct, acia_clk16  ' no start bit, wait again
+        if_nc   addct2  acia_rx_ct, acia_clk2   ' start bit, set half clock timer
+        if_nc   mov     ijmp2, ##acia_rx_isr1   '   next stage
+                reti2
+
+acia_rx_isr1
+                testp   #ACIA_RX_PIN        wc  ' still testing start bit
+        if_c    addct2  acia_rx_ct, acia_clk16  ' no start bit
+        if_c    mov     ijmp2, ##acia_rx_isr    '   wait again
+        if_nc   mov     acia_rxr+1, #%1_00000000 ' still start bit, set shift end flag
+        if_nc   addct2  acia_rx_ct, acia_clk    '   set full clock timer
+        if_nc   mov     ijmp2, ##acia_rx_isr2   '   bit receive stage
+                reti2
+
+acia_rx_isr2
+                testp   #ACIA_RX_PIN        wc  ' shift in bit
+                rcr     acia_rxr+1, #1      wc  ' | C=1 no more bits
+        if_c    shr     acia_rxr+1, #23         ' no more bits, shift byte into position
+        if_c    mov     acia_rxr, acia_rxr+1    ' | advance receive register
+        if_c    mov     ijmp2, ##acia_rx_isr    ' | reset receive stage
+        if_c    addct2  acia_rx_ct, acia_clk16  ' | set clock/16 timer
+        if_nc   addct2  acia_rx_ct, acia_clk    ' more bits, set clock timer
+                reti2
+
+acia_tx_isr
+                cmp     acia_txr+1, #0      wz  ' more bits to send ?
+        if_nz   shr     acia_txr+1, #1      wc  ' | shift next bit to C
+        if_nz   drvc    #ACIA_TX_PIN            ' | output C
+        if_z    mov     acia_txr+1, acia_txr    ' get byte from tx register
+        if_z    mov     acia_txr, #0            ' | clear tx register
+                addct3  acia_tx_ct, acia_clk    ' set next timer interrupt
+                reti3
+
+acia_read
+                getbyte t5, t2, #0
+                cmp     t5, #$00            wz
+        if_z    jmp     #\acia_ctl_rd
+                cmp     t5, #$01            wz
+        if_z    getbyte t1, acia_rxr, #0
+        if_z    mov     acia_rxr, #0
+                ret
+
+acia_write
+                getbyte t5, t2, #0
+                cmp     t5, #$00            wz
+        if_z    jmp     #\acia_ctl_wr
+                cmp     t5, #$01            wz
+        if_z    getbyte t5, t1, #0              ' get byte to shift out
+        if_z    or      t5, #%1_00000000        ' insert stop bit
+        if_z    shl     t5, #1                  ' insert start bit
+        if_z    mov     acia_txr, t5            ' set shift register
+                ret
+
+acia_ctl_rd
+                mov     t1, #$00
+                testb   acia_rxr, #8        wz
+                bitz    t1, #0
+                testb   acia_txr, #8        wz
+                bitnz   t1, #1
+                ret
+
+acia_ctl_wr
+                ' Ignore ctl write
+                ret
+
+                fit     $3FF
+
+CON             ' 6502 constants
+
+    REGP_N = 7
+    REGP_V = 6
+    REGP_B = 4
+    REGP_D = 3
+    REGP_I = 2
+    REGP_Z = 1
+    REGP_C = 0
+
+DAT             ' 6502 Memory Space
+                orgh
+
+ram_6502
+                orgh    ram_6502 + $A000
+
+basic_rom       file    "BASUK101.ROM"
+
+                orgh    ram_6502 + $D000
+
+video_ram       byte    $00[1024]
+
+                orgh    ram_6502 + $F800
+
+                ' Choose one
+monitor_rom     'file    "MONUK01.ROM"
+                file    "MONUK02.ROM"
+                'file    "CEGMON.ROM"
+
