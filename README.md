@@ -1,8 +1,18 @@
-# Propeller-2 Projects
+# Propeller 2 Projects
 
-My Propeller-2 projects.
+Projects based on the **Parallax Propeller 2** multicore microcontroller.
+
+**Emulators**
+
+ * **[Coleco](Coleco)** - ColecoVision
+ * **[M6502](M6502)** - MOS6502 Processor
+   * **[apple1](M6502/apple1)** - Apple-1
+   * **[uk101](M6502/uk101)** - Compukit UK101
+ * **[MSX](MSX)** - MSX-1
+ * **[Sinclair](Sinclair)** - Sinclair ZX Spectrum 48K/128K
+ * **[TMS9918](TMS9918)** - TMS9918 VDP
 
 **Links:**
 
- * [Parallax Propeller-2](https://www.parallax.com/propeller-2)
+ * [Parallax Propeller 2](https://www.parallax.com/propeller-2)
 
