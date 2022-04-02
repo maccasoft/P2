@@ -9,7 +9,7 @@ CON
 
     _CLKFREQ      = 240_000_000
 
-    VIDEO         = PAL ' video mode VGA, NTSC or PAL
+    VIDEO         = VGA ' video mode VGA, NTSC or PAL
     VGA_PIN       = 8
     CVBS_PIN      = 53 addpins 1 ' 53=CVBS/Y, 54=C
 
@@ -646,7 +646,7 @@ zk_extprefix
         if_10   skipf   ##%00001111_10101_11101_01_1100011_0011_100_11     ' IN
         if_11   skipf   ##%00111111_10101_11101_01_1111101_0011_011        ' OUT
 
-                getbyte zk_ea,zk_debc,#0 ' IN
+                getword zk_ea,zk_debc,#0 ' IN
                 call    #\zk_portin ' IN
                 call    #\zk_read8hl ' everything else
 
@@ -697,7 +697,7 @@ zk_extprefix
                 mov     zk_ea,zk_hl  ' IN
                 getword zk_ea,zk_debc,#1 ' LD
                 call    #\zk_write8 ' LD,IN
-                getbyte zk_ea,zk_debc,#0 ' OUT
+                getword zk_ea,zk_debc,#0 ' OUT
                 call    #\zk_portout ' OUT
 
                 getword zk_optmp1,zk_debc,#0 ' LD,CP
@@ -1024,13 +1024,13 @@ zk_write8
 zk_portout
                 ' zk_ea   = port
                 ' zk_tmp8 = data
-                testb   zk_ea, #0       wz
+                testb   zk_ea, #0       wz  ' Z=A0
         if_x0   call    #\zx_ula_write
-                testb   zk_ea, #15      wc
-                testb   zk_ea, #1       wz
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #1       wz  ' Z=A1
         if_00   call    #\zx_ula_map_write
-                testb   zk_ea, #14      wc
-        if_10   call    #\zx_ay_reg_select
+                testb   zk_ea, #14      wc  ' C=A14
+        if_10   call    #\zx_ay_reg_select  ' Z=A1 (from above)
         if_00   call    #\zx_ay_reg_write
                 call    #\ula_contend_port
                 ret     wcz
@@ -1040,12 +1040,10 @@ zk_portin
                 ' zk_tmp8 = data
                 mov     zk_tmp8, #$FF
                 call    #\ula_contend_port
-
-                testb   zk_ea, #0       wz
-        if_x0   add     zk_cycles, ula_cycles
+                testb   zk_ea, #0       wz  ' Z=A0
         if_x0   jmp     #\zx_ula_read
-                testb   zk_ea, #14      wc
-                testb   zk_ea, #1       wz
+                testb   zk_ea, #14      wc  ' C=A14
+                testb   zk_ea, #1       wz  ' Z=A1
         if_10   jmp     #\zx_ay_reg_read
                 ret     wcz
 
@@ -1446,17 +1444,21 @@ zk_halt
                 or      zk_irqenable,#(1<<ZK_HALT_BIT)
         _ret_   decmod  zk_pc,zk_ffffh
 
-ula_contend_port
-                skipf   #%100000
 ula_contend_ram
-                testb   zk_ea, #15      wc  ' C=A15   PORT/RAM
-                testb   zk_ea, #14      wz  ' Z=A14   PORT/RAM
-        if_01   call    #\zx_ula_advance            ' PORT/RAM
-        if_01   add     zk_cycles, ula_cycles       ' PORT/RAM
-                add     zk_cycles, #1               ' PORT/RAM
-        _ret_   add     zk_cycles, #2               '      RAM
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #14      wz  ' Z=A14
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+        _ret_   add     zk_cycles, #3
 
-                testb   zk_ea, #0       wz          ' PORT
+ula_contend_port
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #14      wz  ' Z=A14
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+
+                testb   zk_ea, #0       wz
                 call    #\zx_ula_advance
         if_x0   add     zk_cycles, ula_cycles
         if_x0   add     zk_cycles, #3
