@@ -23,6 +23,9 @@ CON
     AUDIO_LEFT_PIN  = 48
     AUDIO_RIGHT_PIN = 49
 
+    TAPE_MIC = 0   ' OUT
+    TAPE_EAR = 1   ' IN
+    TAPE_REM = 2   ' OUT (motor)
 
 DAT             ' Startup
                 org     $000
@@ -1029,10 +1032,17 @@ zk_portout
                 cmp     pa, #$A9     wcz
         if_e    setbyte msx_ppi, zk_tmp8, #1
                 cmp     pa, #$AA     wcz
-        if_e    setbyte msx_ppi, zk_tmp8, #2
+        if_e    jmp     #.ppi_c_wr
                 cmp     pa, #$AB     wcz
         if_e    setbyte msx_ppi, zk_tmp8, #3
+                ret     wcz
 
+.ppi_c_wr
+                setbyte msx_ppi, zk_tmp8, #2
+                testb   zk_tmp8, #4     wc  ' motor
+                drvc    #TAPE_REM           ' |
+                testb   zk_tmp8, #5     wc  ' mic
+                drvc    #TAPE_MIC           ' |
                 ret     wcz
 
 zk_portin
@@ -1509,8 +1519,21 @@ msx_slot0_read
 
 msx_slot1_read
                 mov     zk_tmp0, ##msx_slot1_end
-                sub     zk_tmp0, ##msx_slot1+1
+                sub     zk_tmp0, ##msx_slot1
+                cmp     zk_tmp0, ##$8000    wcz
+        if_e    jmp     #.map_4000
+
+                sub     zk_tmp0, #1
                 and     pa, zk_tmp0
+                add     pa, ##@msx_slot1
+                rdbyte  zk_tmp8, pa
+                ret     wcz
+
+.map_4000       testb   zk_ea, #15      wc
+                testb   zk_ea, #14      wz
+        if_00   ret     wcz                 ' 0000-3FFF empty
+        if_11   ret     wcz                 ' C000-FFFF empty
+                sub     pa, ##$4000
                 add     pa, ##@msx_slot1
                 rdbyte  zk_tmp8, pa
                 ret     wcz
@@ -2942,20 +2965,28 @@ tms_status_rd   rdlong  tms_tmp1, #@tms_status
 ' AY-3-8910
 '
 psg_reg_write
-                getbyte msx_psg_latch, zk_tmp8, #0
-                and     msx_psg_latch, #$0F
+                getnib  msx_psg_latch, zk_tmp8, #0
                 ret     wcz
 
 psg_write
+                cmp     msx_psg_latch, #$0E wcz ' port A
+        if_e    ret     wcz
                 mov     zk_tmp0, #@psg_regs
                 add     zk_tmp0, msx_psg_latch
                 wrbyte  zk_tmp8, zk_tmp0
                 ret     wcz
 
 psg_read
+                cmp     msx_psg_latch, #$0E wcz ' port A
+        if_e    jmp     #.porta_rd
                 mov     zk_tmp0, #@psg_regs
                 add     zk_tmp0, msx_psg_latch
                 rdbyte  zk_tmp8, zk_tmp0
+                ret     wcz
+
+.porta_rd
+                testp   #TAPE_EAR       wc  ' ear
+                bitc    zk_tmp8, #7         ' |
                 ret     wcz
 
 DAT             ' Z80 Memory Space
@@ -2974,7 +3005,6 @@ msx_slot1
                 'file    "Pitfall (1984)(Pony Canyon).rom"
                 'file    "Pitfall II - Lost Caverns (1985)(Pony Canyon).rom"
                 'file    "Q-Bert (1986)(Konami)[RC-746].rom"
-                'file    "River Raid (1984)(Pony Canyon).rom"
                 'file    "Space Invaders (1985)(Taito).rom"
                 'file    "Super Cobra (1983)(Konami)[RC-705].rom"
                 'file    "Time Pilot (1983)(Konami)[RC-703].rom"
