@@ -631,7 +631,7 @@ zk_extprefix
         if_10   skipf   ##%00001111_10101_11101_01_1100011_0011_100_11     ' IN
         if_11   skipf   ##%00111111_10101_11101_01_1111101_0011_011        ' OUT
 
-                getbyte zk_ea,zk_debc,#0 ' IN
+                getword zk_ea,zk_debc,#0 ' IN
                 call    #\zk_portin ' IN
                 call    #\zk_read8hl ' everything else
 
@@ -682,7 +682,7 @@ zk_extprefix
                 mov     zk_ea,zk_hl  ' IN
                 getword zk_ea,zk_debc,#1 ' LD
                 call    #\zk_write8 ' LD,IN
-                getbyte zk_ea,zk_debc,#0 ' OUT
+                getword zk_ea,zk_debc,#0 ' OUT
                 call    #\zk_portout ' OUT
 
                 getword zk_optmp1,zk_debc,#0 ' LD,CP
