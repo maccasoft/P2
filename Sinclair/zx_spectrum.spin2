@@ -1,9 +1,11 @@
 {
-    ZX Spectrum Emulator
+    ZX Spectrum 48K Emulator
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
 
     Based on ZiKore Z80 Emulator by Ada Gottensträter
     with modifications by Marco Maccaferri
+
+    PS/2 Keyboard driver by Marco Maccaferri
 }
 CON
 
