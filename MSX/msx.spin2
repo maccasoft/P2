@@ -1005,11 +1005,6 @@ zk_write8
         if_01   jmp     #\msx_write8_4000
         if_10   jmp     #\msx_write8_8000
         if_11   jmp     #\msx_write8_C000
-'                getword pa, zk_ea, #0
-'                cmp     pa, ##$4000     wcz
-'        if_ae   add     pa, zk_ram
-'        if_ae   wrbyte  zk_tmp8, pa
-'                ret     wcz
 
 zk_portout
                 ' zk_ea   = port
@@ -1039,9 +1034,9 @@ zk_portout
 
 .ppi_c_wr
                 setbyte msx_ppi, zk_tmp8, #2
-                testb   zk_tmp8, #4     wc  ' motor
+                testb   zk_tmp8, #4     wc  ' motor control (REM)
                 drvc    #TAPE_REM           ' |
-                testb   zk_tmp8, #5     wc  ' mic
+                testb   zk_tmp8, #5     wc  ' tape write (MIC)
                 drvc    #TAPE_MIC           ' |
                 ret     wcz
 
@@ -1094,7 +1089,7 @@ zk_refreshhi    long    0
 zk_ivector      long    0
 zk_irqenable    long    0
 
-zk_cycletime    long    _CLKFREQ / ZK_CLOCK ' round(float(_CLKFREQ) / float(ZK_CLOCK) * 256.0)
+zk_cycletime    long    _CLKFREQ / ZK_CLOCK
 
 msx_ppi         long    $00_00_00_00
 
@@ -1823,7 +1818,7 @@ loop
                 rdlong  a, #@tms_status         ' update status byte
                 or      a, #TMSVSYNC            ' vsync flag
                 test    regs+1, #TMSINTEN   wz  ' interrupt enable
-                bitnz   a, #8                   ' NMI
+                bitnz   a, #8                   ' IRQ
                 wrlong  a, #@tms_status
                 lockrel #0
 
@@ -2632,247 +2627,249 @@ CON ' CVBS constants
     PAL_XF          = $0353F900 ' ((PAL_DOTF >> (7 - PAL_I)) frac (_CLKFREQ << PAL_I) + 1) >> 1
 
 DAT ' AY-3-8912 cog code
-                org     $000
+                    org     $000
 
 ay_emu
-                fltl    leftp
-                fltl    rightp
-                wrpin   r1,leftp
-                wrpin   r1,rightp
-                wxpin   sampleRate,leftp
-                wxpin   sampleRate,rightp
-                wypin   dac_center,leftp
-                wypin   dac_center,rightp
-                drvh    leftp
-                drvh    rightp
+                    fltl    leftp
+                    fltl    rightp
+                    wrpin   r1, leftp
+                    wrpin   r1, rightp
+                    wxpin   sampleRate, leftp
+                    wxpin   sampleRate, rightp
+                    wypin   dac_center, leftp
+                    wypin   dac_center, rightp
+                    drvh    leftp
+                    drvh    rightp
 
 ' Read all AY registers from hub memory and convert
 ' them to more convenient representations.
 mainLoop
 getRegisters
-                setq    #4-1
-                rdlong  temp1,ptra
-                getword frequency1, temp1,#0                ' reg 0+1
-                shl     frequency1, #20
-                getword frequency2, temp1,#1                ' reg 2+3
-                shl     frequency2, #20
-                getword frequency3, temp2,#0                ' reg 4+5
-                shl     frequency3, #20
-                getbyte noisePeriod, temp2,#2               ' reg 6
-                and     noisePeriod, #$1f
-                fge     noisePeriod, #2
-                shl     noisePeriod, #20
-                getbyte enableRegister, temp2,#3            ' reg 7
-                setd    oscValues, enableRegister
-                getbyte amplitude1, temp3,#0                ' reg 8
-                getbyte amplitude2, temp3,#1                ' reg 9
-                getbyte amplitude3, temp3,#2                ' reg 10
-                getbyte envelopePeriod, temp4,#0            ' reg 12
-                rolbyte envelopePeriod, temp3,#3            ' reg 11
-                shl     envelopePeriod, #16             wz
-        if_z    mov     envelopePeriod, half_period         ' 0 == half the period of 1
-                getbyte envelopeShape, temp4,#1             ' reg 13
+                    setq    #4-1
+                    rdlong  temp1, ptra
+                    getword frequency1, temp1, #0           ' reg 0+1
+                    shl     frequency1, #20
+                    getword frequency2, temp1, #1           ' reg 2+3
+                    shl     frequency2, #20
+                    getword frequency3, temp2, #0           ' reg 4+5
+                    shl     frequency3, #20
+                    getbyte noisePeriod, temp2, #2          ' reg 6
+                    and     noisePeriod, #$1f
+                    fge     noisePeriod, #2
+                    shl     noisePeriod, #20
+                    getbyte enableRegister, temp2, #3       ' reg 7
+                    setd    oscValues, enableRegister
+                    getbyte amplitude1, temp3, #0           ' reg 8
+                    getbyte amplitude2, temp3, #1           ' reg 9
+                    getbyte amplitude3, temp3, #2           ' reg 10
+                    getbyte envelopePeriod, temp4, #0       ' reg 12
+                    rolbyte envelopePeriod, temp3, #3       ' reg 11
+                    shl     envelopePeriod, #16         wz
+    if_z            mov     envelopePeriod, half_period     ' 0 == half the period of 1
+                    getbyte envelopeShape, temp4, #1        ' reg 13
 
 ' Calculate AY samples channel 1-3 and store in out1-out3
-                mov      mixOut, dac_center                  '  DC offset
+                    mov     mixOut, dac_center              '  DC offset
 
 '        Envelope shaping -> envelopeAmplitude
-Envelope      sub      envCounter, envSubValue           wc ' Handle envelope incrementation
-  if_c        add      envCounter, envelopePeriod
-  if_c        add      envelopeValue, envelopeInc
-              fle      envCounter, envelopePeriod
+Envelope            sub     envCounter, envSubValue     wc  ' Handle envelope incrementation
+    if_c            add     envCounter, envelopePeriod
+    if_c            add     envelopeValue, envelopeInc
+                    fle     envCounter, envelopePeriod
 
-              test     envelopeShape, #16                wz ' Handle envelope "reset bit" ( Extra bit added by Ahle2 )
-  if_z        neg      envelopeValue, #0
-  if_z        mov      envelopeInc, #1
-  if_z        mov      envCounter, envelopePeriod
-  if_z        or       envelopeShape, #16
-  if_z        wrbyte   envelopeShape, ptra[13/1]            '<-IMPORTANT, sets bit 5 ("reset bit") of envelope shape register in hub ram
+                    test    envelopeShape, #16          wz  ' Handle envelope "reset bit" ( Extra bit added by Ahle2 )
+    if_z            neg     envelopeValue, #0
+    if_z            mov     envelopeInc, #1
+    if_z            mov     envCounter, envelopePeriod
+    if_z            or      envelopeShape, #16
+    if_z            wrbyte  envelopeShape, ptra[13/1]       ' <-IMPORTANT, sets bit 5 ("reset bit") of envelope shape register in hub ram
 
-              test     envelopeShape, #8                 wc ' Handle envelope continue = 0
-              test     envelopeShape, #4                 wz
- if_nc_and_z  mov      envelopeShape, #9
- if_nc_and_nz mov      envelopeShape, #15
+                    test    envelopeShape, #8           wc  ' Handle envelope continue = 0
+                    test    envelopeShape, #4           wz
+    if_nc_and_z     mov     envelopeShape, #9
+    if_nc_and_nz    mov     envelopeShape, #15
 
-              test     envelopeShape, #2                 wz ' Sets the envelope hold level
-              muxz     envHoldLevel, #15                    '
+                    test    envelopeShape, #2           wz  ' Sets the envelope hold level
+                    muxz    envHoldLevel, #15               '
 
-              test     envelopeValue, #16                wz ' Check if > 15
-              test     envelopeShape, #1                 wc ' Check hold bit
-  if_nz_and_c mov      envelopeInc, #0                      ' Hold envelope
-  if_nz_and_c mov      envelopeValue, envHoldLevel          '
+                    test    envelopeValue, #16          wz  ' Check if > 15
+                    test    envelopeShape, #1           wc  ' Check hold bit
+    if_nz_and_c     mov     envelopeInc, #0                 ' Hold envelope
+    if_nz_and_c     mov     envelopeValue, envHoldLevel     '
 
-  if_nz       test     envelopeShape, #2                 wc ' Check and handle envelope alternation
-  if_nz_and_c neg      envelopeInc, envelopeInc
-  if_nz_and_c add      envelopeValue, envelopeInc
+    if_nz           test    envelopeShape, #2           wc  ' Check and handle envelope alternation
+    if_nz_and_c     neg     envelopeInc, envelopeInc
+    if_nz_and_c     add     envelopeValue, envelopeInc
 
-              mov      envelopeAmplitude, envelopeValue
-              test     envelopeShape, #4                 wc ' Check and handle envelope invertion (attack)
-  if_nc       xor      envelopeAmplitude, #15               '(Move Value or ~Value to envelopeAmplitude)
-
-
-'     Waveform shaping noise -> bit 3 of oscValues
-Noise1        sub      phaseAccumulatorN, noiseSubValue  wc ' Noise generator
-  if_nc       jmp      #Env1
-              add      phaseAccumulatorN, noisePeriod
-              test     noiseValue, noiseTap              wc
-              muxc     noiseValue, noiseMSB
-              shr      noiseValue, #1                    wc
-  if_c        xor      oscValues, #8
+                    mov     envelopeAmplitude, envelopeValue
+                    test    envelopeShape, #4           wc  ' Check and handle envelope invertion (attack)
+    if_nc           xor     envelopeAmplitude, #15          ' (Move Value or ~Value to envelopeAmplitude)
 
 
-'            Waveform shaping channel 1 -> out1
-Env1          test     amplitude1, #16                   wz ' Selects envelope or fixed amplitude
-  if_nz       mov      amplitude1, envelopeAmplitude        ' depending on bit 5 of amplitude register 1
-
-Square1       cmp      frequency1, freqRef               wc
-  if_nc       sub      phaseAccumulator1, oscSubValue    wc ' Square wave generator
-  if_c        add      phaseAccumulator1, frequency1        ' channel 1
-  if_c        xor      oscValues, #1
-
-              test     oscValues, mask513                wz ' Handles mixing of channel 1
-  if_nz       test     oscValues, mask4104               wz
-              getnib   arg1, amplitude1,#0
-              alts     arg1,#amplitudeTable
-              sumnz    mixOut, 0-0                          ' Tone on/off, Noise on/off
-  'if_z       mov      out1, r1                             ' out1 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
-
-'            Waveform shaping channel 2 -> out2
-
-Env2          test     amplitude2, #16                   wz ' Selects envelope or fixed amplitude
-  if_nz       mov      amplitude2, envelopeAmplitude        ' depending on bit 5 of amplitude register 2
-
-Square2       cmp      frequency2, freqRef               wc
-  if_nc       sub      phaseAccumulator2, oscSubValue    wc ' Square wave generator
-  if_c        add      phaseAccumulator2, frequency2        ' channel 2
-  if_c        xor      oscValues, #2
-
-              test     oscValues, mask1026               wz ' Handles mixing of channel 2
-  if_nz       test     oscValues, mask8200               wz
-              getnib   arg1, amplitude2,#0
-              alts     arg1,#amplitudeTable
-              sumnz    mixOut, 0-0                          ' Tone on/off, Noise on/off
-  'if_z       mov      out2, r1                             ' out2 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
+' Waveform shaping noise -> bit 3 of oscValues
+Noise1              sub      phaseAccumulatorN, noiseSubValue wc ' Noise generator
+    if_nc           jmp      #Env1
+                    add      phaseAccumulatorN, noisePeriod
+                    test     noiseValue, noiseTap       wc
+                    muxc     noiseValue, noiseMSB
+                    shr      noiseValue, #1             wc
+    if_c            xor      oscValues, #8
 
 
-'            Waveform shaping channel 3 -> out3
-Env3          test     amplitude3, #16                   wz ' Selects envelope or fixed amplitude
-  if_nz       mov      amplitude3, envelopeAmplitude        ' depending on bit 5 of amplitude register 3
-              mov      arg1, amplitude3
+' Waveform shaping channel 1 -> out1
+Env1                test     amplitude1, #16            wz  ' Selects envelope or fixed amplitude
+    if_nz           mov      amplitude1, envelopeAmplitude  ' depending on bit 5 of amplitude register 1
 
-Square3       cmp      frequency3, freqRef               wc
-  if_nc       sub      phaseAccumulator3, oscSubValue    wc ' Square wave generator
-  if_c        add      phaseAccumulator3, frequency3        ' channel 3
-  if_c        xor      oscValues, #4
+Square1             cmp      frequency1, freqRef        wc
+    if_nc           sub      phaseAccumulator1, oscSubValue wc  ' Square wave generator
+    if_c            add      phaseAccumulator1, frequency1      ' channel 1
+    if_c            xor      oscValues, #1
 
-              test     oscValues, mask2052               wz ' Handles mixing of channel 3
-  if_nz       test     oscValues, mask16392              wz
-              getnib   arg1, amplitude3,#0
-              alts     arg1,#amplitudeTable
-              sumnz    mixOut, 0-0                          ' Tone on/off, Noise on/off
-  'if_z       mov      out3, r1                             ' out3 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
+                    test     oscValues, mask513         wz  ' Handles mixing of channel 1
+    if_nz           test     oscValues, mask4104        wz
+                    getnib   arg1, amplitude1, #0
+                    alts     arg1, #amplitudeTable
+                    sumnz    mixOut, 0-0                    ' Tone on/off, Noise on/off
+    'if_z            mov      out1, r1                       ' out1 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
 
-'      Mix channels and update FRQA/FRQB PWM-values
+' Waveform shaping channel 2 -> out2
+
+Env2                test     amplitude2, #16            wz  ' Selects envelope or fixed amplitude
+    if_nz           mov      amplitude2, envelopeAmplitude  ' depending on bit 5 of amplitude register 2
+
+Square2             cmp      frequency2, freqRef        wc
+    if_nc           sub      phaseAccumulator2, oscSubValue wc  ' Square wave generator
+    if_c            add      phaseAccumulator2, frequency2      ' channel 2
+    if_c            xor      oscValues, #2
+
+                    test     oscValues, mask1026        wz  ' Handles mixing of channel 2
+    if_nz           test     oscValues, mask8200        wz
+                    getnib   arg1, amplitude2, #0
+                    alts     arg1, #amplitudeTable
+                    sumnz    mixOut, 0-0                    ' Tone on/off, Noise on/off
+    'if_z            mov      out2, r1                       ' out2 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
+
+
+' Waveform shaping channel 3 -> out3
+Env3                test     amplitude3, #16            wz  ' Selects envelope or fixed amplitude
+    if_nz           mov      amplitude3, envelopeAmplitude  ' depending on bit 5 of amplitude register 3
+                    mov      arg1, amplitude3
+
+Square3             cmp      frequency3, freqRef        wc
+    if_nc           sub      phaseAccumulator3, oscSubValue wc  ' Square wave generator
+    if_c            add      phaseAccumulator3, frequency3      ' channel 3
+    if_c            xor      oscValues, #4
+
+                    test     oscValues, mask2052        wz  ' Handles mixing of channel 3
+    if_nz           test     oscValues, mask16392       wz
+                    getnib   arg1, amplitude3, #0
+                    alts     arg1, #amplitudeTable
+                    sumnz    mixOut, 0-0                    ' Tone on/off, Noise on/off
+    'if_z            mov      out3, r1                       ' out3 = (ToneOn | ToneDisable) & (NoiseOn | NoiseDisable)
+
+' Mix channels and update FRQA/FRQB PWM-values
 mixer
-              'testp   rightp   wc
-              'drvc #38 ' light LED if too slow
-              testp    rightp   wc
-  if_nc       jmp #$-1
-              wypin    mixOut,leftp
-              wypin    mixOut,rightp
-              jmp      #mainLoop
+                    'testp   rightp   wc
+                    'drvc #38 ' light LED if too slow
+                    testp   rightp      wc
+    if_nc           jmp     #$-1
+                    wypin   mixOut,leftp
+                    wypin   mixOut,rightp
+                    jmp     #mainLoop
 
 '    Variables, tables, masks and reference values
-amplitudeTable      long trunc(AMPLITUDE_LEVEL_0)
-                    long trunc(AMPLITUDE_LEVEL_1)
-                    long trunc(AMPLITUDE_LEVEL_2)
-                    long trunc(AMPLITUDE_LEVEL_3)
-                    long trunc(AMPLITUDE_LEVEL_4)
-                    long trunc(AMPLITUDE_LEVEL_5)
-                    long trunc(AMPLITUDE_LEVEL_6)
-                    long trunc(AMPLITUDE_LEVEL_7)
-                    long trunc(AMPLITUDE_LEVEL_8)
-                    long trunc(AMPLITUDE_LEVEL_9)
-                    long trunc(AMPLITUDE_LEVEL_A)
-                    long trunc(AMPLITUDE_LEVEL_B)
-                    long trunc(AMPLITUDE_LEVEL_C)
-                    long trunc(AMPLITUDE_LEVEL_D)
-                    long trunc(AMPLITUDE_LEVEL_E)
-                    long trunc(AMPLITUDE_LEVEL_F)
+amplitudeTable      long    trunc(AMPLITUDE_LEVEL_0)
+                    long    trunc(AMPLITUDE_LEVEL_1)
+                    long    trunc(AMPLITUDE_LEVEL_2)
+                    long    trunc(AMPLITUDE_LEVEL_3)
+                    long    trunc(AMPLITUDE_LEVEL_4)
+                    long    trunc(AMPLITUDE_LEVEL_5)
+                    long    trunc(AMPLITUDE_LEVEL_6)
+                    long    trunc(AMPLITUDE_LEVEL_7)
+                    long    trunc(AMPLITUDE_LEVEL_8)
+                    long    trunc(AMPLITUDE_LEVEL_9)
+                    long    trunc(AMPLITUDE_LEVEL_A)
+                    long    trunc(AMPLITUDE_LEVEL_B)
+                    long    trunc(AMPLITUDE_LEVEL_C)
+                    long    trunc(AMPLITUDE_LEVEL_D)
+                    long    trunc(AMPLITUDE_LEVEL_E)
+                    long    trunc(AMPLITUDE_LEVEL_F)
 
 'Masks and reference values
-mask513             long 513
-mask1026            long 1026
-mask2052            long 2052
-mask4104            long 4104
-mask8200            long 8200
-mask16392           long 16392
-mask32bit           long $ffffffff
-mask16bit           long $ffff
-half_period         long $00008000
-val31bit            long $80000000
-noiseMSB            long 1 << NOISE_MSB
-noiseTap            long NOISE_TAP
-sampleRate          long _CLKFREQ / SAMPLE_RATE
-freqRef             long 10<<20
-dac_center          long $7F80
-leftp               long AUDIO_LEFT_PIN
-rightp              long AUDIO_RIGHT_PIN
+mask513             long    513
+mask1026            long    1026
+mask2052            long    2052
+mask4104            long    4104
+mask8200            long    8200
+mask16392           long    16392
+mask32bit           long    $ffffffff
+mask16bit           long    $ffff
+half_period         long    $00008000
+val31bit            long    $80000000
+noiseMSB            long    1 << NOISE_MSB
+noiseTap            long    NOISE_TAP
+sampleRate          long    _CLKFREQ / SAMPLE_RATE
+freqRef             long    10 << 20
+dac_center          long    $7F80
+leftp               long    AUDIO_LEFT_PIN
+rightp              long    AUDIO_RIGHT_PIN
 
 'Setup and subroutine parameters
-arg1                long 0
-r1                  long P_DAC_75R_2V|P_OE|P_DAC_DITHER_PWM
+arg1                long    0
+r1                  long    P_DAC_75R_2V|P_OE|P_DAC_DITHER_PWM
 
 'AY variables
-noiseValue          long $ffff
-envCounter          long 1
-envSubValue         long ENV_CORR
-oscSubValue         long OSC_CORR
-noiseSubValue       long NOISE_CORR
-envelopeValue       long 0
-envelopeInc         long 1
-envHoldLevel        res  1
-oscValues           res  1
-amplitude1          res  1
-amplitude2          res  1
-amplitude3          res  1
-envelopeAmplitude   res  1
-enableRegister      res  1
-envelopeShape       res  1
-frequency1          res  1
-frequency2          res  1
-frequency3          res  1
-envelopePeriod      res  1
-noisePeriod         res  1
-phaseAccumulatorN   res  1
-phaseAccumulator1   res  1
-phaseAccumulator2   res  1
-phaseAccumulator3   res  1
-mixOut              res  1
-temp1               res  1
-temp2               res  1
-temp3               res  1
-temp4               res  1
-                    fit 496
+noiseValue          long    $ffff
+envCounter          long    1
+envSubValue         long    ENV_CORR
+oscSubValue         long    OSC_CORR
+noiseSubValue       long    NOISE_CORR
+envelopeValue       long    0
+envelopeInc         long    1
+
+envHoldLevel        res     1
+oscValues           res     1
+amplitude1          res     1
+amplitude2          res     1
+amplitude3          res     1
+envelopeAmplitude   res     1
+enableRegister      res     1
+envelopeShape       res     1
+frequency1          res     1
+frequency2          res     1
+frequency3          res     1
+envelopePeriod      res     1
+noisePeriod         res     1
+phaseAccumulatorN   res     1
+phaseAccumulator1   res     1
+phaseAccumulator2   res     1
+phaseAccumulator3   res     1
+mixOut              res     1
+temp1               res     1
+temp2               res     1
+temp3               res     1
+temp4               res     1
+
+                    fit     $1F0
 
 CON ' AY-3-8912 constants
 
     ' WARNING !!
     ' Don't alter the constants below unless you know what you are doing
     '-------------------------------------------------------------------
-    PSG_FREQ    = 1_773_400.0              ' Clock frequency input on the emulated AY chip
-    SAMPLE_RATE = round(PSG_FREQ/ 16.0)    ' Sample rate of AYcog (PSG_FREQ/ 16.0 is the HW-accurate value)
+    PSG_FREQ    = 1_773_400.0               ' Clock frequency input on the emulated AY chip
+    SAMPLE_RATE = round(PSG_FREQ/ 16.0)     ' Sample rate of AYcog (PSG_FREQ/ 16.0 is the HW-accurate value)
 
     OSC_CORR    = trunc(1.05 * PSG_FREQ * ((PSG_FREQ/ 16.0)/float(SAMPLE_RATE))) ' Relative oscillator frequency (Where does the 1.05 come from?)
-    NOISE_CORR  = OSC_CORR>>1              ' Relative noise frequency
-    ENV_CORR    = OSC_CORR>>5              ' Relative envelope timing
+    NOISE_CORR  = OSC_CORR>>1               ' Relative noise frequency
+    ENV_CORR    = OSC_CORR>>5               ' Relative envelope timing
 
-    NOISE_TAP = %1001                      ' LFSR noise constants
-    NOISE_MSB = 17                         '
+    NOISE_TAP = %1001                       ' LFSR noise constants
+    NOISE_MSB = 17                          '
 
-    VOLUME_CORRECTION = 0.7                ' Volume correction value
-    MAX_AMPLITUDE       = float($7F7F / 4) ' maxDACvalue / numberOfChannels (this makes room for maximum "swing" on all channels)
-    AMPLITUDE_DAMP_FACTOR = 0.75           ' The damp factor between each volume step
+    VOLUME_CORRECTION = 0.7                 ' Volume correction value
+    MAX_AMPLITUDE     = float($7F7F / 4)    ' maxDACvalue / numberOfChannels (this makes room for maximum "swing" on all channels)
+    AMPLITUDE_DAMP_FACTOR = 0.75            ' The damp factor between each volume step
 
     AMPLITUDE_LEVEL_F = MAX_AMPLITUDE     * VOLUME_CORRECTION
     AMPLITUDE_LEVEL_E = AMPLITUDE_LEVEL_F * AMPLITUDE_DAMP_FACTOR
@@ -2928,7 +2925,7 @@ tms_reg_wr      bitl    tms_flag, #0
                 rdlong  tms_tmp1, #@tms_status
                 testb   zk_tmp8, #5     wc      ' C = INT ENABLE
                 testb   tms_tmp1, #5    andc    ' FSync
-                bitc    tms_tmp1, #8            ' Generate NMI if INT enable and FSync
+                bitc    tms_tmp1, #8            ' Generate IRQ if INT enable and FSync
                 wrlong  tms_tmp1, #@tms_status
                 ret     wcz
 
@@ -2985,7 +2982,7 @@ psg_read
                 ret     wcz
 
 .porta_rd
-                testp   #TAPE_EAR       wc  ' ear
+                testp   #TAPE_EAR       wc  ' tape read (EAR)
                 bitc    zk_tmp8, #7         ' |
                 ret     wcz
 
