@@ -1,0 +1,545 @@
+{
+    PS/2 Keyboard Driver
+    Copyright (c) 2021-22 by Marco Maccaferri <macca@maccasoft.com>
+
+    TERMS OF USE: MIT License
+}
+CON
+
+    _CLKFREQ = 160_000_000
+
+    PS2_DATA_PIN  = 25
+    PS2_CLOCK_PIN = 24
+
+DAT             ' PS/2 Keyboard river
+                org     $000
+
+ps2_driver
+                asmclk
+
+                fltl    #PS2_DATA_PIN
+                fltl    #PS2_CLOCK_PIN
+
+                mov     ps2_data, #$F3      ' auto-repeat
+                call    #ps2_transmit
+                and     ps2_data, #%011_11111 ' slow 1s / 2cps
+                call    #ps2_transmit
+
+                mov     ps2_state, #%0_000  ' turn off all leds
+                jmp     #ps2_locks
+
+ps2_reset
+
+ps2_loop        and     ps2_state, #$07     ' keep locks state
+
+.l1             call    #ps2_receive
+                getbyte ps2_code, ps2_data, #0
+
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #.l1
+
+                cmp     ps2_data, #$E0  wz
+        if_z    bith    ps2_state, #28
+        if_z    jmp     #ps2_ext0
+                cmp     ps2_data, #$E1  wz
+        if_z    bith    ps2_state, #29
+        if_z    jmp     #ps2_ext1
+
+ps2_ext_ret     testbn  ps2_state, #29  wz
+        if_nz   jmp     #ps2_loop           ' E1 codes are ignored
+
+                testb   ps2_state, #7   wc  ' release
+
+                cmp     ps2_code, #$14  wz  ' left control
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_CTRL
+
+                cmp     ps2_code, #$14  wz  ' right control
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_CTRL
+
+                cmp     ps2_code, #$12  wz  ' left shift
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_SHIFT
+                cmp     ps2_data, #$59  wz  ' right shift
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_SHIFT
+
+                cmp     ps2_code, #$11  wz  ' left alt
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_ALT
+
+                cmp     ps2_code, #$11  wz  ' right alt
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_ALT
+
+                cmp     ps2_code, #$1F  wz  ' left gui
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_GUI
+                cmp     ps2_code, #$27  wz  ' right gui
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_GUI
+
+                cmp     ps2_code, #$77  wz  ' num. lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #0       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+                cmp     ps2_code, #$58  wz  ' caps lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #1       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+                cmp     ps2_code, #$7E  wz  ' scroll lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #2       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+
+                testb  ps2_state, #28  wc      ' extended code
+                rcl     ps2_code, #1            '   to bit 0
+
+                altgb   ps2_code, #ps2_table    ' get usb scancode
+                getbyte ps2_key                 ' |
+                shl     ps2_key, #8     wz
+        if_z    jmp     #ps2_loop
+
+                call    #ps2_translate
+
+                setbyte ps2_key, ps2_shift, #2
+                setbyte ps2_key, ps2_state, #3
+                debug(uhex_long(ps2_key))
+
+                ' TODO
+
+                jmp     #ps2_loop
+
+ps2_locks       mov     ps2_data, #$ED
+                call    #ps2_transmit
+                mov     ps2_data, #0
+                testb   ps2_state, #0   wz  ' num. lock
+                bitz    ps2_data, #1
+                testb   ps2_state, #1   wz  ' caps lock
+                bitz    ps2_data, #2
+                testb   ps2_state, #2   wz  ' scroll lock
+                bitz    ps2_data, #0
+                call    #ps2_transmit
+                jmp     #ps2_loop
+
+ps2_ext1        call    #ps2_receive
+                setbyte ps2_code, ps2_data, #1
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #ps2_ext1
+
+                ' fall through
+
+ps2_ext0        call    #ps2_receive
+                setbyte ps2_code, ps2_data, #0
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #ps2_ext0
+
+                jmp     #ps2_ext_ret
+
+ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
+                getct   ps2_tout            ' hold clock for 128us (must be > 100us)
+                addct1  ps2_tout, ps2_us128 ' |
+                jnct1   #$
+                drvl    #PS2_DATA_PIN       ' pull data low
+                getct   ps2_tout            ' hold data for 4us
+                addct1  ps2_tout, ps2_us4   ' |
+                jnct1   #$
+
+                fltl    #PS2_CLOCK_PIN      ' release clock
+                getct   ps2_tout            ' allow pin to float
+                addct1  ps2_tout, ps2_us1   ' |
+                jnct1   #$
+
+                test    ps2_data, #$FF  wc  ' append parity
+                muxnc   ps2_data, #$100     ' |
+                bith    ps2_data, #9        ' append stop bit
+
+                getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us2000
+
+                mov     ps2_bits, #10
+.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l1                ' |
+                shr     ps2_data, #1    wc  ' output data bit
+                drvc    #PS2_DATA_PIN       ' |
+.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    ps2_bits, #.l1      ' another bit ?
+
+                fltl    #PS2_DATA_PIN
+
+.l3             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data low
+        if_z    testpn  #PS2_DATA_PIN   wz  ' |
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l3                ' |
+
+.l4             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data high
+        if_nz   testpn  #PS2_DATA_PIN   wz  ' |
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l4                ' |
+
+                ' Fall through to receive ack
+
+ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
+        if_nz   jmp     #ps2_receive        ' |
+
+                getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us2000
+
+                mov     ps2_bits, #11
+.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l1                ' |
+                testp   #PS2_DATA_PIN   wc  ' sample data
+                rcr     ps2_data, #1        ' |
+.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    ps2_bits, #.l1      ' another bit?
+
+                shr     ps2_data, #22       ' align byte
+                test    ps2_data, #$1FF wc  ' test parity
+        if_nc   jmp     #ps2_reset          ' |
+        _ret_   and     ps2_data, #$FF      ' ok
+
+
+ps2_translate
+
+                mov     ps2_temp, #ps2_map
+.l1             alts    ps2_temp
+                mov     ps2_data, 0-0       wz
+        if_z    ret
+                add     ps2_temp, #1
+                getbyte ps2_code, ps2_data, #3  ' target shift state
+                cmp     ps2_code, ps2_shift wz  ' compare shift state
+        if_ne   jmp     #.l1                    ' skip if not equal
+
+                setbyte ps2_data, #0, #3        ' mask map address
+                getbyte ps2_code, ps2_key, #1
+                cmp     ps2_code, #$80      wc  ' max. 128 keys
+        if_nc   ret
+                add     ps2_data, ps2_code
+                rdbyte  ps2_data, ps2_data      ' read key
+
+                testbn  ps2_state, #0       wz  ' num. lock
+ if_z           cmp     ps2_code, #$54      wc
+ if_z_and_nc    cmpr    ps2_code, #$62 +1   wc
+ if_z_and_nc    setbyte ps2_data, #0, #0
+
+                testbn  ps2_state, #1       wz  ' caps lock
+ if_nz          cmp     ps2_data, #$61      wc
+ if_nz_and_nc   cmpr    ps2_data, #$7A +1   wc
+ if_nz_and_nc   xor     ps2_data, #%00100000
+
+        _ret_   setbyte ps2_key, ps2_data, #0
+
+ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
+ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
+ps2_us128       long    _CLKFREQ / 1000_000 * 128   ' 128 usec.
+ps2_us2000      long    _CLKFREQ / 1000_000 * 4000  ' 2000 usec.
+
+ps2_bits        long    0
+ps2_code        long    0
+ps2_state       long    0
+ps2_shift       long    0
+ps2_key         long    0
+
+ps2_data        long    0
+ps2_tout        long    0
+ps2_temp        long    0
+ps2_ptr         long    0
+
+ps2_map
+                'long                                   @map_us
+                'long    LEFT_SHIFT             << 24 | @map_us_shift
+                'long    RIGHT_SHIFT            << 24 | @map_us_shift
+                long                                   @map_it
+                long    LEFT_SHIFT             << 24 | @map_it_shift
+                long    RIGHT_SHIFT            << 24 | @map_it_shift
+                long    RIGHT_ALT              << 24 | @map_it_altgr
+                long   (RIGHT_SHIFT|RIGHT_ALT) << 24 | @map_it_shift_altgr
+                long   (LEFT_SHIFT|RIGHT_ALT)  << 24 | @map_it_shift_altgr
+                long    0 ' end of maps
+
+ps2_table       word    $0000   '00
+                word    $0042   '01             F9
+                word    $0000   '02
+                word    $003E   '03             F5
+                word    $003C   '04             F3
+                word    $003A   '05             F1
+                word    $003B   '06             F2
+                word    $0045   '07             F12
+                word    $0000   '08
+                word    $0043   '09             F10
+                word    $0041   '0A             F8
+                word    $003F   '0B             F6
+                word    $003D   '0C             F4
+                word    $002B   '0D             Tab
+                word    $0035   '0E             `
+                word    $0000   '0F
+                word    $0000   '10
+                word    $E6E2   '11     Alt-R   Alt-L
+                word    $00E1   '12             Shift-L
+                word    $0000   '13
+                word    $E4E0   '14     Ctrl-R  Ctrl-L
+                word    $0014   '15             q
+                word    $001E   '16             1
+                word    $0000   '17
+                word    $0000   '18
+                word    $0000   '19
+                word    $001D   '1A             z
+                word    $0016   '1B             s
+                word    $0004   '1C             a
+                word    $001A   '1D             w
+                word    $001F   '1E             2
+                word    $E300   '1F     Win-L
+                word    $0000   '20
+                word    $0006   '21             c
+                word    $001B   '22             x
+                word    $0007   '23             d
+                word    $0008   '24             e
+                word    $0021   '25             4
+                word    $0020   '26             3
+                word    $E700   '27     Win-R
+                word    $0000   '28
+                word    $002C   '29             Space
+                word    $0019   '2A             v
+                word    $0009   '2B             f
+                word    $0017   '2C             t
+                word    $0015   '2D             r
+                word    $0022   '2E             5
+                word    $6500   '2F     Apps
+                word    $0000   '30
+                word    $0011   '31             n
+                word    $0005   '32             b
+                word    $000B   '33             h
+                word    $000A   '34             g
+                word    $001C   '35             y
+                word    $0023   '36             6
+                word    $0000   '37     Power
+                word    $0000   '38
+                word    $0000   '39
+                word    $0010   '3A             m
+                word    $000D   '3B             j
+                word    $0018   '3C             u
+                word    $0024   '3D             7
+                word    $0025   '3E             8
+                word    $0000   '3F     Sleep
+                word    $0000   '40
+                word    $0036   '41             ,
+                word    $000E   '42             k
+                word    $000C   '43             i
+                word    $0012   '44             o
+                word    $0027   '45             0
+                word    $0026   '46             9
+                word    $0000   '47
+                word    $0000   '48
+                word    $0037   '49             .
+                word    $5438   '4A     (/)     /
+                word    $000F   '4B             l
+                word    $0033   '4C             ;
+                word    $0013   '4D             p
+                word    $002D   '4E             -
+                word    $0000   '4F
+                word    $0000   '50
+                word    $0000   '51
+                word    $0034   '52             '
+                word    $0000   '53
+                word    $002F   '54             [
+                word    $002E   '55             =
+                word    $0000   '56
+                word    $0000   '57
+                word    $0039   '58             CapsLock
+                word    $00E5   '59             Shift-R
+                word    $5828   '5A     (Enter) Enter
+                word    $0030   '5B             ]
+                word    $0000   '5C
+                word    $0031   '5D             \
+                word    $0000   '5E     WakeUp
+                word    $0000   '5F
+                word    $0000   '60
+                word    $0064   '61
+                word    $0000   '62
+                word    $0000   '63
+                word    $0000   '64
+                word    $0000   '65
+                word    $002A   '66             BackSpace
+                word    $0000   '67
+                word    $0000   '68
+                word    $4D59   '69     End     (1)
+                word    $0000   '6A
+                word    $505C   '6B     Left    (4)
+                word    $4A5F   '6C     Home    (7)
+                word    $0000   '6D
+                word    $0000   '6E
+                word    $0000   '6F
+                word    $4962   '70     Insert  (0)
+                word    $4C63   '71     Delete  (.)
+                word    $515A   '72     Down    (2)
+                word    $005D   '73             (5)
+                word    $4F5E   '74     Right   (6)
+                word    $5260   '75     Up      (8)
+                word    $0029   '76             Esc
+                word    $0053   '77             NumLock
+                word    $0044   '78             F11
+                word    $0057   '79             (+)
+                word    $4E5B   '7A     PageDn  (3)
+                word    $0056   '7B             (-)
+                word    $4655   '7C     PrScr   (*)
+                word    $4B61   '7D     PageUp  (9)
+                word    $0047   '7E             ScrLock
+                word    $0000   '7F
+                word    $0000   '80
+                word    $0000   '81
+                word    $0000   '82
+                word    $0040   '83             F7
+
+                fit     $1F0
+
+CON
+
+    LEFT_CTRL   = %0000_0001
+    LEFT_SHIFT  = %0000_0010
+    LEFT_ALT    = %0000_0100
+    LEFT_GUI    = %0000_1000
+    RIGHT_CTRL  = %0001_0000
+    RIGHT_SHIFT = %0010_0000
+    RIGHT_ALT   = %0100_0000
+    RIGHT_GUI   = %1000_0000
+
+DAT ' US
+                orgh
+
+map_us          byte    $00, $00, $00, $00, "a", "b", "c", "d"  ' 00-07
+                byte    "e", "f", "g", "h", "i", "j", "k", "l"  ' 08-0F
+                byte    "m", "n", "o", "p", "q", "r", "s", "t"  ' 10-17
+                byte    "u", "v", "w", "x", "y", "z", "1", "2"  ' 18-1F
+                byte    "3", "4", "5", "6", "7", "8", "9", "0"  ' 20-27
+                byte    $0D, $1B, $08, $09, " ", "-", "=", "["  ' 28-2F
+                byte    "]", "\", "#", ";", "'", $60, ",", "."  ' 30-37
+                byte    "/", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
+                byte    $00, $00, $00, $00, "/", "+", "-", "+"  ' 50-57
+                byte    $0D, "1", "2", "3", "4", "5", "6", "7"  ' 58-5F
+                byte    "8", "9", "0", $00, "\", $00, $00, $00  ' 60-67
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
+
+map_us_shift    byte    $00, $00, $00, $00, "A", "B", "C", "D"  ' 00-07
+                byte    "E", "F", "G", "H", "I", "J", "K", "L"  ' 08-0F
+                byte    "M", "N", "O", "P", "Q", "R", "S", "T"  ' 10-17
+                byte    "U", "V", "W", "X", "Y", "Z", "!", "@"  ' 18-1F
+                byte    "#", "$", "%", "^", "&", "*", "(", ")"  ' 20-27
+                byte    $0D, $1B, $08, $09, " ", "_", "+", "{"  ' 28-2F
+                byte    "}", "|", "~", ":", $22, "~", "<", ">"  ' 30-37
+                byte    "?", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
+                byte    $00, $00, $00, $00, "|", $00, $00, $00  ' 60-67
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
+
+DAT ' Italian
+                orgh
+
+map_it          byte    $00, $00, $00, $00, "a", "b", "c", "d"  ' 00-07
+                byte    "e", "f", "g", "h", "i", "j", "k", "l"  ' 08-0F
+                byte    "m", "n", "o", "p", "q", "r", "s", "t"  ' 10-17
+                byte    "u", "v", "w", "x", "y", "z", "1", "2"  ' 18-1F
+                byte    "3", "4", "5", "6", "7", "8", "9", "0"  ' 20-27
+                byte    $0D, $1B, $08, $09, " ", "'", $8D, $8A  ' 28-2F
+                byte    "+", $A3, $97, $95, $85, "\", ",", "."  ' 30-37
+                byte    "-", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
+                byte    $00, $00, $00, $00, "/", "+", "-", "+"  ' 50-57
+                byte    $0D, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
+                byte    $00, $00, $00, $00, "<", $00, $00, $00  ' 60-67
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
+
+map_it_shift    byte    $00, $00, $00, $00, "A", "B", "C", "D"  ' 00-07
+                byte    "E", "F", "G", "H", "I", "J", "K", "L"  ' 08-0F
+                byte    "M", "N", "O", "P", "Q", "R", "S", "T"  ' 10-17
+                byte    "U", "V", "W", "X", "Y", "Z", "!", $22  ' 18-1F
+                byte    $9C, "$", "%", "&", "/", "(", ")", "="  ' 20-27
+                byte    $0D, $1B, $08, $09, " ", "?", "^", $82  ' 28-2F
+                byte    "*", $15, $15, $87, $F8, "|", ";", ":"  ' 30-37
+                byte    "_", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
+                byte    $0D, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
+                byte    $00, $00, $00, $00, ">", $00, $00, $00  ' 60-67
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
+
+map_it_altgr    byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 00-07
+                byte    $EE, $00, $00, $00, $00, $00, $00, $00  ' 08-0F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 10-17
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 18-1F
+                byte    $00, $00, $80, $00, $00, $00, $00, $00  ' 20-27
+                byte    $00, $00, $00, $00, $00, $00, $7E, "["  ' 28-2F
+                byte    "]", $00, $00, "@", "#", $00, $00, $00  ' 30-37
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 38-3F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 60-67
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
+
+map_it_shift_altgr
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 00-07
+                byte    $EE, $00, $00, $00, $00, $00, $00, $00  ' 08-0F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 10-17
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 18-1F
+                byte    $00, $00, $80, $00, $00, $00, $00, $00  ' 20-27
+                byte    $00, $00, $00, $00, $00, $00, $00, "{"  ' 28-2F
+                byte    "}", $00, $00, $00, $00, $00, $00, $00  ' 30-37
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 38-3F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 60-67
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
+                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
+
+CON ' License
+{{
+
+ TERMS OF USE: MIT License
+
+ Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+ associated documentation files (the "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+ following conditions:
+
+ The above copyright notice and this permission notice shall be included in all copies or substantial
+ portions of the Software.
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+ LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+}}
