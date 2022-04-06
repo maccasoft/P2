@@ -54,17 +54,15 @@ sys_reset
 
 ' Shared variables
 
-zk_nmi_mem      long    0                   ' bit 8 = NMI
-'zk_irq_mem      long    0                   ' bit 8 = IRQ, 7..0 vector
+zk_nmi_mem      long    $0_00               ' bit 8 = NMI
+zk_irq_mem      long    $0_FF               ' bit 8 = IRQ, 7..0 vector
 
-                                            '     D4 D3 D2 D1 D0
-                                            '
-msx_keys        byte    $FF[12]
+msx_keys        byte    $FF[16]
 
 ' TMS9918 registers
 
 tms_regs        byte    $00, $00, $00, $00, $00, $00, $00, $00
-tms_status      long    $00     ' 7..0 = VDP status
+tms_status      long    $0_00   ' bit 8 = VDP_IRQ, 7..0 = VDP status
 
 ' AY-3-8910 registers
 
@@ -487,9 +485,11 @@ zk_nextop
                 testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
         if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
-                testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
                 rdlong  zk_irq_ctl, #@tms_status
-                testb   zk_irq_ctl, #8          andz   ' Z = EI and IRQ
+                testb   zk_irq_ctl, #8            wz   ' Z = VDP_IRQ
+                rdlong  zk_irq_ctl, #@zk_irq_mem
+                testb   zk_irq_ctl, #8            orz  ' Z = IRQ or VDP_IRQ
+                testb   zk_irqenable,#ZK_IFF1_BIT andz ' Z = EI and (IRQ or VDP_IRQ)
         if_x1   jmp     #\zk_doirq                     ' jump if Z=1
 
                 mov     zk_temphl, zk_hl
@@ -973,11 +973,6 @@ zk_read8
         if_01   jmp     #\msx_read8_4000
         if_10   jmp     #\msx_read8_8000
         if_11   jmp     #\msx_read8_C000
-'                getword pa, zk_ea, #0
-'                add     pa, zk_ram
-'                rdbyte  zk_tmp8, pa
-'                debug(uhex_word(zk_ea), uhex_byte(zk_tmp8), uhex_long(pa), dly(#500))
-'                ret     wcz
 
 zk_readcode16
                 call    #zk_readcode
@@ -1475,8 +1470,8 @@ msx_read8_C000
 msx_read8
                 getword pa, zk_ea, #0
         if_00   jmp     #\msx_slot0_read    ' 0 = 32K ROM
-        if_01   jmp     #\msx_slot1_read    ' 1 = empty
-        if_10   ret     wcz                 ' 2 = empty
+        if_01   jmp     #\msx_slot1_read    ' 1 = cartridge A
+        if_10   ret     wcz                 ' 2 = cartridge B
         if_11   jmp     #\msx_slot3_read    ' 3 = 64K RAM
                 ret     wcz
 
@@ -1498,8 +1493,8 @@ msx_write8_C000
 msx_write8
                 getword pa, zk_ea, #0
         if_00   ret     wcz                 ' 0 = 32K ROM
-        if_01   ret     wcz                 ' 1 = empty / ROM
-        if_10   ret     wcz                 ' 2 = empty
+        if_01   ret     wcz                 ' 1 = cartridge A
+        if_10   ret     wcz                 ' 2 = cartridge B
         if_11   jmp     #\msx_slot3_write   ' 3 = 64K RAM
 
 msx_slot0_read
@@ -1508,26 +1503,18 @@ msx_slot0_read
         if_11   ret     wcz                 ' C000-FFFF empty
                 add     pa, ##@msx_slot0
                 rdbyte  zk_tmp8, pa
-                'debug(zstr("slot0r"), uhex_word(zk_ea), uhex_byte(zk_tmp8), uhex_long(pa), dly(#500))
                 ret     wcz
 
 msx_slot1_read
-                mov     zk_tmp0, ##msx_slot1_end
-                sub     zk_tmp0, ##msx_slot1
-                cmp     zk_tmp0, ##$8000    wcz
-        if_e    jmp     #.map_4000
-
-                sub     zk_tmp0, #1
-                and     pa, zk_tmp0
-                add     pa, ##@msx_slot1
-                rdbyte  zk_tmp8, pa
-                ret     wcz
-
-.map_4000       testb   zk_ea, #15      wc
-                testb   zk_ea, #14      wz
-        if_00   ret     wcz                 ' 0000-3FFF empty
-        if_11   ret     wcz                 ' C000-FFFF empty
-                sub     pa, ##$4000
+                mov     zk_tmp0, ##(@msx_slot1_end - @msx_slot1) >> 10
+                cmp     zk_tmp0, #32 wcz
+        if_e    testb   pa, #15 wc
+        if_e    and     pa, ##$3FFF
+        if_e    bitc    pa, #14
+                cmp     zk_tmp0, #16 wcz
+        if_e    and     pa, ##$3FFF
+                cmp     zk_tmp0, #8  wcz
+        if_e    and     pa, ##$1FFF
                 add     pa, ##@msx_slot1
                 rdbyte  zk_tmp8, pa
                 ret     wcz
@@ -2999,21 +2986,20 @@ msx_slot0       file    "cbios_main_msx1.rom"
                 file    "cbios_logo_msx1.rom"
 
 msx_slot1
-                'file    "Galaga (1984)(Namcot).rom"
-                'file    "Galaxian (1984)(Namcot).rom"
-                'file    "Lode Runner (1984)(Sony).rom"
-                'file    "Moon Patrol (1984)(Irem).rom"
-                'file    "Mr. Do! (1984)(Nippon Columbia - Colpax - Universal).rom"
-                'file    "Pac-Man (1984)(Namcot).rom"
-                'file    "Pitfall (1984)(Pony Canyon).rom"
-                'file    "Pitfall II - Lost Caverns (1985)(Pony Canyon).rom"
-                'file    "Q-Bert (1986)(Konami)[RC-746].rom"
-                'file    "Space Invaders (1985)(Taito).rom"
-                'file    "Super Cobra (1983)(Konami)[RC-705].rom"
-                'file    "Time Pilot (1983)(Konami)[RC-703].rom"
-                'file    "Zanac (1986)(Pony Canyon).rom"
-                'file    "Zaxxon (1985)(Pony Canyon).rom"
-
+                'file    "Galaga (1984)(Namcot).rom" ' 32K
+                'file    "Galaxian (1984)(Namcot).rom" ' 8K
+                'file    "Lode Runner (1984)(Sony).rom" ' 32K
+                'file    "Moon Patrol (1984)(Irem).rom" ' 16K
+                'file    "Mr. Do! (1984)(Nippon Columbia - Colpax - Universal).rom" ' 16K
+                'file    "Pac-Man (1984)(Namcot).rom" ' 16K
+                'file    "Pitfall (1984)(Pony Canyon).rom" ' 16K
+                'file    "Pitfall II - Lost Caverns (1985)(Pony Canyon).rom" ' 16K
+                'file    "Q-Bert (1986)(Konami)[RC-746].rom" ' 32K
+                'file    "Space Invaders (1985)(Taito).rom" ' 16K
+                'file    "Super Cobra (1983)(Konami)[RC-705].rom" ' 8K
+                'file    "Time Pilot (1983)(Konami)[RC-703].rom" ' 16K
+                'file    "Zanac (1986)(Pony Canyon).rom" ' 32K
+                'file    "Zaxxon (1985)(Pony Canyon).rom" ' 32K
 msx_slot1_end
 
 msx_slot3       byte    0[65536]
