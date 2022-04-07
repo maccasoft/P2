@@ -1479,43 +1479,42 @@ zk_halt
 ' MSX
 '
 msx_read8_0000
-                testb   msx_ppi, #0     wc
-                testb   msx_ppi, #1     wz
+                testb   msx_ppi, #1     wc
+                testb   msx_ppi, #0     wz
                 jmp     #msx_read8
 msx_read8_4000
-                testb   msx_ppi, #2     wc
-                testb   msx_ppi, #3     wz
+                testb   msx_ppi, #3     wc
+                testb   msx_ppi, #2     wz
                 jmp     #msx_read8
 msx_read8_8000
-                testb   msx_ppi, #4     wc
-                testb   msx_ppi, #5     wz
+                testb   msx_ppi, #5     wc
+                testb   msx_ppi, #4     wz
                 jmp     #msx_read8
 msx_read8_C000
-                testb   msx_ppi, #6     wc
-                testb   msx_ppi, #7     wz
+                testb   msx_ppi, #7     wc
+                testb   msx_ppi, #6     wz
 msx_read8
                 getword pa, zk_ea, #0
         if_00   jmp     #\msx_slot0_read    ' 0 = 32K ROM
         if_01   jmp     #\msx_slot1_read    ' 1 = cartridge A
         if_10   ret     wcz                 ' 2 = cartridge B
         if_11   jmp     #\msx_slot3_read    ' 3 = 64K RAM
-                ret     wcz
 
 msx_write8_0000
-                testb   msx_ppi, #0     wc
-                testb   msx_ppi, #1     wz
+                testb   msx_ppi, #1     wc
+                testb   msx_ppi, #0     wz
                 jmp     #msx_write8
 msx_write8_4000
-                testb   msx_ppi, #2     wc
-                testb   msx_ppi, #3     wz
+                testb   msx_ppi, #3     wc
+                testb   msx_ppi, #2     wz
                 jmp     #msx_write8
 msx_write8_8000
-                testb   msx_ppi, #4     wc
-                testb   msx_ppi, #5     wz
+                testb   msx_ppi, #5     wc
+                testb   msx_ppi, #4     wz
                 jmp     #msx_write8
 msx_write8_C000
-                testb   msx_ppi, #6     wc
-                testb   msx_ppi, #7     wz
+                testb   msx_ppi, #7     wc
+                testb   msx_ppi, #6     wz
 msx_write8
                 getword pa, zk_ea, #0
         if_00   ret     wcz                 ' 0 = 32K ROM
