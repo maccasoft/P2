@@ -826,9 +826,9 @@ zk_i2a
         _ret_   muxq    zk_flags,zk_accu
 
 zk_irqret       '' RETI/RETN
-                cmp     zk_opcode, #$4D wz  ' RETI don't re-enable interrupts
-        if_nz   testb   zk_irqenable,#ZK_IFF2_BIT wc
-        if_nz   bitc    zk_irqenable,#ZK_IFF1_BIT
+                '' These are literally the same
+                testb   zk_irqenable,#ZK_IFF2_BIT wc
+                bitc    zk_irqenable,#ZK_IFF1_BIT
                 call    #\zk_pop16
         _ret_   mov     zk_pc,zk_tmp16
 
@@ -848,16 +848,17 @@ zk_irqon
 zk_doirq
                 add     zk_cycles,#1
                 test    zk_irqenable,#(1<<ZK_IM2_BIT)  wz
-        if_z    skipf   ##%0_1_1111_0_000000_1111
-        if_nz   skipf   ##%0_1_0000_1_000000_11
+        if_z    skipf   ##%0_1_1111_0_0001000_1111
+        if_nz   skipf   ##%0_1_0000_1_0001000_11
 
 zk_donmi
-                skipf   ##%0_0_1111_1_000000
+                skipf   ##%0_0_1111_1_0010000
 
                 add     zk_cycles,#5
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
         if_nz   incmod  zk_pc,zk_ffffh
-                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
+                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT) ' NMI
+                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)|(1<<ZK_HALT_BIT) ' IRQ
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
 
