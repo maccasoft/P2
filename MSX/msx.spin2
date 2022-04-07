@@ -2085,7 +2085,7 @@ sprites
     if_e        mov     stat, ccnt              ' set 5th sprite
     if_e        or      stat, #TMS5SPRITE       ' |
                 sub     vcnt, #1
-'    if_ae       jmp     #.loop                  ' comment to remove sprite limit
+    if_ae       jmp     #.loop                  ' comment to remove sprite limit
 
                 getbyte ptrc, sprt, #2
                 test    regs+1, #TMSSPRSIZE wz
