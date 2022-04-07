@@ -827,9 +827,6 @@ zk_i2a
 
 zk_irqret       '' RETI/RETN
                 '' These are literally the same
-                add     zk_cycles,#6
-                testb   zk_irqenable,#ZK_IFF2_BIT wc
-                bitc    zk_irqenable,#ZK_IFF1_BIT
                 call    #\zk_pop16
         _ret_   mov     zk_pc,zk_tmp16
 

@@ -836,8 +836,6 @@ zk_i2a
 
 zk_irqret       '' RETI/RETN
                 '' These are literally the same
-                testb   zk_irqenable,#ZK_IFF2_BIT wc
-                bitc    zk_irqenable,#ZK_IFF1_BIT
                 call    #\zk_pop16
         _ret_   mov     zk_pc,zk_tmp16
 
@@ -3020,6 +3018,7 @@ msx_slot1
                 'file    "Pitfall (1984)(Pony Canyon).rom" ' 16K
                 'file    "Pitfall II - Lost Caverns (1985)(Pony Canyon).rom" ' 16K
                 'file    "Q-Bert (1986)(Konami)[RC-746].rom" ' 32K
+                'file    "River Raid (1984) (Pony Cannon) (J).rom"
                 'file    "Space Invaders (1985)(Taito).rom" ' 16K
                 'file    "Super Cobra (1983)(Konami)[RC-705].rom" ' 8K
                 'file    "Time Pilot (1983)(Konami)[RC-703].rom" ' 16K
