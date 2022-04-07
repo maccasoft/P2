@@ -835,7 +835,9 @@ zk_i2a
         _ret_   muxq    zk_flags,zk_accu
 
 zk_irqret       '' RETI/RETN
-                '' These are literally the same
+                cmp     zk_opcode, #$4D wz  ' RETI don't re-enable interrupts
+        if_nz   testb   zk_irqenable,#ZK_IFF2_BIT wc
+        if_nz   bitc    zk_irqenable,#ZK_IFF1_BIT
                 call    #\zk_pop16
         _ret_   mov     zk_pc,zk_tmp16
 
