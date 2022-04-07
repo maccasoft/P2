@@ -6,7 +6,7 @@
     with modifications by Marco Maccaferri
 
     TMS9918 Emulator by Marco Maccaferri
-    SN76489 Emulator by by Johannes Ahlebrand port to P2 by Ada Gottensträter
+    SN76489 Emulator by Johannes Ahlebrand port to P2 by Ada Gottensträter
     PS/2 Keyboard driver by Marco Maccaferri
 }
 CON
@@ -482,25 +482,14 @@ zk_cogbase
                 setq2   #511
                 rdlong  0, ptrb
 
-                'mov     zk_pc, #0
-                mov     zk_irqenable, #0
-'                mov     zk_irqhook, #0
-                mov     zk_refresh, #0
-                mov     zk_refreshhi, #0
-                mov     zk_ivector, #0
                 getct   zk_lastwait
-                mov     zk_cycles, #1
 
 zk_nextop
                 lockrel #0                      ' Release lock
 
                 mul     zk_cycles, zk_cycletime
-                add     zk_cycles, zk_lastwait
-                getct   pa
-                sub     zk_cycles, pa
-                cmps    zk_cycles, #1   wc
-        if_ae   waitx   zk_cycles
-                getct   zk_lastwait
+                addct1  zk_lastwait, zk_cycles
+                waitct1
 
                 locktry #0              wc      ' Acquire lock for instruction processing
     if_nc       jmp     #$-1
@@ -510,7 +499,6 @@ zk_nextop
                 testb   zk_ctl, #8          wc  ' C = old NMI
                 rdlong  zk_ctl, #@tms_status
                 testb   zk_ctl, #8          wz  ' Z = current NMI
-                drvz    #4
         if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
 
                 mov     zk_temphl, zk_hl
@@ -842,19 +830,16 @@ zk_irqoff
 zk_irqon
         _ret_   or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
 
-zk_doirq
-                skipf   #%0_10_000000_1
 zk_donmi
-                skipf   #%0_01_000000
-
-                add     zk_cycles,#10
+                add     zk_cycles,#5
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
-                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
         if_nz   incmod  zk_pc,zk_ffffh
+                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
-                mov     zk_pc,#$38
-                mov     zk_pc,#$66
+
+                mov     zk_pc,#$66 ' NMI
+
                 jmp     #\zk_nextop
 
 zk_jump_indir
@@ -971,10 +956,9 @@ zk_read8
                 add     zk_cycles,#3
                 getword pa, zk_ea, #0
                 cmp     pa, ram_base    wcz
-        if_b    jmp     #.l1
-                cmp     pa, ram_top     wcz
-        if_b    and     pa, ram_mask
-.l1             add     pa, zk_ram
+         if_ae  cmpr    pa, ram_top     wcz
+         if_ae  and     pa, ram_mask
+                add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
                 ret     wcz
 
@@ -1000,16 +984,15 @@ zk_write8
                 add     zk_cycles, #3
                 getword pa, zk_ea, #0
                 cmp     pa, ram_base    wcz
+         if_ae  cmpr    pa, ram_top     wcz
          if_b   ret     wcz
-                cmp     pa, ram_top     wcz
-         if_ae  ret     wcz
                 and     pa, ram_mask
                 add     pa, zk_ram
                 wrbyte  zk_tmp8, pa
                 ret     wcz
 
 ram_base        long    $6000
-ram_top         long    $8000
+ram_top         long    $7FFF
 ram_mask        long    %1110_0011_1111_1111
 
 zk_portout
@@ -1055,7 +1038,7 @@ zk_ffffh        long    $FFFF
 zk_18000h       long    $18000
 zk_bit31        long    negx
 
-zk_cycles       long    0
+zk_cycles       long    5
 zk_pc           long    $0000
 
 zk_flags        long    0
