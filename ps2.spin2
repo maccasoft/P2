@@ -94,11 +94,11 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
         if_z    bitnot  ps2_state, #2       ' | toggle state
         if_z    jmp     #ps2_locks          ' | update leds
 
-                testb  ps2_state, #28  wc      ' extended code
-                rcl     ps2_code, #1            '   to bit 0
+                testb  ps2_state, #28  wc   ' extended code
+                rcl     ps2_code, #1        '   to bit 0
 
-                altgb   ps2_code, #ps2_table    ' get usb scancode
-                getbyte ps2_key                 ' |
+                altgb   ps2_code, #ps2_table ' get usb scancode
+                getbyte ps2_key              ' |
                 shl     ps2_key, #8     wz
         if_z    jmp     #ps2_loop
 
@@ -267,138 +267,138 @@ ps2_map
                 long   (LEFT_SHIFT|RIGHT_ALT)  << 24 | @map_it_shift_altgr
                 long    0 ' end of maps
 
-ps2_table       word    $0000   '00
-                word    $0042   '01             F9
-                word    $0000   '02
-                word    $003E   '03             F5
-                word    $003C   '04             F3
-                word    $003A   '05             F1
-                word    $003B   '06             F2
-                word    $0045   '07             F12
-                word    $0000   '08
-                word    $0043   '09             F10
-                word    $0041   '0A             F8
-                word    $003F   '0B             F6
-                word    $003D   '0C             F4
-                word    $002B   '0D             Tab
-                word    $0035   '0E             `
-                word    $0000   '0F
-                word    $0000   '10
-                word    $E6E2   '11     Alt-R   Alt-L
-                word    $00E1   '12             Shift-L
-                word    $0000   '13
-                word    $E4E0   '14     Ctrl-R  Ctrl-L
-                word    $0014   '15             q
-                word    $001E   '16             1
-                word    $0000   '17
-                word    $0000   '18
-                word    $0000   '19
-                word    $001D   '1A             z
-                word    $0016   '1B             s
-                word    $0004   '1C             a
-                word    $001A   '1D             w
-                word    $001F   '1E             2
-                word    $E300   '1F     Win-L
-                word    $0000   '20
-                word    $0006   '21             c
-                word    $001B   '22             x
-                word    $0007   '23             d
-                word    $0008   '24             e
-                word    $0021   '25             4
-                word    $0020   '26             3
-                word    $E700   '27     Win-R
-                word    $0000   '28
-                word    $002C   '29             Space
-                word    $0019   '2A             v
-                word    $0009   '2B             f
-                word    $0017   '2C             t
-                word    $0015   '2D             r
-                word    $0022   '2E             5
-                word    $6500   '2F     Apps
-                word    $0000   '30
-                word    $0011   '31             n
-                word    $0005   '32             b
-                word    $000B   '33             h
-                word    $000A   '34             g
-                word    $001C   '35             y
-                word    $0023   '36             6
-                word    $0000   '37     Power
-                word    $0000   '38
-                word    $0000   '39
-                word    $0010   '3A             m
-                word    $000D   '3B             j
-                word    $0018   '3C             u
-                word    $0024   '3D             7
-                word    $0025   '3E             8
-                word    $0000   '3F     Sleep
-                word    $0000   '40
-                word    $0036   '41             ,
-                word    $000E   '42             k
-                word    $000C   '43             i
-                word    $0012   '44             o
-                word    $0027   '45             0
-                word    $0026   '46             9
-                word    $0000   '47
-                word    $0000   '48
-                word    $0037   '49             .
-                word    $5438   '4A     (/)     /
-                word    $000F   '4B             l
-                word    $0033   '4C             ;
-                word    $0013   '4D             p
-                word    $002D   '4E             -
-                word    $0000   '4F
-                word    $0000   '50
-                word    $0000   '51
-                word    $0034   '52             '
-                word    $0000   '53
-                word    $002F   '54             [
-                word    $002E   '55             =
-                word    $0000   '56
-                word    $0000   '57
-                word    $0039   '58             CapsLock
-                word    $00E5   '59             Shift-R
-                word    $5828   '5A     (Enter) Enter
-                word    $0030   '5B             ]
-                word    $0000   '5C
-                word    $0031   '5D             \
-                word    $0000   '5E     WakeUp
-                word    $0000   '5F
-                word    $0000   '60
-                word    $0064   '61
-                word    $0000   '62
-                word    $0000   '63
-                word    $0000   '64
-                word    $0000   '65
-                word    $002A   '66             BackSpace
-                word    $0000   '67
-                word    $0000   '68
-                word    $4D59   '69     End     (1)
-                word    $0000   '6A
-                word    $505C   '6B     Left    (4)
-                word    $4A5F   '6C     Home    (7)
-                word    $0000   '6D
-                word    $0000   '6E
-                word    $0000   '6F
-                word    $4962   '70     Insert  (0)
-                word    $4C63   '71     Delete  (.)
-                word    $515A   '72     Down    (2)
-                word    $005D   '73             (5)
-                word    $4F5E   '74     Right   (6)
-                word    $5260   '75     Up      (8)
-                word    $0029   '76             Esc
-                word    $0053   '77             NumLock
-                word    $0044   '78             F11
-                word    $0057   '79             (+)
-                word    $4E5B   '7A     PageDn  (3)
-                word    $0056   '7B             (-)
-                word    $4655   '7C     PrScr   (*)
-                word    $4B61   '7D     PageUp  (9)
-                word    $0047   '7E             ScrLock
-                word    $0000   '7F
-                word    $0000   '80
-                word    $0000   '81
-                word    $0000   '82
-                word    $0040   '83             F7
+ps2_table       byte    $00, $00    '00
+                byte    $42, $00    '01     F9
+                byte    $00, $00    '02
+                byte    $3E, $00    '03     F5
+                byte    $3C, $00    '04     F3
+                byte    $3A, $00    '05     F1
+                byte    $3B, $00    '06     F2
+                byte    $45, $00    '07     F12
+                byte    $00, $00    '08
+                byte    $43, $00    '09     F10
+                byte    $41, $00    '0A     F8
+                byte    $3F, $00    '0B     F6
+                byte    $3D, $00    '0C     F4
+                byte    $2B, $00    '0D     Tab
+                byte    $35, $00    '0E     `
+                byte    $00, $00    '0F
+                byte    $00, $00    '10
+                byte    $E2, $E6    '11     Alt-L    Alt-R
+                byte    $E1, $00    '12     Shift-L
+                byte    $00, $00    '13
+                byte    $E0, $E4    '14     Ctrl-L   Ctrl-R
+                byte    $14, $00    '15     q
+                byte    $1E, $00    '16     1
+                byte    $00, $00    '17
+                byte    $00, $00    '18
+                byte    $00, $00    '19
+                byte    $1D, $00    '1A     z
+                byte    $16, $00    '1B     s
+                byte    $04, $00    '1C     a
+                byte    $1A, $00    '1D     w
+                byte    $1F, $00    '1E     2
+                byte    $00, $E3    '1F              Win-L
+                byte    $00, $00    '20
+                byte    $06, $00    '21     c
+                byte    $1B, $00    '22     x
+                byte    $07, $00    '23     d
+                byte    $08, $00    '24     e
+                byte    $21, $00    '25     4
+                byte    $20, $00    '26     3
+                byte    $00, $E7    '27              Win-R
+                byte    $00, $00    '28
+                byte    $2C, $00    '29     Space
+                byte    $19, $00    '2A     v
+                byte    $09, $00    '2B     f
+                byte    $17, $00    '2C     t
+                byte    $15, $00    '2D     r
+                byte    $22, $00    '2E     5
+                byte    $00, $65    '2F              Apps
+                byte    $00, $00    '30
+                byte    $11, $00    '31     n
+                byte    $05, $00    '32     b
+                byte    $0B, $00    '33     h
+                byte    $0A, $00    '34     g
+                byte    $1C, $00    '35     y
+                byte    $23, $00    '36     6
+                byte    $00, $00    '37              Power
+                byte    $00, $00    '38
+                byte    $00, $00    '39
+                byte    $10, $00    '3A     m
+                byte    $0D, $00    '3B     j
+                byte    $18, $00    '3C     u
+                byte    $24, $00    '3D     7
+                byte    $25, $00    '3E     8
+                byte    $00, $00    '3F              Sleep
+                byte    $00, $00    '40
+                byte    $36, $00    '41     ,
+                byte    $0E, $00    '42     k
+                byte    $0C, $00    '43     i
+                byte    $12, $00    '44     o
+                byte    $27, $00    '45     0
+                byte    $26, $00    '46     9
+                byte    $00, $00    '47
+                byte    $00, $00    '48
+                byte    $37, $00    '49     .
+                byte    $38, $54    '4A     /        (/)
+                byte    $0F, $00    '4B     l
+                byte    $33, $00    '4C     ;
+                byte    $13, $00    '4D     p
+                byte    $2D, $00    '4E     -
+                byte    $00, $00    '4F
+                byte    $00, $00    '50
+                byte    $00, $00    '51
+                byte    $34, $00    '52     '
+                byte    $00, $00    '53
+                byte    $2F, $00    '54     [
+                byte    $2E, $00    '55     =
+                byte    $00, $00    '56
+                byte    $00, $00    '57
+                byte    $39, $00    '58     CapsLock
+                byte    $E5, $00    '59     Shift-R
+                byte    $28, $58    '5A     Enter    (Enter)
+                byte    $30, $00    '5B     ]
+                byte    $00, $00    '5C
+                byte    $31, $00    '5D     \
+                byte    $00, $00    '5E              WakeUp
+                byte    $00, $00    '5F
+                byte    $00, $00    '60
+                byte    $64, $00    '61
+                byte    $00, $00    '62
+                byte    $00, $00    '63
+                byte    $00, $00    '64
+                byte    $00, $00    '65
+                byte    $2A, $00    '66     BackSpace
+                byte    $00, $00    '67
+                byte    $00, $00    '68
+                byte    $59, $4D    '69     (1)      End
+                byte    $00, $00    '6A
+                byte    $5C, $50    '6B     (4)      Left
+                byte    $5F, $4A    '6C     (7)      Home
+                byte    $00, $00    '6D
+                byte    $00, $00    '6E
+                byte    $00, $00    '6F
+                byte    $62, $49    '70     (0)      Insert
+                byte    $63, $4C    '71     (.)      Delete
+                byte    $5A, $51    '72     (2)      Down
+                byte    $5D, $00    '73     (5)
+                byte    $5E, $4F    '74     (6)      Right
+                byte    $60, $52    '75     (8)      Up
+                byte    $29, $00    '76     Esc
+                byte    $53, $00    '77     NumLock
+                byte    $44, $00    '78     F11
+                byte    $57, $00    '79     (+)
+                byte    $5B, $4E    '7A     (3)      PageDn
+                byte    $56, $00    '7B     (-)
+                byte    $55, $46    '7C     (*)      PrScr
+                byte    $61, $4B    '7D     (9)      PageUp
+                byte    $47, $00    '7E     ScrLock
+                byte    $00, $00    '7F
+                byte    $00, $00    '80
+                byte    $00, $00    '81
+                byte    $00, $00    '82
+                byte    $40, $00    '83     F7
 
                 fit     $1F0
 
