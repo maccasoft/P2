@@ -14,14 +14,14 @@ CON
     _CLKFREQ = 250_000_000
 
     VIDEO    = VGA ' video mode VGA, NTSC or PAL
-    VGA_PIN  = 8
-    CVBS_PIN = 53 addpins 1 ' 53=CVBS/Y, 54=C
+    VGA_PIN  = 48
+    CVBS_PIN = 32 addpins 1 ' 32=CVBS/Y, 33=C
 
-    PS2_DATA_PIN  = 25
-    PS2_CLOCK_PIN = 24
+    PS2_DATA_PIN  = 47
+    PS2_CLOCK_PIN = 46
 
-    AUDIO_LEFT_PIN  = 48
-    AUDIO_RIGHT_PIN = 49
+    AUDIO_LEFT_PIN  = 38
+    AUDIO_RIGHT_PIN = 39
 
 DAT             ' Startup
                 org     $000
@@ -956,7 +956,7 @@ zk_read8
                 add     zk_cycles,#3
                 getword pa, zk_ea, #0
                 cmp     pa, ram_base    wcz
-         if_ae  cmpr    pa, ram_top     wcz
+         if_ae  cmp     ram_top, pa     wcz
          if_ae  and     pa, ram_mask
                 add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
@@ -984,11 +984,10 @@ zk_write8
                 add     zk_cycles, #3
                 getword pa, zk_ea, #0
                 cmp     pa, ram_base    wcz
-         if_ae  cmpr    pa, ram_top     wcz
-         if_b   ret     wcz
-                and     pa, ram_mask
-                add     pa, zk_ram
-                wrbyte  zk_tmp8, pa
+         if_ae  cmp     ram_top, pa     wcz
+         if_ae  and     pa, ram_mask
+         if_ae  add     pa, zk_ram
+         if_ae  wrbyte  zk_tmp8, pa
                 ret     wcz
 
 ram_base        long    $6000

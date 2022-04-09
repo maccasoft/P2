@@ -8,8 +8,8 @@
 CON
     _clkfreq     = 160_000_000
 
-    cvbs_pin     = 32+7*3 addpins 1
-    vga_pin_base = 8
+    cvbs_pin     = 32 addpins 1 ' 32=CVBS/Y, 33=C
+    vga_pin_base = 48
 
     ' color constants
 

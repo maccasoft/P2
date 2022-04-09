@@ -6,14 +6,14 @@
 
 CON
 
-    _CLKFREQ      = 160_000_000
+    _CLKFREQ = 160_000_000
 
-    VIDEO         = VGA ' video mode VGA, NTSC or PAL
-    VGA_PIN       = 8
-    CVBS_PIN      = 32+7*3 addpins 1 ' 53+54
+    VIDEO    = VGA ' video mode VGA, NTSC or PAL
+    VGA_PIN  = 48
+    CVBS_PIN = 32 addpins 1 ' 32=CVBS/Y, 33=C
 
-    PS2_DATA      = 25
-    PS2_CLOCK     = 24
+    PS2_DATA_PIN  = 47
+    PS2_CLOCK_PIN = 46
 
 DAT             ' 6502 COG resident code
                 org     $000
@@ -939,7 +939,7 @@ reset           mov     key, #0
                 mov     shift, #0
                 mov     state, #0
 
-loop            testpn  #PS2_DATA       wz  ' wait for initial receive
+loop            testpn  #PS2_DATA_PIN   wz  ' wait for initial receive
         if_z    jmp     #$-1
 
                 mov     state, #0
@@ -999,12 +999,12 @@ ext0            calld   receive_ret, #receive
                 jmp     #loop               ' extended codes are ignored
 
 receive         mov     bits, #11
-.l1             testpn  #PS2_CLOCK      wz  ' wait until clock low
+.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
         if_nz   jct1    #reset              ' | check timeout
         if_nz   jmp     #.l1                ' |
-                testp   #PS2_DATA       wc  ' sample data
+                testp   #PS2_DATA_PIN   wc  ' sample data
                 rcr     data, #1
-.l2             testpn  #PS2_CLOCK      wz  ' wait until clock high
+.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
         if_z    jct1    #reset              ' | check timeout
         if_z    jmp     #.l2                ' |
                 djnz    bits, #.l1          ' another bit?

@@ -9,14 +9,14 @@
 }
 CON
 
-    _CLKFREQ      = 240_000_000
+    _CLKFREQ = 240_000_000
 
-    VIDEO         = PAL ' video mode VGA, NTSC or PAL
-    VGA_PIN       = 8
-    CVBS_PIN      = 53 addpins 1 ' 53=CVBS/Y, 54=C
+    VIDEO    = VGA ' video mode VGA, NTSC or PAL
+    VGA_PIN  = 48
+    CVBS_PIN = 32 addpins 1 ' 32=CVBS/Y, 33=C
 
-    PS2_DATA_PIN  = 25
-    PS2_CLOCK_PIN = 24
+    PS2_DATA_PIN  = 47
+    PS2_CLOCK_PIN = 46
 
     ZX_MIC        = 0   ' OUT
     ZX_EAR        = 1   ' IN

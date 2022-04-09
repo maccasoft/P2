@@ -8,8 +8,8 @@ CON
 
     _CLKFREQ = 160_000_000
 
-    PS2_DATA_PIN  = 25
-    PS2_CLOCK_PIN = 24
+    PS2_DATA_PIN  = 47
+    PS2_CLOCK_PIN = 46
 
 DAT             ' PS/2 Keyboard river
                 org     $000
