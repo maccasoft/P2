@@ -206,9 +206,9 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
                 cmp     ps2_key, #$52       wz  ' UP
         if_z    bitc    ps2_ctrl, #8+0
 
-                cmp     ps2_key, #$E0       wz  ' LEFT BUTTON
+                cmp     ps2_key, #$E0       wz  ' LCTRL (LEFT BUTTON)
         if_z    bitc    ps2_ctrl, #8+6
-                cmp     ps2_key, #$E1       wz  ' RIGHT BUTTON
+                cmp     ps2_key, #$E1       wz  ' LSHIFT (RIGHT BUTTON)
         if_z    bitc    ps2_ctrl, #6
 
                 wrlong  ps2_ctrl, #@coleco_ctrls
