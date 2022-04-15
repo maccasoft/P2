@@ -8,7 +8,6 @@ CON
     _CLKFREQ = 160_000_000
 
     VGA_PIN  = 48
-    CVBS_PIN = 32 addpins 1 ' 32=CVBS/Y, 33=C
 
     PS2_DATA_PIN  = 47
     PS2_CLOCK_PIN = 46
@@ -17,23 +16,16 @@ CON
     ACIA_TX_PIN   = 62  { O }
     ACIA_BAUD     = 300
 
-DAT             ' Video + PS/2 COG resident code
+DAT             ' Startup and PS/2 COG resident code
                 org     $000
 
-video_driver
+startup
                 asmclk
 
-                add     ptrb, ##@video_driver_lut - @video_driver
-                setq2   #511
-                rdlong  0, ptrb             ' load palette into lut
-
-                call    #vga_init
-                mov     ijmp1,##vga_field   ' set up streamer-empty interrupt
-                setint1 #EVENT_XMT
-                xcont   #EVENT_XMT, #0      ' do streamer instruction to start interrupt sequence
+                coginit #1, ##@video_driver ' start video driver on cog #1
 
 sys_reset
-                coginit #1, ##@cog_6502     ' start 6502 on cog #1
+                coginit #2, ##@cog_6502     ' start 6502 on cog #1
 
                 jmp     #ps2_driver         ' continue to PS/2 driver
 
@@ -70,6 +62,9 @@ ps2_reset
                 wrlong  uk101_keyboard, #@uk101_keyboard
 
 ps2_loop        and     ps2_state, #%0_111  ' keep locks state
+
+                testp   #PS2_DATA_PIN   wz  ' wait for initial receive
+        if_x1   jmp     #$-1
 
 .l1             call    #ps2_receive
                 getbyte ps2_code, ps2_data, #0
@@ -137,9 +132,9 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
         if_nz   andn    ps2_shift, #LEFT_GUI|RIGHT_GUI
         if_nz   jmp     #sys_reset
 
-                testbn  ps2_state, #28  wc      ' extended code
+                testb   ps2_state, #28  wc      ' extended code
                 rcl     ps2_code, #1            '   to bit 0
-                shl     ps2_code, #1
+                shl     ps2_code, #1            '   to word offset
 
                 mov     ps2_key, ##@ps2_table
                 add     ps2_key, ps2_code
@@ -209,7 +204,7 @@ ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
                 bith    ps2_data, #9        ' append stop bit
 
                 getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ps2_us2000
+                addct1  ps2_tout, ps2_us4000
 
                 mov     ps2_bits, #10
 .l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
@@ -236,21 +231,18 @@ ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
 
                 ' Fall through to receive ack
 
-ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
-        if_nz   jmp     #ps2_receive        ' |
-
-                getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ps2_us2000
+ps2_receive     getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us4000
 
                 mov     ps2_bits, #11
-.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
-        if_nz   jct1    #ps2_reset          ' | check timeout
-        if_nz   jmp     #.l1                ' |
+.l1             testp   #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_x1   jct1    #ps2_reset          ' | check timeout
+        if_x1   jmp     #.l1                ' |
                 testp   #PS2_DATA_PIN   wc  ' sample data
                 rcr     ps2_data, #1        ' |
-.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
-        if_z    jct1    #ps2_reset          ' | check timeout
-        if_z    jmp     #.l2                ' |
+.l2             testp   #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_x0   jct1    #ps2_reset          ' | check timeout
+        if_x0   jmp     #.l2                ' |
                 djnz    ps2_bits, #.l1      ' another bit?
 
                 shr     ps2_data, #22       ' align byte
@@ -262,7 +254,7 @@ ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
 ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
 ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
 ps2_us128       long    _CLKFREQ / 1000_000 * 128   ' 128 usec.
-ps2_us2000      long    _CLKFREQ / 1000_000 * 4000  ' 2000 usec.
+ps2_us4000      long    _CLKFREQ / 1000_000 * 4000  ' 4000 usec.
 
 ps2_bits        long    0
 ps2_code        long    0
@@ -275,164 +267,7 @@ ps2_tout        long    0
 ps2_temp        long    0
 ps2_ptr         long    0
 
-'
-'
-' Data
-'
-dacmode_s       long    P_DAC_124R_3V + P_CHANNEL ' %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
-dacmode_c       long    P_DAC_75R_2V + P_CHANNEL  ' %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
-
-vga_xf          long   (VGA_FPIX frac _CLKFREQ) >> 1             ' streamer frequency setting
-vga_bs          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  20    ' streamer command: before-sync
-vga_ds          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  64    ' streamer command: during-sync
-vga_as          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  44    ' streamer command: after sync
-vga_vi          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  + 400    ' streamer command: visible
-vga_bv          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  +   8    ' streamer command: before visible
-vga_dv          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  +   8    ' streamer command: during visible
-vga_av          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0| $F << 16 +  +   8    ' streamer command: after visible
-vga_pn          long    VGA_PIN & $38       ' base pin
-
-_vx             long    0
-_vy             long    0
-
-_sl             long    0                   ' scanline counter
-_lb             long    0                   ' line buffer pointer
-_cp             long    0                   ' character pointer
-_bm             long    0[2]                ' character bitmap
-
-_ch             long    0
-_fc             long    0
-
-line_ret        long    0
-border_ret      long    0
-blank_ret       long    0
-
                 fit     $1F0
-
-DAT             ' VGA Driver LUT resident code
-                org     $200
-
-video_driver_lut
-
-vga_init
-                setcmod #%01_0_000_0            ' enable colorspace conversion
-                setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
-                setci   ##VGA_INTENSITY << 16   ' g
-                setcq   ##VGA_INTENSITY << 08   ' b
-                setxfrq vga_xf                  ' set transfer frequency
-
-                cogid   _vx                     ' insert cogid into dac modes
-                setnib  dacmode_s,_vx,#2
-                setnib  dacmode_c,_vx,#2
-
-                wrpin   dacmode_s,vga_pn        ' enable 123-ohm 3.3V dac mode in pin +0
-
-                xor     vga_pn,#2<<6|1          ' enable 75-ohm 2.0V dac mode in pins +1..3
-                wrpin   dacmode_c,vga_pn
-
-                xor     vga_pn,#3<<6 ^(2<<6|1)  ' make pins +0..3 outputs
-                drvl    vga_pn
-
-                xor     vga_pn,#4|(3<<6)        ' leave av_base pointing to pin +4 (vertical sync)
-        _ret_   drvl    vga_pn
-
-vga_field
-                mov     _sl, #0
-                mov     _vy, #128           ' visible lines
-                mov     ptra, ##@video_ram+12
-
-.loop           calld   line_ret, #.line
-                calld   line_ret, #.line
-                calld   line_ret, #.line
-                calld   line_ret, #.line
-
-                incmod  _sl, #7         wc
-        if_c    add     ptra, #64
-
-                djnz    _vy, #.loop
-
-                mov     _vy,#22                  'before-visible blank lines
-                calld   border_ret, #.border
-
-                mov     _vy, #1
-                calld   blank_ret, #.blank         ' back porch
-
-                drvnot  vga_pn                 ' vertical sync on
-                mov     _vy, #4
-                calld   blank_ret, #.blank
-                drvnot  vga_pn                 ' vertical sync off
-
-                mov     _vy, #23
-                calld   blank_ret, #.blank
-
-                mov     _vy,#22                  'before-visible blank lines
-                calld   border_ret, #.border
-
-                jmp     #vga_field              ' loop
-
-.line           xcont   vga_bs, #0             ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds, #1             ' do sync part of scan line
-                resi1
-                xcont   vga_as, #0             ' do before-visible part of scan line
-                resi1
-                xcont   vga_bv, #0             ' do left border
-                resi1
-
-                mov     _vx, #48
-.l1             rdbyte  _ch, ptra++
-                shl     _ch, #3
-                add     _ch, ##@chargen_rom
-                add     _ch, _sl
-                rdbyte  _ch, _ch
-                rev     _ch
-                shr     _ch, #24
-                xcont   vga_dv, _ch
-                resi1
-                djnz    _vx, #.l1
-                sub     ptra, #48
-
-                xcont   vga_av, #0             ' do right border
-                resi1
-                jmp     line_ret
-
-.border         xcont   vga_bs, #0             ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds, #1             ' do sync part of scan line
-                resi1
-                xcont   vga_as, #0             ' do before-visible part of scan line
-                resi1
-                xcont   vga_vi, #0             ' do visible part of scan line (blank)
-                resi1
-
-                xcont   vga_bs, #0             ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds, #1             ' do sync part of scan line
-                resi1
-                xcont   vga_as, #0             ' do before-visible part of scan line
-                resi1
-                xcont   vga_vi, #0             ' do visible part of scan line (blank)
-                resi1
-                djnz    _vy, #.border
-                jmp     border_ret
-
-.blank          xcont   vga_bs, #0             ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds, #1             ' do sync part of scan line
-                resi1
-                xcont   vga_as, #0             ' do before-visible part of scan line
-                resi1
-                xcont   vga_vi, #0             ' do visible part of scan line (blank)
-                resi1
-                djnz    _vy, #.blank         ' loop if more blanks needed
-                jmp     blank_ret
-
-                long    0[$200 + ($F << 5) - $] ' align to streamer LUT offset
-
-                long    $00_00_00_00        ' background
-                long    $F0_F0_F0_00        ' foreground
-
-                fit     $400
 
 DAT             ' PS/2 Lookup table
                 orgh
@@ -469,100 +304,100 @@ DAT             ' PS/2 Lookup table
 '                        ROW C7....C0   ROW C7....C0
 
 ps2_table       word    %000_00000000, %000_00000000    '00
-                word    %000_00000000, %000_00000000    '01             F9
+                word    %000_00000000, %000_00000000    '01     F9
                 word    %000_00000000, %000_00000000    '02
-                word    %000_00000000, %000_00000000    '03             F5
-                word    %000_00000000, %000_00000000    '04             F3
-                word    %000_00000000, %000_00000000    '05             F1
-                word    %000_00000000, %000_00000000    '06             F2
-                word    %000_00000000, %000_00000000    '07             F12
+                word    %000_00000000, %000_00000000    '03     F5
+                word    %000_00000000, %000_00000000    '04     F3
+                word    %000_00000000, %000_00000000    '05     F1
+                word    %000_00000000, %000_00000000    '06     F2
+                word    %000_00000000, %000_00000000    '07     F12
                 word    %000_00000000, %000_00000000    '08
-                word    %000_00000000, %000_00000000    '09             F10
-                word    %000_00000000, %000_00000000    '0A             F8
-                word    %000_00000000, %000_00000000    '0B             F6
-                word    %000_00000000, %000_00000000    '0C             F4
-                word    %000_00000000, %000_00000000    '0D             Tab
-                word    %000_00000000, %000_00000000    '0E             `
+                word    %000_00000000, %000_00000000    '09     F10
+                word    %000_00000000, %000_00000000    '0A     F8
+                word    %000_00000000, %000_00000000    '0B     F6
+                word    %000_00000000, %000_00000000    '0C     F4
+                word    %000_00000000, %000_00000000    '0D     Tab
+                word    %000_00000000, %000_00000000    '0E     `
                 word    %000_00000000, %000_00000000    '0F
                 word    %000_00000000, %000_00000000    '10
-                word    %000_00000000, %000_00000000    '11     Alt-R   Alt-L
-                word    %000_00000000, %000_00000100    '12             Shift-L
+                word    %000_00000000, %000_00000000    '11     Alt-L    Alt-R
+                word    %000_00000100, %000_00000000    '12     Shift-L
                 word    %000_00000000, %000_00000000    '13
-                word    %000_01000000, %000_01000000    '14     Ctrl-R  Ctrl-L
-                word    %000_00000000, %001_10000000    '15             q
-                word    %000_00000000, %111_10000000    '16             1
+                word    %000_01000000, %000_01000000    '14     Ctrl-L   Ctrl-R
+                word    %001_10000000, %000_00000000    '15     q
+                word    %111_10000000, %000_00000000    '16     1
                 word    %000_00000000, %000_00000000    '17
                 word    %000_00000000, %000_00000000    '18
                 word    %000_00000000, %000_00000000    '19
-                word    %000_00000000, %001_00100000    '1A             z
-                word    %000_00000000, %011_10000000    '1B             s
-                word    %000_00000000, %001_01000000    '1C             a
-                word    %000_00000000, %100_10000000    '1D             w
-                word    %000_00000000, %111_01000000    '1E             2
-                word    %000_00000000, %000_00000000    '1F     Win-L
+                word    %001_00100000, %000_00000000    '1A     z
+                word    %011_10000000, %000_00000000    '1B     s
+                word    %001_01000000, %000_00000000    '1C     a
+                word    %100_10000000, %000_00000000    '1D     w
+                word    %111_01000000, %000_00000000    '1E     2
+                word    %000_00000000, %000_00000000    '1F              Win-L
                 word    %000_00000000, %000_00000000    '20
-                word    %000_00000000, %010_01000000    '21             c
-                word    %000_00000000, %010_10000000    '22             x
-                word    %000_00000000, %011_01000000    '23             d
-                word    %000_00000000, %100_01000000    '24             e
-                word    %000_00000000, %111_00010000    '25             4
-                word    %000_00000000, %111_00100000    '26             3
-                word    %000_00000000, %000_00000000    '27     Win-R
+                word    %010_01000000, %000_00000000    '21     c
+                word    %010_10000000, %000_00000000    '22     x
+                word    %011_01000000, %000_00000000    '23     d
+                word    %100_01000000, %000_00000000    '24     e
+                word    %111_00010000, %000_00000000    '25     4
+                word    %111_00100000, %000_00000000    '26     3
+                word    %000_00000000, %000_00000000    '27              Win-R
                 word    %000_00000000, %000_00000000    '28
-                word    %000_00000000, %001_00010000    '29             Space
-                word    %000_00000000, %010_00100000    '2A             v
-                word    %000_00000000, %011_00100000    '2B             f
-                word    %000_00000000, %100_00010000    '2C             t
-                word    %000_00000000, %100_00100000    '2D             r
-                word    %000_00000000, %111_00001000    '2E             5
-                word    %000_00000000, %000_00000000    '2F     Apps
+                word    %001_00010000, %000_00000000    '29     Space
+                word    %010_00100000, %000_00000000    '2A     v
+                word    %011_00100000, %000_00000000    '2B     f
+                word    %100_00010000, %000_00000000    '2C     t
+                word    %100_00100000, %000_00000000    '2D     r
+                word    %111_00001000, %000_00000000    '2E     5
+                word    %000_00000000, %000_00000000    '2F              Apps
                 word    %000_00000000, %000_00000000    '30
-                word    %000_00000000, %010_00001000    '31             n
-                word    %000_00000000, %010_00010000    '32             b
-                word    %000_00000000, %011_00001000    '33             h
-                word    %000_00000000, %011_00010000    '34             g
-                word    %000_00000000, %100_00001000    '35             y
-                word    %000_00000000, %111_00000100    '36             6
-                word    %000_00000000, %000_00000000    '37     Power
+                word    %010_00001000, %000_00000000    '31     n
+                word    %010_00010000, %000_00000000    '32     b
+                word    %011_00001000, %000_00000000    '33     h
+                word    %011_00010000, %000_00000000    '34     g
+                word    %100_00001000, %000_00000000    '35     y
+                word    %111_00000100, %000_00000000    '36     6
+                word    %000_00000000, %000_00000000    '37              Power
                 word    %000_00000000, %000_00000000    '38
                 word    %000_00000000, %000_00000000    '39
-                word    %000_00000000, %010_00000100    '3A             m
-                word    %000_00000000, %011_00000100    '3B             j
-                word    %000_00000000, %100_00000100    '3C             u
-                word    %000_00000000, %111_00000010    '3D             7
-                word    %000_00000000, %110_10000000    '3E             8
-                word    %000_00000000, %000_00000000    '3F     Sleep
+                word    %010_00000100, %000_00000000    '3A     m
+                word    %011_00000100, %000_00000000    '3B     j
+                word    %100_00000100, %000_00000000    '3C     u
+                word    %111_00000010, %000_00000000    '3D     7
+                word    %110_10000000, %000_00000000    '3E     8
+                word    %000_00000000, %000_00000000    '3F              Sleep
                 word    %000_00000000, %000_00000000    '40
-                word    %000_00000000, %010_00000010    '41             ,
-                word    %000_00000000, %011_00000010    '42             k
-                word    %000_00000000, %100_00000010    '43             i
-                word    %000_00000000, %101_00100000    '44             o
-                word    %000_00000000, %110_00100000    '45             0
-                word    %000_00000000, %110_01000000    '46             9
+                word    %010_00000010, %000_00000000    '41     ,
+                word    %011_00000010, %000_00000000    '42     k
+                word    %100_00000010, %000_00000000    '43     i
+                word    %101_00100000, %000_00000000    '44     o
+                word    %110_00100000, %000_00000000    '45     0
+                word    %110_01000000, %000_00000000    '46     9
                 word    %000_00000000, %000_00000000    '47
                 word    %000_00000000, %000_00000000    '48
-                word    %000_00000000, %101_10000000    '49             .
-                word    %000_00000000, %001_00001000    '4A     (/)     /
-                word    %000_00000000, %101_01000000    '4B             l
-                word    %000_00000000, %001_00000100    '4C             ;
-                word    %000_00000000, %001_00000010    '4D             p
-                word    %000_00000000, %110_00010000    '4E             -
+                word    %101_10000000, %000_00000000    '49     .
+                word    %001_00001000, %000_00000000    '4A     /        (/)
+                word    %101_01000000, %000_00000000    '4B     l
+                word    %001_00000100, %000_00000000    '4C     ;
+                word    %001_00000010, %000_00000000    '4D     p
+                word    %110_00010000, %000_00000000    '4E     -
                 word    %000_00000000, %000_00000000    '4F
                 word    %000_00000000, %000_00000000    '50
                 word    %000_00000000, %000_00000000    '51
-                word    %000_00000000, %000_00000000    '52             '
+                word    %000_00000000, %000_00000000    '52     '
                 word    %000_00000000, %000_00000000    '53
-                word    %000_00000000, %101_00010000    '54             [
-                word    %000_00000000, %110_00001000    '55             =
+                word    %101_00010000, %000_00000000    '54     [
+                word    %110_00001000, %000_00000000    '55     =
                 word    %000_00000000, %000_00000000    '56
                 word    %000_00000000, %000_00000000    '57
-                word    %000_00000000, %000_00000000    '58             CapsLock
-                word    %000_00000000, %000_00000010    '59             Shift-R
-                word    %000_00000000, %101_00001000    '5A     (Enter) Enter
-                word    %000_00000000, %000_00000000    '5B             ]
+                word    %000_00000000, %000_00000000    '58     CapsLock
+                word    %000_00000010, %000_00000000    '59     Shift-R
+                word    %101_00001000, %000_00000000    '5A     Enter    (Enter)
+                word    %000_00000000, %000_00000000    '5B     ]
                 word    %000_00000000, %000_00000000    '5C
-                word    %000_00000000, %000_00000000    '5D             \
-                word    %000_00000000, %000_00000000    '5E     WakeUp
+                word    %000_00000000, %000_00000000    '5D     \
+                word    %000_00000000, %000_00000000    '5E              WakeUp
                 word    %000_00000000, %000_00000000    '5F
                 word    %000_00000000, %000_00000000    '60
                 word    %000_00000000, %000_00000000    '61
@@ -570,36 +405,36 @@ ps2_table       word    %000_00000000, %000_00000000    '00
                 word    %000_00000000, %000_00000000    '63
                 word    %000_00000000, %000_00000000    '64
                 word    %000_00000000, %000_00000000    '65
-                word    %000_00000000, %110_00000100    '66             BackSpace
+                word    %110_00000100, %000_00000000    '66     BackSpace
                 word    %000_00000000, %000_00000000    '67
                 word    %000_00000000, %000_00000000    '68
-                word    %000_00000000, %000_00000000    '69     End     (1)
+                word    %000_00000000, %000_00000000    '69     (1)      End
                 word    %000_00000000, %000_00000000    '6A
-                word    %000_00000000, %000_00000000    '6B     Left    (4)
-                word    %000_00000000, %000_00000000    '6C     Home    (7)
+                word    %000_00000000, %000_00000000    '6B     (4)      Left
+                word    %000_00000000, %000_00000000    '6C     (7)      Home
                 word    %000_00000000, %000_00000000    '6D
                 word    %000_00000000, %000_00000000    '6E
                 word    %000_00000000, %000_00000000    '6F
-                word    %000_00000000, %000_00000000    '70     Insert  (0)
-                word    %000_00000000, %000_00000000    '71     Delete  (.)
-                word    %000_00000000, %000_00000000    '72     Down    (2)
-                word    %000_00000000, %000_00000000    '73             (5)
-                word    %000_00000000, %000_00000000    '74     Right   (6)
-                word    %000_00000000, %000_00000000    '75     Up      (8)
-                word    %000_00000000, %000_00000000    '76             Esc
-                word    %000_00000000, %000_00000000    '77             NumLock
-                word    %000_00000000, %000_00000000    '78             F11
-                word    %000_00000000, %000_00000000    '79             (+)
-                word    %000_00000000, %000_00000000    '7A     PageDn  (3)
-                word    %000_00000000, %000_00000000    '7B             (-)
-                word    %000_00000000, %000_00000000    '7C     PrScr   (*)
-                word    %000_00000000, %000_00000000    '7D     PageUp  (9)
-                word    %000_00000000, %000_00000000    '7E             ScrLock
+                word    %000_00000000, %000_00000000    '70     (0)      Insert
+                word    %000_00000000, %000_00000000    '71     (.)      Delete
+                word    %000_00000000, %000_00000000    '72     (2)      Down
+                word    %000_00000000, %000_00000000    '73     (5)
+                word    %000_00000000, %000_00000000    '74     (6)      Right
+                word    %000_00000000, %000_00000000    '75     (8)      Up
+                word    %000_00000000, %000_00000000    '76     Esc
+                word    %000_00000000, %000_00000000    '77     NumLock
+                word    %000_00000000, %000_00000000    '78     F11
+                word    %000_00000000, %000_00000000    '79     (+)
+                word    %000_00000000, %000_00000000    '7A     (3)      PageDn
+                word    %000_00000000, %000_00000000    '7B     (-)
+                word    %000_00000000, %000_00000000    '7C     (*)      PrScr
+                word    %000_00000000, %000_00000000    '7D     (9)      PageUp
+                word    %000_00000000, %000_00000000    '7E     ScrLock
                 word    %000_00000000, %000_00000000    '7F
                 word    %000_00000000, %000_00000000    '80
                 word    %000_00000000, %000_00000000    '81
                 word    %000_00000000, %000_00000000    '82
-                word    %000_00000000, %000_00000000    '83             F7
+                word    %000_00000000, %000_00000000    '83     F7
 
 CON             ' PS/2 constants
 
@@ -612,7 +447,126 @@ CON             ' PS/2 constants
     RIGHT_ALT   = %0100_0000
     RIGHT_GUI   = %1000_0000
 
-CON ' VGA constants
+DAT             ' VGA Driver COG resident code
+                org     $000
+
+video_driver
+                wrlut   ##$00_00_00_00, #0      ' background
+                wrlut   ##$F0_F0_F0_00, #1      ' foreground
+
+                setcmod #%01_0_000_0            ' enable colorspace conversion
+                setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
+                setci   ##VGA_INTENSITY << 16   ' g
+                setcq   ##VGA_INTENSITY << 08   ' b
+                setxfrq vga_xf                  ' set transfer frequency
+
+                cogid   pa                  ' insert cogid into dac modes
+                setnib  dacmode_s, pa, #2
+                setnib  dacmode_c, pa, #2
+
+                wrpin   dacmode_s, vga_pn   ' enable 123-ohm 3.3V dac mode in pin +0
+
+                xor     vga_pn, #2<<6|1     ' enable 75-ohm 2.0V dac mode in pins +1..3
+                wrpin   dacmode_c, vga_pn
+
+                xor     vga_pn, #3<<6 ^(2<<6|1) ' make pins +0..3 outputs
+                drvl    vga_pn
+
+                xor     vga_pn, #4|(3<<6)   ' leave av_base pointing to pin +4 (vertical sync)
+                drvl    vga_pn
+
+vga_field
+                callpa  #22, #.border       ' top border
+
+                mov     _sl, #0
+                mov     pa, #128            ' visible lines
+                mov     ptra, ##@video_ram+12
+.loop           call    #.line
+                call    #.line
+                call    #.line
+                call    #.line
+                incmod  _sl, #7         wc
+        if_c    add     ptra, #64
+                djnz    pa, #.loop
+
+                callpa  #22, #.border       ' bottom border
+
+                callpa  #1, #.blank         ' front-porch
+
+                drvnot  vga_pn              ' vertical sync on
+                callpa  #4, #.blank         ' sync-lines
+                drvnot  vga_pn              ' vertical sync off
+
+                callpa  #23, #.blank        ' back-porch
+
+                jmp     #vga_field          ' loop
+
+.line           xcont   vga_bs, #0          ' do before-sync part of scan line
+                xzero   vga_ds, #1          ' do sync part of scan line
+                xcont   vga_as, #0          ' do before-visible part of scan line
+                xcont   vga_bv, #0          ' do left border
+
+                mov     pb, #48
+.l1             rdbyte  _ch, ptra++
+                shl     _ch, #3
+                add     _ch, ##@chargen_rom
+                add     _ch, _sl
+                rdbyte  _ch, _ch
+                rev     _ch
+                shr     _ch, #24
+                xcont   vga_dv, _ch
+                djnz    pb, #.l1
+                sub     ptra, #48
+
+        _ret_   xcont   vga_av, #0             ' do right border
+
+.border         xcont   vga_bs, #0             ' do before-sync part of scan line
+                xzero   vga_ds, #1             ' do sync part of scan line
+                xcont   vga_as, #0             ' do before-visible part of scan line
+                xcont   vga_vi, #0             ' do visible part of scan line (blank)
+
+                xcont   vga_bs, #0             ' do before-sync part of scan line
+                xzero   vga_ds, #1             ' do sync part of scan line
+                xcont   vga_as, #0             ' do before-visible part of scan line
+                xcont   vga_vi, #0             ' do visible part of scan line (blank)
+        _ret_   djnz    pa, #.border
+
+.blank          xcont   vga_bs, #0             ' do before-sync part of scan line
+                xzero   vga_ds, #1             ' do sync part of scan line
+                xcont   vga_as, #0             ' do before-visible part of scan line
+                xcont   vga_vi, #0             ' do visible part of scan line (blank)
+        _ret_   djnz    pa, #.blank
+
+'
+'
+' Data
+'
+dacmode_s       long    P_DAC_124R_3V + P_CHANNEL ' %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
+dacmode_c       long    P_DAC_75R_2V + P_CHANNEL  ' %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
+
+vga_xf          long   (VGA_FPIX frac _CLKFREQ) >> 1             ' streamer frequency setting
+vga_bs          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  20    ' streamer command: before-sync
+vga_ds          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  64    ' streamer command: during-sync
+vga_as          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  44    ' streamer command: after sync
+vga_vi          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0   + 400    ' streamer command: visible
+vga_bv          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0   +   8    ' streamer command: before visible
+vga_dv          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0   +   8    ' streamer command: during visible
+vga_av          long    X_IMM_32X1_LUT|X_DACS_3_2_1_0   +   8    ' streamer command: after visible
+vga_pn          long    VGA_PIN & $38       ' base pin
+
+'_vx             long    0
+
+_sl             long    0                   ' scanline counter
+_lb             long    0                   ' line buffer pointer
+_cp             long    0                   ' character pointer
+_bm             long    0[2]                ' character bitmap
+
+_ch             long    0
+_fc             long    0
+
+                fit     $1F0
+
+CON             ' VGA constants
 
     VGA_FPIX      = 20_000_000
     VGA_INTENSITY = 80    '0..128
