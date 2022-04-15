@@ -939,8 +939,8 @@ reset           mov     key, #0
                 mov     shift, #0
                 mov     state, #0
 
-loop            testpn  #PS2_DATA_PIN   wz  ' wait for initial receive
-        if_z    jmp     #$-1
+loop            testp   #PS2_DATA_PIN   wz  ' wait for initial receive
+        if_x1   jmp     #$-1
 
                 mov     state, #0
                 getct   tout                ' safety timeout
@@ -999,14 +999,14 @@ ext0            calld   receive_ret, #receive
                 jmp     #loop               ' extended codes are ignored
 
 receive         mov     bits, #11
-.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
-        if_nz   jct1    #reset              ' | check timeout
-        if_nz   jmp     #.l1                ' |
+.l1             testp   #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_x1   jct1    #reset              ' | check timeout
+        if_x1   jmp     #.l1                ' |
                 testp   #PS2_DATA_PIN   wc  ' sample data
                 rcr     data, #1
-.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
-        if_z    jct1    #reset              ' | check timeout
-        if_z    jmp     #.l2                ' |
+.l2             testp   #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_x0   jct1    #reset              ' | check timeout
+        if_x0   jmp     #.l2                ' |
                 djnz    bits, #.l1          ' another bit?
 
                 shr     data, #22           ' align byte
