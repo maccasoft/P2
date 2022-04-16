@@ -506,13 +506,12 @@ hmemcpy
 ' On exit:
 '------------------------------------------------------------------------------
 host_error
-                wrbyte  retval, usb_err_code_p          ' Save the error code for the client interface
+                mov     usb_err_code, retval            ' Save the error code for the client interface
                 wxpin   #USB_ERROR, usb_event_pin       ' Signal the client an error has occurred
                 mov     hrep, #5
 .spin
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_RESET        wz
-        if_z    wrlong  #ERR_NONE, cmd_data_p           ' Acknowledge client reset cmd received
+                cmp     cmd_data, #CMD_RESET    wz
+        if_z    mov     cmd_data, #ERR_NONE             ' Acknowledge client reset cmd received
         if_z    flth    host_error_led
         if_z    jmp     #host_reset                     ' See if it works...
                 drvnot  host_error_led
@@ -535,16 +534,19 @@ poll_kbd
                 addct3  hct3, _8ms_                     ' Set the timer for next poll interval
                 jmp     #\hget_kbd_in_report
 
-' Pointers to this spin object's VAR block data (assigned at cog startup)
-cmd_data_p      long    @usbCmdData
-kb_intf_num_p   long    @kbIntfNum
-kb_interval_p   long    @kbInterval
-kb_in_max_pkt_p long    @kbInMaxPkt
-kb_next_datax_p long    @kbNextDatax
-kb_max_index_p  long    @kbMaxIndex
-kb_led_states_p long    @kbLedStates
-kb_report_p     long    @kbCurReport
-usb_err_code_p  long    @usbErrCode ' Contains "Protocol error codes" constant enumeration value.
+' USB commands and error codes
+cmd_data        long    0
+usb_err_code    long    ERR_NONE
+
+' Keyboard data
+kb_intf_num     long    0
+kb_interval     long    0
+kb_in_max_pkt   long    0
+kb_next_datax   long    0
+kb_max_index    long    0
+kb_led_states   long    0
+kb_cur_report_p long    @kbCurReport
+kb_pre_report_p long    @kbPreReport
 
 
 ' Initialized at cog startup:
@@ -1148,12 +1150,10 @@ hidle
                 pollct3                         wc
         if_c    call    poll_target                     ' Call the current poll/wait subroutine
 .nopoll
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_SUSPEND      wz
+                cmp     cmd_data, #CMD_SUSPEND  wz
         if_z    jmp     #hsuspend
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_RESET        wz
-        if_z    wrlong  #ERR_NONE, cmd_data_p           ' Acknowledge client reset cmd received
+                cmp     cmd_data, #CMD_RESET    wz
+        if_z    mov     cmd_data, #ERR_NONE             ' Acknowledge client reset cmd received
         if_z    jmp     #host_reset                     ' See if it works...
                 getct   hr0
                 cmp     hr0, _pulse_time_       wcz     ' Connected "heartbeat"
@@ -1178,7 +1178,7 @@ hsuspend
                 setint1 #0                              ' Stopping the 1ms frame packets signals suspend
                 waitx   _suspend_wait_                  ' The device enters suspend state when the bus is idle and
                 wypin   #OUT_IDLE, dm                   ' no frame SOPs are received for three consecutive frames
-                wrlong  #ERR_NONE, cmd_data_p           ' Clear the cmd from the event queue
+                mov     cmd_data, #ERR_NONE             ' Clear the cmd from the event queue
                 mov     mod_cnt, #0
 
                 ' Fall through to resume wait loop
@@ -1189,8 +1189,7 @@ hwait_resume
                 waitx   hr1                             ' Pulse the activity LED every two seconds but break
                 incmod  mod_cnt, #8             wc      ' it down to smaller wait chunks
         if_c    drvnot  host_active_led
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_RESUME       wz
+                cmp     cmd_data, #CMD_RESUME   wz
         if_nz   jmp     #hwait_resume
                 mov     htmp, ##_CLKFREQ                ' Check to see if the system frequency has changed
                 cmp     htmp, save_sysclk       wz
@@ -1218,7 +1217,7 @@ hwait_resume
                 setint1 #1                              ' Enable the 1ms frame ISR
                 mov     hctwait, _4ms_
                 call    #poll_waitx                     ' Delay until at least three 1ms frames transmitted
-                wrlong  #ERR_NONE, cmd_data_p           ' Acknowledge resume cmd complete
+                mov     cmd_data, #ERR_NONE             ' Acknowledge resume cmd complete
                 jmp     #set_poll_target                ' This addr configs a USB poll transaction and falls thru to hidle
 
 hlut_end
@@ -1439,13 +1438,12 @@ hparse_con_desc
                 cmp     hr3, #INTF_PROTO_KBD    wz
         if_nz   jmp     #.next_intf
 .keyboard
-                mov     ptra, kb_intf_num_p
-                wrbyte  hhid_intf_idx, ptra++           ' Save interface index and poll interval values
-                wrbyte  hr0, ptra++
+                getbyte kb_intf_num, hhid_intf_idx, #0  ' Save interface index and poll interval values
+                getbyte kb_interval, hr0, #0
                 mov     hkbd_ep_addr, hctrl_ep_addr
                 and     hkbd_ep_addr, ##ADDR_MASK
                 or      hkbd_ep_addr, hr1               ' IN endpoint address
-                wrbyte  hr2, ptra
+                getbyte kb_in_max_pkt, hr2, #0
                 jmp     #.next_intf                     ' See if there's a mouse subclass
 
 '------------------------------------------------------------------------------
@@ -1509,7 +1507,7 @@ hset_config
 .kbd_config
                 cmp     hkbd_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No keyboard
-                rdbyte  htmp, kb_intf_num_p
+                getbyte htmp, kb_intf_num, #0
                 loc     ptra, #set_protocol
                 wrword  #BOOT_PROTOCOL, ptra[wValue]
                 wrword  htmp, ptra[wIndex]
@@ -1519,7 +1517,7 @@ hset_config
         if_nz   mov     hkbd_ep_addr, #0
         if_nz   jmp     #.notify_client
                 mov     hpar1, #0                       ' SetIdle() duration 0 = indefinite
-                rdbyte  hpar2, kb_intf_num_p
+                getbyte hpar2, kb_intf_num, #0
                 call    #hset_idle
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hkbd_ep_addr, #0
@@ -1547,14 +1545,19 @@ hset_config
 '------------------------------------------------------------------------------
 init_kbdm_data
                 mov     hkbd_ep_addr, #0
-                mov     ptra, kb_intf_num_p
-                mov     pa, kb_report_p
+                mov     ptra, kb_cur_report_p
+                mov     pa, kb_pre_report_p
                 add     pa, #KBD_IN_RPT_LEN
 .loop
                 wrbyte  #0, ptra++
-                cmp     pa, ptra                wcz
+                cmp     ptra, pa                wcz
         if_b    jmp     #.loop
-        _ret_   wrbyte  #PID_DATA0, kb_next_datax_p     ' Reset interrupt IN datax sequence PIDs
+                mov     kb_intf_num, #0
+                mov     kb_interval, #0
+                mov     kb_in_max_pkt, #0
+                mov     kb_max_index, #0
+                mov     kb_led_states, #0
+        _ret_   mov     kb_next_datax, #PID_DATA0       ' Reset interrupt IN datax sequence PIDs
 
 '------------------------------------------------------------------------------
 ' Execute a ControlWrite() that will perform the HID-specific HID_SET_IDLE
@@ -1583,12 +1586,13 @@ hset_idle
 '   retval - transaction result.
 '------------------------------------------------------------------------------
 hset_kbdled_report
-                rdbyte  htmp, kb_intf_num_p
+                getbyte htmp, kb_intf_num, #0
                 loc     ptra, #set_report
                 wrword  ##(TYPE_OUTPUT << 8), ptra[wValue] ' Byte1 report type, byte0 reportID (0)
                 wrword  htmp, ptra[wIndex]
                 wrword  #KBD_OUT_RPT_LEN, ptra[wLength]
-                mov     pb, kb_led_states_p             ' Start address of OUT data
+                loc     pb, #urx_buff
+                wrbyte  kb_led_states, pb
                 jmp     #control_write                  ' Execute ControlWrite(SET_REPORT) and back to caller
 
 '------------------------------------------------------------------------------
@@ -1599,11 +1603,9 @@ hset_kbdled_report
 '------------------------------------------------------------------------------
 hget_kbd_in_report
                 mov     ep_addr_pid, hkbd_ep_addr
-                mov     ptra, kb_in_max_pkt_p
-                rdbyte  htmp, ptra++                    ' Always ask for max report size
-                rdbyte  hpar3, ptra
-                setword hpar3, htmp, #1                 ' Max IN packet size to expect
-                mov     hpar2, kb_report_p
+                mov     hpar2, kb_cur_report_p
+                setword hpar3, kb_next_datax, #0
+                setword hpar3, kb_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
         if_z    jmp     #.data
@@ -1614,19 +1616,18 @@ hget_kbd_in_report
                 drvnot  host_active_led                 ' Show keypress activity on the feedback LED
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
-                mov     ptra, kb_next_datax_p
-                rdbyte  hpar1, ptra
+                mov     hpar1, kb_next_datax
                 cmp     hpar1, #PID_DATA0       wz
         if_z    mov     hpar1, #PID_DATA1               ' Txn success, so toggle DATAx
         if_nz   mov     hpar1, #PID_DATA0
-                wrbyte  hpar1, ptra++
-                wrbyte  hpar3, ptra                     ' Save actual bytes read
+                mov     kb_next_datax, hpar1
+                mov     kb_max_index, hpar3             ' Save actual bytes read
                 call    #hkbd_compare
 .led_check
-                rdbyte  htmp, kb_led_states_p
+                mov     htmp, kb_led_states
                 cmp     hkbd_ledstates, htmp    wz
         if_z    ret                                     ' No toggle key indicator changes, so we're done
-                wrbyte  hkbd_ledstates, kb_led_states_p ' Update toggle key indicator states
+                mov     kb_led_states, hkbd_ledstates   ' Update toggle key indicator states
                 mov     ep_addr_pid, hctrl_ep_addr
                 call    #hset_kbdled_report
                 cmp     retval, #PID_ACK        wz
@@ -1644,8 +1645,8 @@ hget_kbd_in_report
 '                 7..0 = ASCII key code (or 0 if none)
 '------------------------------------------------------------------------------
 hkbd_compare
-                mov     ptra, ##@kbCurReport
-                mov     ptrb, ##@kbPreReport
+                mov     ptra, kb_cur_report_p
+                mov     ptrb, kb_pre_report_p
                 rdlong  htmp1, ptra++
                 rdlong  htmp2, ptrb++
                 cmp     htmp1, htmp2    wz
@@ -1654,8 +1655,8 @@ hkbd_compare
         if_z    cmp     htmp1, htmp2    wz
         if_z    ret
 
-                rdbyte  hpar2, ##@kbCurReport
-                rdbyte  htmp, ##@kbPreReport
+                rdbyte  hpar2, kb_cur_report_p
+                rdbyte  htmp, kb_pre_report_p
                 cmp     hpar2, htmp     wz
         if_z    jmp     #_release
 
@@ -1796,17 +1797,7 @@ dev_desc_buff   byte    0[DEV_DESC_LEN]         ' Device descriptor
 con_desc_buff   byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
 usb_cache_end
 
-' USB
-usbCmdData      long    0
-usbErrCode      byte    0
-
 ' Class driver vars for keyboard boot protocol.
-kbIntfNum       byte    0
-kbInterval      byte    0
-kbInMaxPkt      byte    0
-kbNextDatax     byte    0
-kbMaxIndex      byte    0
-kbLedStates     byte    0
 kbCurReport     byte    0[KBD_IN_RPT_LEN]
 kbPreReport     byte    0[KBD_IN_RPT_LEN]
 
