@@ -3,6 +3,7 @@
 Projects based on the **Parallax Propeller 2** multicore microcontroller.
 
  * **[ps2.spin2](ps2.spin2)** - PS/2 Keyboard driver
+ * **[usb.spin2](ps2.spin2)** - USB Keyboard driver
 
 **Emulators**
 
