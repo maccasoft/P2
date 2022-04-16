@@ -548,7 +548,6 @@ kb_led_states   long    0
 kb_cur_report_p long    @kbCurReport
 kb_pre_report_p long    @kbPreReport
 
-
 ' Initialized at cog startup:
 save_sysclk     long    0         ' Save the current sysclock as the client may change it
 hcog_base_addr  long    0         ' This object's start address in hub, read from PTRB at cog creation
@@ -586,6 +585,9 @@ crc             long    0         ' Used for CRC16 calculation
 ep_addr_pid     long    0         ' Endpoint and device addresses for connected device
 retval          long    0         ' Global success/fail return parameter
 context_retval  long    0         ' Operation contextual return parameter
+' Device stuff
+hdev_id         long    0
+hdev_bcd        long    0
 ' Keyboard/mouse stuff
 hctrl_ep_addr   long    0
 hctrl_max_pkt   long    0
@@ -638,6 +640,7 @@ _usb_d_fs_nco_  res     1
 htmp            res     1         ' Scratch registers whose context remains within the same code block
 htmp1           res     1
 htmp2           res     1
+htmp3           res     1
 hrep            res     1         ' Repeat count
 hsave0          res     1         ' Subroutine parameter saves
 hsave1          res     1
@@ -1390,7 +1393,17 @@ hinit_usb_timings
 ' On exit:
 '------------------------------------------------------------------------------
 hparse_con_desc
+                mov     hpar1, #0
+                mov     hpar2, #0
                 call    #init_kbdm_data                 ' Reset keyboard/mouse data area to start-up values
+
+                loc     ptrb, #dev_desc_buff
+                rdword  htmp, ptrb[4]
+                rdword  hdev_id, ptrb[5]
+                setword hdev_id, htmp, #1
+                rdword  hdev_bcd, ptrb[6]
+                debug(uhex_long(hdev_id), " bcdDevice=", uhex_word_(htmp3))
+
                 mov     pa, #CON_wTotalLen
                 add     pa, hconfig_base
                 rdword  hcon_tot_len, pa                ' Keep config chain size handy
@@ -1405,46 +1418,55 @@ hparse_con_desc
                 rdbyte  htmp, ptrb
                 add     hnext_desc, htmp                ' Get offset to next desc, if any
                 rdbyte  hhid_intf_idx, ptrb[INTF_bIntfNum]
-                rdbyte  htmp, ptrb[INTF_bIntfClass]
-                cmp     htmp, #CLASS_HID        wz      ' Only interested in the HID class interface descriptors
-        if_nz   jmp     #.next_intf                     ' Search next interface in chain, if any
-                rdbyte  htmp, ptrb[INTF_bSubClass]      ' Look for a boot interface sub-class
-                cmp     htmp, #SUBCLASS_INTF_BOOT wz
-        if_nz   jmp     #.next_intf
-                rdbyte  hr3, ptrb[INTF_bProtocol] wz    ' Protocol must be non-zero
-        if_z    jmp     #.next_intf
-.endp
+                rdbyte  htmp1, ptrb[INTF_bIntfClass]
+                rdbyte  htmp2, ptrb[INTF_bSubClass]
+                rdbyte  htmp3, ptrb[INTF_bProtocol]
+                debug("class=", uhex_byte_(htmp1), " subclass=", uhex_byte_(htmp2), " protocol=", uhex_byte_(htmp3))
                 mov     hsave1, ptrb
                 mov     hsave2, hnext_desc
+.endp
                 mov     hsearch_key, #TYPE_ENDPOINT
                 call    #hsearch_desc_type              ' Endpoint descs always follow interface descs
                 cmp     ptrb, #0                wz
         if_nz   jmp     #.get_ep
-.bad_ep
+                'debug(uhex_long(hpar1,hpar2))
+                cmp     hpar1, #0               wz
+        if_z    jmp     #.next_intf
+                cmp     htmp1, #CLASS_HID       wz
+        if_z    cmp     htmp2, #SUBCLASS_INTF_BOOT  wz
+        if_z    cmp     htmp3, #INTF_PROTO_KBD  wz
+        if_z    jmp     #.keyboard
                 mov     hnext_desc, hsave2
                 mov     ptrb, hsave1
                 jmp     #.next_intf
 .get_ep
                 rdbyte  hr1, ptrb[ENDP_bAddress]
                 testb   hr1, #7                 wc      ' FIXME: define constant for endpoint IN/OUT bit
-        if_nc   jmp     #.bad_ep                        ' Not an IN endpoint
                 shl     hr1, #8 + 7
-                add     ptrb, #ENDP_wMaxPktSize
-                rdword  hr2, ptrb++
+                mov     htmp, hctrl_ep_addr
+                and     htmp, ##ADDR_MASK
+                or      htmp, hr1                       ' endpoint address
+                cmp     hpar1, #0               wz
+  if_z_and_c    jmp     #.in
+                cmp     hpar2, #0               wz
+ if_z_and_nc    mov     hpar2, htmp                     ' OUT endpoint
+                jmp     #.next
+.in
+                mov     hpar1, htmp                     ' IN endpoint
+                rdbyte  hr2, ptrb[ENDP_wMaxPktSize]
                 and     hr2, ##$7ff                     ' Bits 10..0 define the max packet size
-                rdbyte  hr0, ptrb                       ' Fetch the bInterval member (min poll interval, in milliseconds)
-                mov     hnext_desc, hsave2
-                mov     ptrb, hsave1
-                cmp     hr3, #INTF_PROTO_KBD    wz
-        if_nz   jmp     #.next_intf
+                rdbyte  hr0, ptrb[ENDP_bInterval]       ' Fetch the bInterval member (min poll interval, in milliseconds)
+.next
+                rdbyte  htmp, ptrb
+                add     hnext_desc, htmp                ' Get offset of next desc to check
+                jmp     #.endp
 .keyboard
                 getbyte kb_intf_num, hhid_intf_idx, #0  ' Save interface index and poll interval values
                 getbyte kb_interval, hr0, #0
-                mov     hkbd_ep_addr, hctrl_ep_addr
-                and     hkbd_ep_addr, ##ADDR_MASK
-                or      hkbd_ep_addr, hr1               ' IN endpoint address
+                mov     hkbd_ep_addr, hpar1             ' IN endpoint address
                 getbyte kb_in_max_pkt, hr2, #0
-                jmp     #.next_intf                     ' See if there's a mouse subclass
+                debug(uhex_long(kb_intf_num,kb_interval,hkbd_ep_addr,kb_in_max_pkt))
+                jmp     #.next_intf
 
 '------------------------------------------------------------------------------
 ' Search the configuration descriptor chain for a specific descriptor type.
@@ -1534,6 +1556,7 @@ hset_config
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
                 mov     htmp2, #KB_READY                ' Keyboard interface configured
+
 .notify_client
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
 
