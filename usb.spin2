@@ -1728,12 +1728,12 @@ kbd_table ' Index is the key scan code
           {$20} word    $2333, $2434, $2535, $5E36, $2637, $2A38, $2839, $2930     ' $27: #3 $4 %5 ^6 &7 *8 (9 )0
           {$28} word    $0D0D, $1B1B, $0808, $0909, $2020, $5F2D, $2B3D, $7B5B     ' $2f: Enter Esc BkSpc Tab Spc _- += {[
           {$30} word    $7D5D, $7C5C, $7E23, $3A3B, $2227, $7E60, $3C2C, $3E2E     ' $37: }] |\ ~# :; "' ~` <, >.
-          {$38} word    $3F2F, $3939, $3A3A, $3B3B, $3C3C, $3D3D, $3E3E, $3F3F     ' $3f: ?/ CapsLock F1 F2 F3 F4 F5 F6
-          {$40} word    $4040, $4141, $4242, $4343, $4444, $4545, $4646, $4747     ' $47: F7 F8 F9 F10 F11 F12 PrtSc, ScrLk
-          {$48} word    $4848, $4949, $4A4A, $4B4B, $7F7F, $4D4D, $4E4E, $4F4F     ' $4f: Pause, Ins, Home PgUp BkSpc_Del End PgDn Right
-          {$50} word    $5050, $5151, $5252, $5353, $2F2F, $2A2A, $2D2D, $2B2B     ' $57: Left Down Up KpdNumLck Kp/ Kp* Kp- Kp+
+          {$38} word    $3F2F, $0000, $0000, $0000, $0000, $0000, $0000, $0000     ' $3f: ?/ CapsLock F1 F2 F3 F4 F5 F6
+          {$40} word    $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000     ' $47: F7 F8 F9 F10 F11 F12 PrtSc, ScrLk
+          {$48} word    $0000, $0000, $0000, $0000, $7F7F, $0000, $0000, $0000     ' $4f: Pause, Ins, Home PgUp BkSpc_Del End PgDn Right
+          {$50} word    $0000, $0000, $0000, $0000, $2F2F, $2A2A, $2D2D, $2B2B     ' $57: Left Down Up KpdNumLck Kp/ Kp* Kp- Kp+
           {$58} word    $0D0D, $3131, $3232, $3333, $5034, $3535, $3636, $3737     ' $5f: KpEnter Kp1_End Kp2_Down Kp3_PgDn Kp4_Left Kp5 Kp6_Right Kp7_Home
-          {$60} word    $3838, $3939, $3030, $7F2E, $5C7C, $6565                   ' $65: Kp8_Up Kp9_PgUp Kp0_Ins Kp._Del Kp\_| App
+          {$60} word    $3838, $3939, $3030, $7F2E, $5C7C, $0000                   ' $65: Kp8_Up Kp9_PgUp Kp0_Ins Kp._Del Kp\_| App
 
 '------------------------------------------------------------------------------
 ' Partially populated SETUP packets
