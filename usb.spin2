@@ -512,7 +512,7 @@ host_error
 .spin
                 cmp     cmd_data, #CMD_RESET    wz
         if_z    mov     cmd_data, #ERR_NONE             ' Acknowledge client reset cmd received
-        if_z    flth    host_error_led
+        if_z    drvl    host_error_led
         if_z    jmp     #host_reset                     ' See if it works...
                 drvnot  host_error_led
                 mov     hctwait, _100ms_                ' Blink the error LED
@@ -521,7 +521,7 @@ host_error
                 testb   urx, #SE0_RESETB        wc
         if_nc   jmp     #.spin
                 djnz    hrep, #.spin
-        if_c    flth    host_error_led                  ' Clear the error LED
+        if_c    drvl    host_error_led                  ' Clear the error LED
         if_c    ret                             wc      ' Handle disconnect?
                 mov     hrep, #5
                 jmp     #.spin
@@ -534,19 +534,22 @@ poll_kbd
                 addct3  hct3, _8ms_                     ' Set the timer for next poll interval
                 jmp     #\hget_kbd_in_report
 
+poll_gamepad
+                getct   hct3
+                addct3  hct3, _8ms_
+                jmp     #\hget_gp_in_report
+
 ' USB commands and error codes
 cmd_data        long    0
 usb_err_code    long    ERR_NONE
 
-' Keyboard data
+hdev_init_start
 kb_intf_num     long    0
 kb_interval     long    0
 kb_in_max_pkt   long    0
 kb_next_datax   long    0
 kb_max_index    long    0
 kb_led_states   long    0
-kb_cur_report_p long    @kbCurReport
-kb_pre_report_p long    @kbPreReport
 
 gp_intf_num     long    0
 gp_interval     long    0
@@ -554,10 +557,14 @@ gp_in_max_pkt   long    0
 gp_next_datax   long    0
 gp_max_index    long    0
 gp_descr_len    long    0
+hdev_init_end
+
+kb_cur_report_p long    @kbCurReport
+kb_pre_report_p long    @kbPreReport
+
 gp_descr        long    @gpDescriptor
 gp_cur_report_p long    @gpCurReport
 gp_pre_report_p long    @gpPreReport
-
 
 ' Initialized at cog startup:
 save_sysclk     long    0         ' Save the current sysclock as the client may change it
@@ -565,7 +572,7 @@ hcog_base_addr  long    0         ' This object's start address in hub, read fro
 dm              long    USB_BASE_PIN + 2 ' Client defines the basepin for four consecutive USB port pins
 dp              long    USB_BASE_PIN + 3
 usb_event_pin   long    USB_BASE_PIN ' Host event reporting uses a long repository smart pin
-host_active_led long    USB_BASE_PIN ' Client defines the LED pin# for host bus activity
+host_active_led long    57 ' USB_BASE_PIN ' Client defines the LED pin# for host bus activity
 host_error_led  long    56        ' Client defines the LED pin# to light on error
 iframe_ct_new   long    0
 iframe_ct_base  long    0
@@ -599,6 +606,7 @@ context_retval  long    0         ' Operation contextual return parameter
 ' Device stuff
 hdev_id         long    0
 hdev_bcd        long    0
+hdev_ready      long    0         ' Configured device indicator
 ' Keyboard/mouse stuff
 hctrl_ep_addr   long    0
 hctrl_max_pkt   long    0
@@ -615,6 +623,7 @@ hkbd_poll_cnt   long    0         ' Poll interval counter used for key auto-repe
 hkbd_ledstates  long    0         ' Off/on state of keyboard LEDs
 hpad_ep_addr    long    0
 hpad_out_addr   long    0
+hpad_poll_cnt   long    0
 hreg_init_end
 ' Variables dependent on the system freqency
 _var_64_lower_  res     1
@@ -1148,6 +1157,8 @@ set_poll_target
                 mov     poll_target, #0                 ' If unknown device, no interrupt targets
                 cmp     hkbd_ep_addr, #0        wz
         if_nz   mov     poll_target, #poll_kbd
+                cmp     hpad_ep_addr, #0        wz
+        if_nz   mov     poll_target, #poll_gamepad
 .set_pulse
                 getct   _pulse_time_
                 add     _pulse_time_, _500ms_           ' Set activity LED pulse to the bus idle toggle rate
@@ -1254,7 +1265,7 @@ DAT             ' USB Host HUB execution
 ' USB host cog initialization.
 '------------------------------------------------------------------------------
 usb_host_init
-                flth    host_error_led                  ' Ensure fatal error LED is inactive
+                drvl    host_error_led                  ' Ensure fatal error LED is inactive
 '                mov     p2rev_val, ptrb                 ' Running on P2RevA or P2RevB+ silicon?
 '                setq    #1
 '                rdlong  $1e0, ptrb++
@@ -1485,7 +1496,8 @@ hparse_con_desc
                 getbyte kb_interval, hr0, #0
                 mov     hkbd_ep_addr, hpar1             ' IN endpoint address
                 getbyte kb_in_max_pkt, hr2, #0
-                debug(uhex_long(kb_intf_num,kb_interval,hkbd_ep_addr,kb_in_max_pkt))
+                debug(uhex_long(kb_intf_num,kb_interval))
+                debug(uhex_long(hkbd_ep_addr,kb_in_max_pkt))
                 jmp     #.next_intf
 .gamepad
                 getbyte gp_intf_num, hhid_intf_idx, #0  ' Save interface index and poll interval values
@@ -1493,7 +1505,8 @@ hparse_con_desc
                 mov     hpad_ep_addr, hpar1             ' IN endpoint address
                 mov     hpad_out_addr, hpar2            ' OUT endpoint address
                 getbyte gp_in_max_pkt, hr2, #0
-                debug(uhex_long(gp_intf_num,gp_interval,hpad_ep_addr,hpad_out_addr,gp_in_max_pkt))
+                debug(uhex_long(gp_intf_num,gp_interval))
+                debug(uhex_long(hpad_ep_addr,hpad_out_addr,gp_in_max_pkt))
                 jmp     #.next_intf
 
 '------------------------------------------------------------------------------
@@ -1590,13 +1603,24 @@ hset_config
                 cmp     hpad_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No gamepad
 
+                getbyte htmp, gp_intf_num, #0
+                loc     ptra, #set_protocol
+                wrword  #0, ptra[wValue]
+                wrword  htmp, ptra[wIndex]
+                mov     pb, #0                          ' SetProtocol() has no data stage
+                call    #control_write
+
+                mov     hpar1, #0                       ' SetIdle() duration 0 = indefinite
+                getbyte hpar2, gp_intf_num, #0
+                call    #hset_idle
+
                 mov     ep_addr_pid, hpad_ep_addr
                 call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
                 mov     hpad_ep_addr, ep_addr_pid
-                mov     ep_addr_pid, hpad_out_addr
-                setbyte ep_addr_pid, #PID_OUT, #0
-                call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
-                mov     hpad_out_addr, ep_addr_pid
+                mov     ep_addr_pid, hpad_out_addr  wz
+        if_nz   setbyte ep_addr_pid, #PID_OUT, #0
+        if_nz   call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+        if_nz   mov     hpad_out_addr, ep_addr_pid
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 debug(uhex_long(hpad_ep_addr,hpad_out_addr))
 
@@ -1649,6 +1673,7 @@ hset_config
                 mov     htmp2, #PS3_READY               ' PS3 gamepad ready
 
 .notify_client
+                mov     hdev_ready, htmp2               ' Save device ready
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
 
 '------------------------------------------------------------------------------
@@ -1659,19 +1684,23 @@ hset_config
 '------------------------------------------------------------------------------
 init_kbdm_data
                 mov     hkbd_ep_addr, #0
-                mov     ptra, kb_cur_report_p
-                mov     pa, kb_pre_report_p
-                add     pa, #KBD_IN_RPT_LEN
+                mov     hpad_ep_addr, #0
+                mov     ptra, ##dataBuffersStart
+                mov     pa, ##dataBuffersEnd
 .loop
                 wrbyte  #0, ptra++
                 cmp     ptra, pa                wcz
         if_b    jmp     #.loop
-                mov     kb_intf_num, #0
-                mov     kb_interval, #0
-                mov     kb_in_max_pkt, #0
-                mov     kb_max_index, #0
-                mov     kb_led_states, #0
-        _ret_   mov     kb_next_datax, #PID_DATA0       ' Reset interrupt IN datax sequence PIDs
+
+                mov     pa, #hdev_init_start        ' Clear device data registers
+.regloop
+                altd    pa
+                mov     0-0, #0
+                add     pa, #1
+                cmp     pa, #hdev_init_end      wz
+        if_nz   jmp     #.regloop
+                mov     kb_next_datax, #PID_DATA0   ' Reset interrupt IN datax sequence PIDs
+        _ret_   mov     gp_next_datax, #PID_DATA0
 
 '------------------------------------------------------------------------------
 ' Execute a ControlWrite() that will perform the HID-specific HID_SET_IDLE
@@ -1850,6 +1879,65 @@ kbd_table ' Index is the key scan code
           {$60} word    $3838, $3939, $3030, $7F2E, $5C7C, $0000                   ' $65: Kp8_Up Kp9_PgUp Kp0_Ins Kp._Del Kp\_| App
 
 '------------------------------------------------------------------------------
+' Execute an IN interrupt transaction to poll for gamepad activity.
+'------------------------------------------------------------------------------
+' On entry:
+' On exit:
+'------------------------------------------------------------------------------
+hget_gp_in_report
+                mov     ep_addr_pid, hpad_ep_addr
+                mov     hpar2, gp_cur_report_p
+                setword hpar3, gp_next_datax, #0
+                setword hpar3, gp_in_max_pkt, #1        ' Always ask for max report size
+                call    #do_int_in
+                cmp     retval, #PID_ACK        wz
+        if_z    jmp     #.data
+                cmp     retval, #PID_NAK        wz
+        if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
+                ret
+.data
+                incmod  hpad_poll_cnt, #62      wc
+        if_c    drvnot  host_active_led
+                cmp     hpar3, #0               wz
+        if_z    ret                                     ' Ignore an empty DATAx packet
+                mov     hpar1, gp_next_datax
+                cmp     hpar1, #PID_DATA0       wz
+        if_z    mov     hpar1, #PID_DATA1               ' Txn success, so toggle DATAx
+        if_nz   mov     hpar1, #PID_DATA0
+                mov     gp_next_datax, hpar1
+                mov     gp_max_index, hpar3             ' Save actual bytes read
+                call    #hpad_compare
+                ret
+
+'------------------------------------------------------------------------------
+' Compare current and previous data buffers for status changes.
+'------------------------------------------------------------------------------
+' On entry:
+' On exit:
+'------------------------------------------------------------------------------
+hpad_compare
+                mov     ptra, gp_cur_report_p           ' Attempt to notify changes
+                mov     ptrb, gp_pre_report_p           ' by comparing the report bytes
+
+                cmp     hdev_ready, #PS3_READY  wz
+        if_e    mov     hpar3, #10                      ' Only first 10 bytes are significant for PS3 report
+
+                mov     pa, hpar3
+                modz    _set            wz
+.lp
+                rdbyte  htmp1, ptra++
+                rdbyte  htmp2, ptrb
+        if_z    cmp     htmp1, htmp2    wz
+                wrbyte  htmp1, ptrb++
+                djnz    pa, #.lp
+        if_z    ret
+
+                debug(uhex_byte_array(gp_cur_report_p,hpar3))
+                ' TODO read buttons
+
+                ret
+
+'------------------------------------------------------------------------------
 ' Partially populated SETUP packets
 '------------------------------------------------------------------------------
 get_dev_desc    byte    (DIR_DEV_TO_HOST | TYPE_STANDARD | RECIP_DEVICE)
@@ -1949,14 +2037,18 @@ xinp_rumble_cmd byte    $00, $08, $00
                 byte    $00, $00, $00
 '------------------------------------------------------------------------------
 
-' Class driver vars for keyboard boot protocol.
+dataBuffersStart
+
+' Keyboard report buffers
 kbCurReport     byte    0[KBD_IN_RPT_LEN]
 kbPreReport     byte    0[KBD_IN_RPT_LEN]
 
-' Class driver vars for gamepad
-gpCurReport     byte    0[255]
-gpPreReport     byte    0[255]
-gpDescriptor    byte    0[255]
+' Gamepad descriptor and report buffers
+gpDescriptor    byte    0[GP_DESCR_LEN]
+gpCurReport     byte    0[GP_IN_RPT_LEN]
+gpPreReport     byte    0[GP_IN_RPT_LEN]
+
+dataBuffersEnd
 
 CON ' USB Host Shared constants
 '------------------------------------------------------------------------------
@@ -2342,7 +2434,9 @@ CON ' USB Descriptor Definitions
     HID_bNumDesc     = 5    ' 1     Number          Number of HID class descriptors to follow, always at least one.
     HID_bDescType    = 6    ' 1     Constant        Type of HID class descriptor e.g. TYPE_REPORT ($22).
     HID_wDescLength  = 7    ' 2     Number          Total length of descriptor(s).
-' Keyboard and mouse report data buffer lengths (boot protocol):
+' Keyboard report data buffer lengths (boot protocol):
     KBD_OUT_RPT_LEN = 1     ' CapsLock, NumLock and ScrollLock status bits
     KBD_IN_RPT_LEN  = 8     ' Maximum keyboard boot protocol IN data packet size
-    MOUSE_RPT_LEN   = 8     ' Maximum mouse boot protocol IN data packet size
+' Gamepad report and descriptor data buffer lengths:
+    GP_IN_RPT_LEN   = 255
+    GP_DESCR_LEN    = 255
