@@ -548,6 +548,17 @@ kb_led_states   long    0
 kb_cur_report_p long    @kbCurReport
 kb_pre_report_p long    @kbPreReport
 
+gp_intf_num     long    0
+gp_interval     long    0
+gp_in_max_pkt   long    0
+gp_next_datax   long    0
+gp_max_index    long    0
+gp_descr_len    long    0
+gp_descr        long    @gpDescriptor
+gp_cur_report_p long    @gpCurReport
+gp_pre_report_p long    @gpPreReport
+
+
 ' Initialized at cog startup:
 save_sysclk     long    0         ' Save the current sysclock as the client may change it
 hcog_base_addr  long    0         ' This object's start address in hub, read from PTRB at cog creation
@@ -594,11 +605,16 @@ hctrl_max_pkt   long    0
 hconfig_base    long    0
 hcon_tot_len    long    0         ' Size of the complete config descriptor chain
 hhid_intf_idx   long    0         ' Used during verbose descriptor terminal output
+hhid_class      long    0
+hhid_subclass   long    0
+hhid_protocol   long    0
 hsearch_key     long    0         ' Descriptor type to search for in the config chain
 hnext_desc      long    0         ' Offset from the config descriptor start address to the next descriptor in the chain
 hkbd_ep_addr    long    0         ' Keyboard interface endpoint address
 hkbd_poll_cnt   long    0         ' Poll interval counter used for key auto-repeat
 hkbd_ledstates  long    0         ' Off/on state of keyboard LEDs
+hpad_ep_addr    long    0
+hpad_out_addr   long    0
 hreg_init_end
 ' Variables dependent on the system freqency
 _var_64_lower_  res     1
@@ -1129,8 +1145,8 @@ connected
                 cmp     retval, #PID_ACK        wz      ' Anything other than ACK means the device is unusable
         if_nz   jmp     #discon_entry
 set_poll_target
+                mov     poll_target, #0                 ' If unknown device, no interrupt targets
                 cmp     hkbd_ep_addr, #0        wz
-        if_z    mov     poll_target, #0                 ' Unknown device, so no interrupt targets
         if_nz   mov     poll_target, #poll_kbd
 .set_pulse
                 getct   _pulse_time_
@@ -1393,16 +1409,16 @@ hinit_usb_timings
 ' On exit:
 '------------------------------------------------------------------------------
 hparse_con_desc
-                mov     hpar1, #0
+                mov     hpar1, #0                       ' Reset IN/OUT endpoint holders
                 mov     hpar2, #0
-                call    #init_kbdm_data                 ' Reset keyboard/mouse data area to start-up values
+                call    #init_kbdm_data                 ' Reset device data area to start-up values
 
                 loc     ptrb, #dev_desc_buff
-                rdword  htmp, ptrb[4]
-                rdword  hdev_id, ptrb[5]
+                rdword  htmp, ptrb[4]       ' idVendor
+                rdword  hdev_id, ptrb[5]    ' idProduct
                 setword hdev_id, htmp, #1
-                rdword  hdev_bcd, ptrb[6]
-                debug(uhex_long(hdev_id), " bcdDevice=", uhex_word_(htmp3))
+                rdword  hdev_bcd, ptrb[6]   ' bcdDevice
+                debug(uhex_long(hdev_id), uhex_word(hdev_bcd))
 
                 mov     pa, #CON_wTotalLen
                 add     pa, hconfig_base
@@ -1418,10 +1434,10 @@ hparse_con_desc
                 rdbyte  htmp, ptrb
                 add     hnext_desc, htmp                ' Get offset to next desc, if any
                 rdbyte  hhid_intf_idx, ptrb[INTF_bIntfNum]
-                rdbyte  htmp1, ptrb[INTF_bIntfClass]
-                rdbyte  htmp2, ptrb[INTF_bSubClass]
-                rdbyte  htmp3, ptrb[INTF_bProtocol]
-                debug("class=", uhex_byte_(htmp1), " subclass=", uhex_byte_(htmp2), " protocol=", uhex_byte_(htmp3))
+                rdbyte  hhid_class, ptrb[INTF_bIntfClass]
+                rdbyte  hhid_subclass, ptrb[INTF_bSubClass]
+                rdbyte  hhid_protocol, ptrb[INTF_bProtocol]
+                debug(uhex_byte(hhid_class,hhid_subclass,hhid_protocol))
                 mov     hsave1, ptrb
                 mov     hsave2, hnext_desc
 .endp
@@ -1432,10 +1448,14 @@ hparse_con_desc
                 'debug(uhex_long(hpar1,hpar2))
                 cmp     hpar1, #0               wz
         if_z    jmp     #.next_intf
-                cmp     htmp1, #CLASS_HID       wz
-        if_z    cmp     htmp2, #SUBCLASS_INTF_BOOT  wz
-        if_z    cmp     htmp3, #INTF_PROTO_KBD  wz
+                cmp     hhid_class, #CLASS_HID       wz
+        if_z    cmp     hhid_subclass, #SUBCLASS_INTF_BOOT  wz
+        if_z    cmp     hhid_protocol, #INTF_PROTO_KBD  wz
         if_z    jmp     #.keyboard
+                cmp     hhid_class, #CLASS_HID       wz
+        if_z    cmp     hhid_subclass, #SUBCLASS_INTF_NONE  wz
+        if_z    cmp     hhid_protocol, #INTF_PROTO_NONE  wz
+        if_z    jmp     #.gamepad
                 mov     hnext_desc, hsave2
                 mov     ptrb, hsave1
                 jmp     #.next_intf
@@ -1466,6 +1486,14 @@ hparse_con_desc
                 mov     hkbd_ep_addr, hpar1             ' IN endpoint address
                 getbyte kb_in_max_pkt, hr2, #0
                 debug(uhex_long(kb_intf_num,kb_interval,hkbd_ep_addr,kb_in_max_pkt))
+                jmp     #.next_intf
+.gamepad
+                getbyte gp_intf_num, hhid_intf_idx, #0  ' Save interface index and poll interval values
+                getbyte gp_interval, hr0, #0
+                mov     hpad_ep_addr, hpar1             ' IN endpoint address
+                mov     hpad_out_addr, hpar2            ' OUT endpoint address
+                getbyte gp_in_max_pkt, hr2, #0
+                debug(uhex_long(gp_intf_num,gp_interval,hpad_ep_addr,hpad_out_addr,gp_in_max_pkt))
                 jmp     #.next_intf
 
 '------------------------------------------------------------------------------
@@ -1514,6 +1542,7 @@ hset_config
 '                mov     hmouse_ep_addr, #0              ' DEBUG
                 mov     htmp2, #DEV_UNKNOWN
                 cmp     hkbd_ep_addr, #0        wz
+        if_z    cmp     hpad_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No boot keyboard or mouse interface
 .set_config
                 loc     ptra, #set_config
@@ -1528,7 +1557,7 @@ hset_config
         if_nz   ret
 .kbd_config
                 cmp     hkbd_ep_addr, #0        wz
-        if_z    jmp     #.notify_client                 ' No keyboard
+        if_z    jmp     #.gamepad_config                ' No keyboard
                 getbyte htmp, kb_intf_num, #0
                 loc     ptra, #set_protocol
                 wrword  #BOOT_PROTOCOL, ptra[wValue]
@@ -1556,6 +1585,68 @@ hset_config
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
                 mov     htmp2, #KB_READY                ' Keyboard interface configured
+                jmp     #.notify_client
+.gamepad_config
+                cmp     hpad_ep_addr, #0        wz
+        if_z    jmp     #.notify_client                 ' No gamepad
+
+                mov     ep_addr_pid, hpad_ep_addr
+                call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+                mov     hpad_ep_addr, ep_addr_pid
+                mov     ep_addr_pid, hpad_out_addr
+                setbyte ep_addr_pid, #PID_OUT, #0
+                call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+                mov     hpad_out_addr, ep_addr_pid
+                mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
+                debug(uhex_long(hpad_ep_addr,hpad_out_addr))
+
+                cmp     hhid_class, #$FF        wz      ' XInput vendor class
+        if_ne   jmp     #.noxinput                      ' No XInput, try others
+
+                loc     ptra, #xinp_led_cmd             ' Turn on LEDs
+                mov     pkt_data, #3
+                bitl    hstatus, #DATAx_TGLB
+                mov     ep_addr_pid, hpad_out_addr
+                call    #txn_out
+                mov     ep_addr_pid, hctrl_ep_addr
+
+                mov     htmp2, #XINPUT_READY
+                jmp     #.notify_client
+
+.noxinput
+                loc     ptra, #get_desc                 ' Hub start address of GetConfigurationDescriptor SETUP struct
+                wrword  #$ff, ptra[wLength]             ' Maximum DATAx bytes for receive to the SETUP struct
+                mov     pb, gp_descr                    ' Hub start address of ConfigurationDescriptor structure
+                call    #control_read                   ' Execute GetConfigurationDescriptor()
+                cmp     retval, #PID_ACK        wz
+        if_nz   mov     hpad_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                mov     gp_descr_len, total_data
+                debug(uhex_byte_array(gp_descr,gp_descr_len))
+
+                cmp     hdev_id, ##$054C_0268   wz      ' PS3 vendor/product
+        if_ne   mov     htmp2, #GP_READY                ' No PS3, standard gamepad
+        if_ne   jmp     #.notify_client                 ' No further processing needed
+
+                getbyte htmp, gp_intf_num, #0
+                loc     ptra, #set_report
+                wrword  ##(TYPE_OUTPUT << 8) | $01, ptra[wValue]
+                wrword  htmp, ptra[wIndex]
+                wrword  #48, ptra[wLength]
+                loc     pb, #ps3_command_buff           ' set LEDs
+                call    #control_write
+
+                getbyte htmp, gp_intf_num, #0
+                loc     ptra, #set_report
+                wrword  ##(TYPE_FEATURE << 8) | $F4, ptra[wValue]
+                wrword  htmp, ptra[wIndex]
+                wrword  #4, ptra[wLength]
+                loc     pb, #ps3_enable_cmd             ' Enable PS3
+                call    #control_write
+                cmp     retval, #PID_ACK    wz
+        if_nz   mov     hpad_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                mov     htmp2, #PS3_READY               ' PS3 gamepad ready
 
 .notify_client
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
@@ -1810,6 +1901,11 @@ set_report      byte    (DIR_HOST_TO_DEV | TYPE_CLASS | RECIP_INTERFACE)
                                         ' (HID 1.11 Section 7.2.2).
                 word    0       ' Interface index number.
                 word    0       ' Size of the report, in bytes.
+get_desc        byte    (DIR_DEV_TO_HOST | TYPE_STANDARD | RECIP_INTERFACE)
+                byte    REQ_GET_DESC
+                word    TYPE_REPORT << 8
+                word    0       ' Zero or Language ID (Section 9.6.7)
+                word    0       ' Number of bytes to transfer if there is a data stage
 
 '------------------------------------------------------------------------------
 ' The USB data cache area gets zero-filled at every device disconnect
@@ -1819,10 +1915,48 @@ urx_buff        byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
 dev_desc_buff   byte    0[DEV_DESC_LEN]         ' Device descriptor
 con_desc_buff   byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
 usb_cache_end
+'------------------------------------------------------------------------------
+ps3_enable_cmd  byte    $42, $0C, $00, $00
+ps3_command_buff
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00 | (%0001 << 1) ' TODO led(s) to turn on
+                byte    $ff, $27, $10, $00, $32
+                byte    $ff, $27, $10, $00, $32
+                byte    $ff, $27, $10, $00, $32
+                byte    $ff, $27, $10, $00, $32
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00
+'------------------------------------------------------------------------------
+xinp_led_cmd    byte    $01, $03, $02   ' 0x00 All off
+                                        ' 0x01 All blinking
+                                        ' 0x02 1 flashes, then on
+                                        ' 0x03 2 flashes, then on
+                                        ' 0x04 3 flashes, then on
+                                        ' 0x05 4 flashes, then on
+                                        ' 0x06 1 on
+                                        ' 0x07 2 on
+                                        ' 0x08 3 on
+                                        ' 0x09 4 on
+                                        ' 0x0A Rotating (e.g. 1-2-4-3)
+                                        ' 0x0B Blinking*
+                                        ' 0x0C Slow blinking*
+                                        ' 0x0D Alternating (e.g. 1+4-2+3), then back to previous*
+xinp_rumble_cmd byte    $00, $08, $00
+                byte    $00             ' Left rumble
+                byte    $00             ' Right rumble
+                byte    $00, $00, $00
+'------------------------------------------------------------------------------
 
 ' Class driver vars for keyboard boot protocol.
 kbCurReport     byte    0[KBD_IN_RPT_LEN]
 kbPreReport     byte    0[KBD_IN_RPT_LEN]
+
+' Class driver vars for gamepad
+gpCurReport     byte    0[255]
+gpPreReport     byte    0[255]
+gpDescriptor    byte    0[255]
 
 CON ' USB Host Shared constants
 '------------------------------------------------------------------------------
@@ -1837,7 +1971,8 @@ CON ' USB Host Shared constants
 ' this smart pin (testp #USB_EVENT_REPO wc) as often as possible in its "main"
 ' loop and process the event IDs you're interested in.
 '------------------------------------------------------------------------------
-    #0, NO_EVENT, USB_ERROR, DEV_UNKNOWN, KB_READY, DEV_DISCONNECT
+    #0, NO_EVENT, USB_ERROR, DEV_UNKNOWN, KB_READY, M_READY, KBM_READY, GP_READY
+    XINPUT_READY, PS3_READY, DEV_DISCONNECT, DBG_DATA, M_DATA, GP_DATA
     CMD_SUSPEND, CMD_RESUME, CMD_RESET
 '------------------------------------------------------------------------------
 ' The CMD_* tokens are asynchronous USB commands available to the user, through
