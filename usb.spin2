@@ -1487,13 +1487,17 @@ hparse_con_desc
                 'debug(uhex_long(hpar1,hpar2))
                 cmp     hpar1, #0               wz
         if_z    jmp     #.next_intf
-                cmp     hhid_class, #CLASS_HID       wz
+                cmp     hhid_class, #CLASS_HID              wz
         if_z    cmp     hhid_subclass, #SUBCLASS_INTF_BOOT  wz
-        if_z    cmp     hhid_protocol, #INTF_PROTO_KBD  wz
+        if_z    cmp     hhid_protocol, #INTF_PROTO_KBD      wz
         if_z    jmp     #.keyboard
-                cmp     hhid_class, #CLASS_HID       wz
+                cmp     hhid_class, #CLASS_HID              wz
         if_z    cmp     hhid_subclass, #SUBCLASS_INTF_NONE  wz
-        if_z    cmp     hhid_protocol, #INTF_PROTO_NONE  wz
+        if_z    cmp     hhid_protocol, #INTF_PROTO_NONE     wz
+        if_z    jmp     #.gamepad
+                cmp     hhid_class, #$FF        wz  ' XInput class/subclass/protocol
+        if_z    cmp     hhid_subclass, #$5D     wz
+        if_z    cmp     hhid_protocol, #$01     wz
         if_z    jmp     #.gamepad
                 mov     hnext_desc, hsave2
                 mov     ptrb, hsave1
@@ -1526,7 +1530,7 @@ hparse_con_desc
                 getbyte kb_in_max_pkt, hr2, #0
                 debug(uhex_long(kb_intf_num,kb_interval))
                 debug(uhex_long(hkbd_ep_addr,kb_in_max_pkt))
-                jmp     #.next_intf
+                jmp     #hset_config
 .gamepad
                 getbyte gp_intf_num, hhid_intf_idx, #0  ' Save interface index and poll interval values
                 getbyte gp_interval, hr0, #0
@@ -1535,7 +1539,7 @@ hparse_con_desc
                 getbyte gp_in_max_pkt, hr2, #0
                 debug(uhex_long(gp_intf_num,gp_interval))
                 debug(uhex_long(hpad_ep_addr,hpad_out_addr,gp_in_max_pkt))
-                jmp     #.next_intf
+                jmp     #hset_config
 
 '------------------------------------------------------------------------------
 ' Search the configuration descriptor chain for a specific descriptor type.
@@ -2018,7 +2022,7 @@ hpad_hid
                 'debug(udec(hidr_state,hidr_offset,hidr_size,hidr_count))
 
                 and     hpar2, #$03
-                cmp     hpar2, #$02 ' Input(Data,Var)
+                cmp     hpar2, #$02     wz  ' Input(Data,Var)
         if_nz   jmp     #.skip
 
                 cmp     hidr_state, #2  wz
@@ -2075,7 +2079,7 @@ hpad_hid
                 jmp     #.skip
 .report_id
                 cmp     hidr_id, #0      wz
-        if_nz   ret
+        if_nz   jmp     #hpad_hid_done
                 rdbyte  hidr_id, ptrb++
                 cmp     hidr_id, hpar2   wz
         if_nz   ret
