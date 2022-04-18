@@ -2310,19 +2310,19 @@ hpad_ps3
                 getnib  htmp, retval, #1    ' map dpad buttons to hat direction
                 cmp     htmp, #%0001    wz
         if_z    setbyte hidr_hats, #0, #0
-                cmp     htmp, #%1001    wz
+                cmp     htmp, #%0011    wz
         if_z    setbyte hidr_hats, #1, #0
-                cmp     htmp, #%1000    wz
-        if_z    setbyte hidr_hats, #2, #0
-                cmp     htmp, #%1010    wz
-        if_z    setbyte hidr_hats, #3, #0
                 cmp     htmp, #%0010    wz
-        if_z    setbyte hidr_hats, #4, #0
+        if_z    setbyte hidr_hats, #2, #0
                 cmp     htmp, #%0110    wz
-        if_z    setbyte hidr_hats, #5, #0
+        if_z    setbyte hidr_hats, #3, #0
                 cmp     htmp, #%0100    wz
+        if_z    setbyte hidr_hats, #4, #0
+                cmp     htmp, #%1100    wz
+        if_z    setbyte hidr_hats, #5, #0
+                cmp     htmp, #%1000    wz
         if_z    setbyte hidr_hats, #6, #0
-                cmp     htmp, #%0101    wz
+                cmp     htmp, #%1001    wz
         if_z    setbyte hidr_hats, #7, #0
 
                 jmp     #hpad_hid_done
