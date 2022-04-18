@@ -294,47 +294,44 @@ ps2_ptr         long    0
 DAT             ' PS/2 Lookup table
                 orgh
 
-{
-
-Keyboard Matrix
-
-            bit 7       bit 6   bit 5   bit 4   bit 3   bit 2   bit 1   bit 0
-    row 0       7 &     6 ^     5 %     4 $     3 #     2 @     1 !     0 )
-    row 1       ; :     ] }     [ {     \ ¦     = +     - _     9 (     8 *
-    row 2       B       A       DEAD    / ?     . >     , <     ` ~     ' "
-    row 3       J       I       H       G       F       E       D       C
-    row 4       R       Q       P       O       N       M       L       K
-    row 5       Z       Y       X       W       V       U       T       S
-    row 6       F3      F2      F1      CODE    CAPS    GRAPH   CTRL    SHIFT
-    row 7       RET     SELECT  BS      STOP    TAB     ESC     F5      F4
-    row 8       →       ↓       ↑       ←       DEL     INS     HOME    SPACE
-    row 9       NUM4    NUM3    NUM2    NUM1    NUM0    NUM/    NUM+    NUM*
-    row 10      NUM.    NUM,    NUM-    NUM9    NUM8    NUM7    NUM6    NUM5
-
-PS/2 Keyboard
-
-  +-------+--------+--------+--------+--------+---------+--------+--------+
-  | ESC   |  F1-6  |  F2-7  |  F3-8  |  F4-9  |  F-5-10 | SELECT |  STOP  |
-  +-----+-+---+----++-----+-+---+----++-----+-+---+-----+-----+--+--+-----+-----+-----------+
-  | ` ~ | 1 ! | 2 @ | 3 # | 4 $ | 5 % | 6 ^ | 7 & | 8 * | 9 ( | 0 ) | - _ | = + |    BS     |
-  +-----+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--------+
-  | TAB    |  Q  |  W  |  E  |  R  |  T  |  Y  |  U  |  I  |  O  |  P  | [ { | ] } |        |
-  +--------++----++----++----++----++----++----++----++----++----++----++----++----++       |
-            |  A  |  S  |  D  |  F  |  G  |  H  |  J  |  K  |  L  | ; : | ' " | \ ¦ | ENTER |
-  +-------+-++----++----++----++----++----++----++----++----++----++----++-------+--+-------+
-  | SHIFT |  |  Z  |  X  |  C  |  V  |  B  |  N  |  M  | , < | . > | / ? |      SHIFT       |
-  +-------+--+-+---+---+-+-----+-----+-----+-----+-----+-----+-+---+--+--+----+------+------+
-  | CTRL  |    | GRAPH |                 SPACE                 | CODE |       | DEAD | CTRL |
-  +-------+----+-------+---------------------------------------+------+-------+------+------+
-
-  Other mapped keys:
-
-    HOME/INS/DEL
-    UP/DOWN/LEFT/RIGHT Arrows
-    Numeric Keypad
-
-  WIN+WIN = RESET
-}
+' Keyboard Matrix
+'
+'            bit 7       bit 6   bit 5   bit 4   bit 3   bit 2   bit 1   bit 0
+'    row 0       7 &     6 ^     5 %     4 $     3 #     2 @     1 !     0 )
+'    row 1       ; :     ] }     [ {     \ ¦     = +     - _     9 (     8 *
+'    row 2       B       A       DEAD    / ?     . >     , <     ` ~     ' "
+'    row 3       J       I       H       G       F       E       D       C
+'    row 4       R       Q       P       O       N       M       L       K
+'    row 5       Z       Y       X       W       V       U       T       S
+'    row 6       F3      F2      F1      CODE    CAPS    GRAPH   CTRL    SHIFT
+'    row 7       RET     SELECT  BS      STOP    TAB     ESC     F5      F4
+'    row 8       →       ↓       ↑       ←       DEL     INS     HOME    SPACE
+'    row 9       NUM4    NUM3    NUM2    NUM1    NUM0    NUM/    NUM+    NUM*
+'    row 10      NUM.    NUM,    NUM-    NUM9    NUM8    NUM7    NUM6    NUM5
+'
+' PS/2 Keyboard
+'
+'  +-------+--------+--------+--------+--------+---------+--------+--------+
+'  | ESC   |  F1-6  |  F2-7  |  F3-8  |  F4-9  |  F-5-10 | SELECT |  STOP  |
+'  +-----+-+---+----++-----+-+---+----++-----+-+---+-----+-----+--+--+-----+-----+-----------+
+'  | ` ~ | 1 ! | 2 @ | 3 # | 4 $ | 5 % | 6 ^ | 7 & | 8 * | 9 ( | 0 ) | - _ | = + |    BS     |
+'  +-----+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--------+
+'  | TAB    |  Q  |  W  |  E  |  R  |  T  |  Y  |  U  |  I  |  O  |  P  | [ { | ] } |        |
+'  +--------++----++----++----++----++----++----++----++----++----++----++----++----++       |
+'            |  A  |  S  |  D  |  F  |  G  |  H  |  J  |  K  |  L  | ; : | ' " | \ ¦ | ENTER |
+'  +-------+-++----++----++----++----++----++----++----++----++----++----++-------+--+-------+
+'  | SHIFT |  |  Z  |  X  |  C  |  V  |  B  |  N  |  M  | , < | . > | / ? |      SHIFT       |
+'  +-------+--+-+---+---+-+-----+-----+-----+-----+-----+-----+-+---+--+--+----+------+------+
+'  | CTRL  |    | GRAPH |                 SPACE                 | CODE |       | DEAD | CTRL |
+'  +-------+----+-------+---------------------------------------+------+-------+------+------+
+'
+'  Other mapped keys:
+'
+'    HOME/INS/DEL
+'    UP/DOWN/LEFT/RIGHT Arrows
+'    Numeric Keypad
+'
+'  WIN+WIN = RESET
 
 '                         ROW B7....B0    ROW B7....B0
 

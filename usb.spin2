@@ -2432,9 +2432,9 @@ kbCurReport     byte    0[KBD_IN_RPT_LEN]
 kbPreReport     byte    0[KBD_IN_RPT_LEN]
 
 ' Gamepad descriptor and report buffers
-gpDescriptor    byte    0[GP_DESCR_LEN]
-gpCurReport     byte    0[GP_IN_RPT_LEN]
-gpPreReport     byte    0[GP_IN_RPT_LEN]
+gpDescriptor    byte    0[HID_DESCR_LEN]
+gpCurReport     byte    0[HID_IN_RPT_LEN]
+gpPreReport     byte    0[HID_IN_RPT_LEN]
 
 dataBuffersEnd
 
@@ -2826,8 +2826,8 @@ CON ' USB Descriptor Definitions
     KBD_OUT_RPT_LEN = 1     ' CapsLock, NumLock and ScrollLock status bits
     KBD_IN_RPT_LEN  = 8     ' Maximum keyboard boot protocol IN data packet size
 ' Gamepad report and descriptor data buffer lengths:
-    GP_IN_RPT_LEN   = 255
-    GP_DESCR_LEN    = 255
+    HID_IN_RPT_LEN   = 256
+    HID_DESCR_LEN    = 256
 
 CON
     ' HID Report Items from HID 1.11 Section 6.2.2
