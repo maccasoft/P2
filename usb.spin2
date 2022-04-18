@@ -568,7 +568,12 @@ gp_pre_report_p long    @gpPreReport
 
 hidr_start
 hidr_id         long    0
-hidr_axis       long    0[3]
+hidr_axis       long    0[3]    '  X = hidr_axis+0, #0
+                                '  Y = hidr_axis+0, #1
+                                '  Z = hidr_axis+1, #0
+                                ' RX = hidr_axis+1, #1
+                                ' RY = hidr_axis+2, #0
+                                ' RZ = hidr_axis+2, #1
 hidr_buttons    long    0
 hidr_hats       long    0
                             '        3        2        1        0 byte
@@ -1930,10 +1935,6 @@ hget_gp_in_report
                 mov     gp_next_datax, hpar1
                 mov     gp_max_index, hpar3             ' Save actual bytes read
 
-'------------------------------------------------------------------------------
-' Compare current and previous data buffers for status changes.
-'------------------------------------------------------------------------------
-hpad_compare
                 mov     ptra, gp_cur_report_p           ' Attempt to notify changes
                 mov     ptrb, gp_pre_report_p           ' by comparing the report bytes
 
@@ -1950,18 +1951,6 @@ hpad_compare
                 djnz    pa, #.lp
         if_z    ret
 
-                call    #hpad_decode
-                debug(ubin_long(hidr_buttons))
-                ret
-
-'------------------------------------------------------------------------------
-' Decode report descriptor
-'------------------------------------------------------------------------------
-hpad_decode
-                mov     ptrb, gp_cur_report_p
-                mov     ptra, gp_descr
-                mov     pa, gp_descr_len
-
                 mov     htmp, #hidr_start       ' clear all hid report registers
 .cl             altd    htmp
                 mov     0-0, #0
@@ -1969,9 +1958,22 @@ hpad_decode
                 cmp     htmp, #hidr_end     wz
         if_nz   jmp     #.cl
 
+                mov     ptrb, gp_cur_report_p
+                cmp     hdev_ready, #XINPUT_READY   wz
+        if_z    jmp     #hpad_xinput
+                cmp     hdev_ready, #PS3_READY      wz
+        if_z    jmp     #hpad_ps3
+
+' Handle HID controller
+hpad_hid
+                mov     ptra, gp_descr
+                mov     pa, gp_descr_len
+
+                mov     hidr_usage, ##$76543210
+
 .next
                 cmps    pa, #0      wcz
-        if_be   ret
+        if_be   jmp     #hpad_hid_done
 
                 rdbyte  hpar1, ptra++
                 sub     pa, #1
@@ -2037,28 +2039,17 @@ hpad_decode
 .l1             mov     hpar1, hidr_offset
                 mov     hpar2, hidr_size
                 call    #hpad_getbits
+                call    #hpad_normalize
 
-                getword htmp, hidr_lminmax, #0      ' htmp = max
-                getword htmp1, hidr_lminmax, #1     ' htmp1 = min
-                subs    htmp, htmp1                 ' htmp = (max - min)
-                subs    retval, htmp1               ' retval = (retval - min)
-                shl     retval, #16                 ' retval = (retval - min) << 16
-                subs    retval, #1                  ' retval = ((retval - min) << 16) - 1
-
-                abs     htmp            wc
-                testb   retval, #31     wz
-                abs     retval
-                qdiv    retval, htmp
-                getqx   retval
-    if_c_ne_z   neg     retval                      ' retval = (((retval - min) << 16) - 1) / (max - min)
-
-                adds    retval, ##$8000 signx 15
-
-                altsw   hr0, #hidr_axis
+                altgn   hr0, #hidr_usage
+                getnib  hr2
+                altsw   hr2, #hidr_axis
                 setword retval
+
                 add     hr0, #1
                 add     hidr_offset, hidr_size
                 djnz    hr1, #.l1
+
                 setnib  hidr_counts, hr0, #2
                 mov     hidr_state, #1
                 jmp     #.next
@@ -2124,6 +2115,167 @@ hpad_decode
         if_z    jmp     #.next
                 jmp     #.next
 
+hpad_hid_done
+                mov     htmp, #0
+
+                getword htmp1, hidr_axis, #0
+                signx   htmp1, #15
+                testb   hidr_counts, #16+0  wz
+                bitz    htmp, #0
+                debug(if(htmp), "X: ", sdec_(htmp1))
+                getword htmp1, hidr_axis, #1
+                signx   htmp1, #15
+                testb   hidr_counts, #16+1  wz
+                bitz    htmp, #0
+                debug(if(htmp), "Y: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+1, #0
+                signx   htmp1, #15
+                testb   hidr_counts, #16+2  wz
+                bitz    htmp, #0
+                debug(if(htmp), "Z: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+1, #1
+                signx   htmp1, #15
+                testb   hidr_counts, #16+3  wz
+                bitz    htmp, #0
+                debug(if(htmp), "RX: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+2, #0
+                signx   htmp1, #15
+                testb   hidr_counts, #16+4  wz
+                bitz    htmp, #0
+                debug(if(htmp), "RY: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+2, #1
+                signx   htmp1, #15
+                testb   hidr_counts, #16+5  wz
+                bitz    htmp, #0
+                debug(if(htmp), "RZ: ", sdec_(htmp1))
+
+                getnib  htmp, hidr_counts, #3
+                getbyte htmp1, hidr_hats, #0
+                debug(if(htmp), "hat: ", uhex_byte_(htmp1))
+
+                debug("btn: ", ubin_long_(hidr_buttons))
+
+                ret
+
+' Handle XInput controller
+hpad_xinput
+                rdbyte  htmp, ptrb      wz
+        if_nz   ret                         ' Ignore message type <> $00
+                rdbyte  htmp, ptrb[1]
+                cmp     htmp, #$14      wz
+        if_nz   ret                         ' Ignore report length <> $14 (20)
+
+                rdword  retval, ptrb[3]     ' X = left stick X
+                signx   retval, #15
+                setword hidr_axis, retval, #0
+                bith    hidr_counts, #16+0
+                rdword  retval, ptrb[3]     ' Y = left stick Y (inverted)
+                not     retval
+                signx   retval, #15
+                setword hidr_axis, retval, #1
+                bith    hidr_counts, #16+1
+                rdword  retval, ptrb[5]     ' Z = right stick X
+                signx   retval, #15
+                setword hidr_axis+1, retval, #0
+                bith    hidr_counts, #16+2
+                rdword  retval, ptrb[6]     ' RZ = right stick Y (inverted)
+                not     retval
+                signx   retval, #15
+                setword hidr_axis+2, retval, #1
+                bith    hidr_counts, #16+5
+
+                mov     hidr_lminmax, #$0000_00FF
+                rdbyte  retval, ptrb[4]     ' RX = left analog trigger
+                cmp     retval, #192    wcz
+        if_ae   bith    hidr_buttons, #6
+                call    #hpad_normalize
+                setword hidr_axis+1, retval, #1
+                bith    hidr_counts, #16+3
+                rdbyte  retval, ptrb[5]     ' RY = right analog trigger
+                cmp     retval, #192    wcz
+        if_ae   bith    hidr_buttons, #7
+                call    #hpad_normalize
+                setword hidr_axis+2, retval, #0
+                bith    hidr_counts, #16+4
+
+                rdword  retval, ptrb[1]
+                testb   retval, #4      wc  ' START
+                bitc    hidr_buttons, #9
+                testb   retval, #5      wc  ' SELECT
+                bitc    hidr_buttons, #8
+                testb   retval, #6      wc  ' L3
+                bitc    hidr_buttons, #10
+                testb   retval, #7      wc  ' R3
+                bitc    hidr_buttons, #11
+                testb   retval, #8      wc  ' LB
+                bitc    hidr_buttons, #4
+                testb   retval, #9      wc  ' RB
+                bitc    hidr_buttons, #5
+                testb   retval, #10     wc  ' XBOX
+                bitc    hidr_buttons, #12
+                'testb   retval, #11     wc
+                testb   retval, #12     wc  ' A
+                bitc    hidr_buttons, #0
+                testb   retval, #13     wc  ' B
+                bitc    hidr_buttons, #1
+                testb   retval, #14     wc  ' X
+                bitc    hidr_buttons, #2
+                testb   retval, #15     wc  ' Y
+                bitc    hidr_buttons, #3
+
+                setnib  hidr_counts, #1, #3
+                setbyte hidr_hats, #$0F, #0
+                getnib  htmp, retval, #0    ' map dpad buttons to hat direction
+                cmp     htmp, #%0001    wz
+        if_z    setbyte hidr_hats, #0, #0
+                cmp     htmp, #%1001    wz
+        if_z    setbyte hidr_hats, #1, #0
+                cmp     htmp, #%1000    wz
+        if_z    setbyte hidr_hats, #2, #0
+                cmp     htmp, #%1010    wz
+        if_z    setbyte hidr_hats, #3, #0
+                cmp     htmp, #%0010    wz
+        if_z    setbyte hidr_hats, #4, #0
+                cmp     htmp, #%0110    wz
+        if_z    setbyte hidr_hats, #5, #0
+                cmp     htmp, #%0100    wz
+        if_z    setbyte hidr_hats, #6, #0
+                cmp     htmp, #%0101    wz
+        if_z    setbyte hidr_hats, #7, #0
+
+                jmp     #hpad_hid_done
+
+' Handle PS3 controller
+hpad_ps3
+                rdbyte  htmp, ptrb++
+                cmp     htmp, #$01      wz
+        if_nz   ret                         ' Ignore report ID <> $01
+
+                mov     hpar1, #8
+                mov     hpar2, #19
+                call    #hpad_getbits
+                mov     hidr_buttons, retval
+
+                mov     hidr_lminmax, #$0000_00FF
+                rdbyte  retval, ptrb[5]         ' X = left stick X
+                call    #hpad_normalize
+                setword hidr_axis, retval, #0
+                bith    hidr_counts, #16+0
+                rdbyte  retval, ptrb[6]         ' Y = left stick Y
+                call    #hpad_normalize
+                setword hidr_axis, retval, #1
+                bith    hidr_counts, #16+1
+                rdbyte  retval, ptrb[7]         ' Z = right stick X
+                call    #hpad_normalize
+                setword hidr_axis+1, retval, #0
+                bith    hidr_counts, #16+2
+                rdbyte  retval, ptrb[8]         ' RZ = right stick Y
+                call    #hpad_normalize
+                setword hidr_axis+2, retval, #1
+                bith    hidr_counts, #16+5
+
+                jmp     #hpad_hid_done
+
 '------------------------------------------------------------------------------
 ' Read bits from report data buffer
 '------------------------------------------------------------------------------
@@ -2151,6 +2303,26 @@ hpad_getbits
                 shr     retval, htmp1
                 and     retval, hpar2
 
+                ret
+
+hpad_normalize
+                getword htmp, hidr_lminmax, #0      ' htmp = max
+                getword htmp1, hidr_lminmax, #1     ' htmp1 = min
+                signx   htmp1, #15      wc
+        if_c    sub     hidr_size, #1
+        if_c    signx   retval, hidr_size
+        if_c    add     hidr_size, #1
+                subs    htmp, htmp1                 ' htmp = (max - min)
+                subs    retval, htmp1               ' retval = (retval - min)
+                shl     retval, #16                 ' retval = (retval - min) << 16
+                subs    retval, #1                  ' retval = ((retval - min) << 16) - 1
+                abs     htmp            wc
+                testb   retval, #31     wz
+                abs     retval
+                qdiv    retval, htmp
+                getqx   retval
+    if_c_ne_z   neg     retval                      ' retval = (((retval - min) << 16) - 1) / (max - min)
+                adds    retval, ##$8000 signx 15
                 ret
 
 '------------------------------------------------------------------------------
