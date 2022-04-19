@@ -2328,18 +2328,29 @@ hpad_getbits
                 shr     htmp, #3        ' byte offset
                 add     htmp, ptrb
                 rdlong  retval, htmp
-                'debug(uhex_long(retval),uhex_byte_array(ptrb,hpar3))
 
                 mov     htmp1, hpar1
                 and     htmp1, #$07     ' shift
+                shr     retval, htmp1
 
-                ' TODO check number of bits > 24
+                cmp     hpar2, #24      wcz
+        if_a    jmp     #.l1
+
                 decod   hpar2
                 sub     hpar2, #1
-                'debug(ubin_long(retval,hpar2))
-                shr     retval, htmp1
                 and     retval, hpar2
-
+                ret
+.l1
+                and     retval, ##$00_FFFFFF
+                add     htmp, #3
+                rdlong  htmp2, htmp
+                sub     hpar2, #24
+                decod   hpar2
+                sub     hpar2, #1
+                shr     htmp2, htmp1
+                and     htmp2, hpar2
+                shl     htmp2, #24
+                or      retval, htmp2
                 ret
 
 hpad_normalize
