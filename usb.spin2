@@ -1961,7 +1961,6 @@ hget_gp_in_report
 hpad_hid
                 mov     ptra, gp_descr
                 mov     pa, gp_descr_len
-
                 mov     hidr_usage, ##$76543210
 
 .next
@@ -2008,10 +2007,8 @@ hpad_hid
                 cmp     hpar1, #HID_INPUT       wz
         if_nz   jmp     #.next
 
-                'debug(udec(hidr_state,hidr_offset,hidr_size,hidr_count))
-
                 and     hpar2, #$03
-                cmp     hpar2, #$02     wz  ' Input(Data,Var)
+                cmp     hpar2, #HID_ITEM_VARIABLE   wz
         if_nz   jmp     #.skip
 
                 cmp     hidr_state, #2  wz
@@ -2021,25 +2018,25 @@ hpad_hid
                 cmp     hidr_state, #4  wz
         if_z    jmp     #.buttons
 .skip
-
                 mov     htmp, hidr_size
                 mul     htmp, hidr_count
                 add     hidr_offset, htmp
                 jmp     #.next
 .axes
+                'debug(".axes", udec(hidr_state,hidr_offset,hidr_size,hidr_count))
                 getnib  hr0, hidr_counts, #2
                 mov     hr1, hidr_count
-.l1             mov     hpar1, hidr_offset
+.l1
+                mov     hpar1, hidr_offset
                 mov     hpar2, hidr_size
                 call    #hpad_getbits
                 call    #hpad_normalize
-
-                altgn   hr0, #hidr_usage
-                getnib  hr2
-                altsw   hr2, #hidr_axis
-                setword retval
-
-                add     hr0, #1
+                cmp     hr0, #6         wcz
+        if_b    altgn   hr0, #hidr_usage
+        if_b    getnib  hr2
+        if_b    altsw   hr2, #hidr_axis
+        if_b    setword retval
+        if_b    add     hr0, #1
                 add     hidr_offset, hidr_size
                 djnz    hr1, #.l1
 
@@ -2047,6 +2044,7 @@ hpad_hid
                 mov     hidr_state, #1
                 jmp     #.next
 .hats
+                'debug(".hats", udec(hidr_state,hidr_offset,hidr_size,hidr_count))
                 mov     hpar1, hidr_offset
                 mov     hpar2, hidr_size
                 call    #hpad_getbits
@@ -2055,6 +2053,7 @@ hpad_hid
                 mov     hidr_state, #1
                 jmp     #.skip
 .buttons
+                'debug(".buttons", udec(hidr_state,hidr_offset,hidr_size,hidr_count))
                 mov     hpar1, hidr_offset
                 mov     hpar2, hidr_size
                 mul     hpar2, hidr_count
@@ -2067,15 +2066,15 @@ hpad_hid
                 mov     hidr_state, #1
                 jmp     #.skip
 .report_id
-                cmp     hidr_id, #0      wz
+                cmp     hidr_id, #0     wz
         if_nz   jmp     #hpad_hid_done
                 rdbyte  hidr_id, ptrb++
-                cmp     hidr_id, hpar2   wz
+                cmp     hidr_id, hpar2  wz
         if_nz   ret
                 jmp     #.next
 .usage_page
                 cmp     hpar2, #HID_USAGE_PAGE_BUTTONS  wz
-        if_z    cmp     hidr_state, #1      wz
+        if_z    cmp     hidr_state, #1  wz
         if_z    mov     hidr_state, #4
                 jmp     #.next
 .usage
@@ -2178,15 +2177,15 @@ hpad_xinput
                 bith    hidr_counts, #16+5
 
                 mov     hidr_lminmax, #$0000_00FF
-                rdbyte  retval, ptrb[4]     ' RX = left analog trigger
+                rdbyte  retval, ptrb[4]     ' left analog trigger
                 cmp     retval, #192    wcz
-        if_ae   bith    hidr_buttons, #6
+        if_ae   bith    hidr_buttons, #6    ' left analog trigger (button)
                 call    #hpad_normalize
                 setword hidr_axis+1, retval, #1
                 bith    hidr_counts, #16+3
-                rdbyte  retval, ptrb[5]     ' RY = right analog trigger
+                rdbyte  retval, ptrb[5]     ' right analog trigger
                 cmp     retval, #192    wcz
-        if_ae   bith    hidr_buttons, #7
+        if_ae   bith    hidr_buttons, #7    ' right analog trigger (button)
                 call    #hpad_normalize
                 setword hidr_axis+2, retval, #0
                 bith    hidr_counts, #16+4
@@ -2204,8 +2203,6 @@ hpad_xinput
                 bitc    hidr_buttons, #4
                 testb   retval, #9      wc  ' RB
                 bitc    hidr_buttons, #5
-                                    ' #6    ' RX = left analog trigger
-                                    ' #7    ' RY = right analog trigger
                 testb   retval, #5      wc  ' SELECT
                 bitc    hidr_buttons, #8
                 testb   retval, #4      wc  ' START
@@ -2346,22 +2343,25 @@ hpad_getbits
                 ret
 
 hpad_normalize
-                getword htmp, hidr_lminmax, #0      ' htmp = max
-                getword htmp1, hidr_lminmax, #1     ' htmp1 = min
+                mov     htmp, hidr_lminmax  wz
+        if_z    mov     htmp, hidr_pminmax  wz
+        if_z    ret
+                getword htmp1, htmp, #1     ' htmp1 = min
+                getword htmp, htmp, #0      ' htmp = max
                 signx   htmp1, #15      wc
         if_c    sub     hidr_size, #1
         if_c    signx   retval, hidr_size
         if_c    add     hidr_size, #1
-                subs    htmp, htmp1                 ' htmp = (max - min)
-                subs    retval, htmp1               ' retval = (retval - min)
-                shl     retval, #16                 ' retval = (retval - min) << 16
-                subs    retval, #1                  ' retval = ((retval - min) << 16) - 1
+                subs    htmp, htmp1         ' htmp = (max - min)
+                subs    retval, htmp1       ' retval = (retval - min)
+                shl     retval, #16         ' retval = (retval - min) << 16
+                subs    retval, #1          ' retval = ((retval - min) << 16) - 1
                 abs     htmp            wc
                 testb   retval, #31     wz
                 abs     retval
                 qdiv    retval, htmp
                 getqx   retval
-    if_c_ne_z   neg     retval                      ' retval = (((retval - min) << 16) - 1) / (max - min)
+    if_c_ne_z   neg     retval              ' retval = (((retval - min) << 16) - 1) / (max - min)
                 adds    retval, ##$8000 signx 15
                 ret
 
