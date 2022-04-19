@@ -1635,17 +1635,6 @@ hset_config
                 cmp     hpad_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No gamepad
 
-                getbyte htmp, gp_intf_num, #0
-                loc     ptra, #set_protocol
-                wrword  #0, ptra[wValue]
-                wrword  htmp, ptra[wIndex]
-                mov     pb, #0                          ' SetProtocol() has no data stage
-                call    #control_write
-
-                mov     hpar1, #0                       ' SetIdle() duration 0 = indefinite
-                getbyte hpar2, gp_intf_num, #0
-                call    #hset_idle
-
                 mov     ep_addr_pid, hpad_ep_addr
                 call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
                 mov     hpad_ep_addr, ep_addr_pid
