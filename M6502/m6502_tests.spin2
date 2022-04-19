@@ -110,6 +110,7 @@ PRI run_tests()
     test_brk()
 
     test_stx_all()
+    test_axs()
 
     test_cycles()
 
@@ -1209,6 +1210,21 @@ PUB test_stx_all()
 
     exec($96, $10, $FF) ' STX $10,Y
     if \assertEquals(REG_X, peek($10 + REG_Y))
+        disassemble()
+        registers()
+        abort(0)
+
+    ser.str(string("Ok", 13, 10))
+
+
+PUB test_axs()
+
+    ser.str(string("test_axs ... "))
+
+    REG_A := $8F
+    REG_X := $47
+    exec($CB, $01, $00) ' AXS #$01
+    if \assertEquals(REG_X, $06)
         disassemble()
         registers()
         abort(0)
