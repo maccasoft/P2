@@ -1,7 +1,11 @@
 {
-    USB Keyboard Driver
+    USB Keyboard and Gamepad Driver
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
     Based on 1CogKbM code by Garry Jordan ("garryj")
+    with code portions by Ada Gottensträter
+
+    Usage : see hkbd_compare, hkbd_translate for keyboard
+                hid_decode and hpad_translate for controllers
 
     TERMS OF USE: MIT License
 }
@@ -568,22 +572,10 @@ gp_pre_report_p long    @gpPreReport
 
 hidr_start
 hidr_id         long    0
-hidr_axis       long    0[3]    '  X = hidr_axis+0, #0
-                                '  Y = hidr_axis+0, #1
-                                '  Z = hidr_axis+1, #0
-                                ' RX = hidr_axis+1, #1
-                                ' RY = hidr_axis+2, #0
-                                ' RZ = hidr_axis+2, #1
+hidr_axis       long    0[3]
 hidr_buttons    long    0
 hidr_hats       long    0
-                            '        3        2        1        0 byte
-                            '    7   6    5   4    3   2    1   0 nibble
-hidr_counts     long    0   ' xxxxxxxx_xxxxxxxx_hhhhaaaa_bbbbbbbb
-                            '          |||||||| |||||||| ++++++++ buttons
-                            '          |||||||| ||||++++--------- axis
-                            '          |||||||| ++++------------- hats
-                            '          ++++++++------------------ valid axis
-
+hidr_flags      long    0
 hidr_state      long    0
 hidr_size       long    0
 hidr_count      long    0
@@ -1696,8 +1688,9 @@ hset_config
 init_kbdm_data
                 mov     hkbd_ep_addr, #0
                 mov     hpad_ep_addr, #0
-                mov     ptra, ##dataBuffersStart
-                mov     pa, ##dataBuffersEnd
+
+                loc     ptra, #usb_cache_start      ' Clear cached data buffers
+                loc     pa, #usb_cache_end
 .loop
                 wrbyte  #0, ptra++
                 cmp     ptra, pa                wcz
@@ -1791,13 +1784,6 @@ hget_kbd_in_report
 '------------------------------------------------------------------------------
 ' Compare current and previous keyboard data buffers for keypress changes.
 '------------------------------------------------------------------------------
-' On entry:
-' On exit:
-'   hpar1 - bit     31 = 0 pressed, 1 released
-'               23..16 = key modifiers state
-'                15..8 = scancode
-'                 7..0 = ASCII key code (or 0 if none)
-'------------------------------------------------------------------------------
 hkbd_compare
                 mov     ptra, kb_cur_report_p
                 mov     ptrb, kb_pre_report_p
@@ -1812,44 +1798,44 @@ hkbd_compare
                 rdbyte  hpar2, kb_cur_report_p
                 rdbyte  htmp, kb_pre_report_p
                 cmp     hpar2, htmp     wz
-        if_z    jmp     #_release
+        if_z    jmp     #.release
 
                 mov     hpar1, hpar2            ' shift status update
                 shl     hpar1, #16
                 debug(uhex_long(hpar1))
 
-_release        modc    _set    wc
+.release        modc    _set    wc
                 mov     ptra, ##@kbPreReport+2
                 mov     pa, #6
-.l1             rdbyte  hpar1, ptra++   wz
-        if_z    jmp     #.l3
+.rl1            rdbyte  hpar1, ptra++   wz
+        if_z    jmp     #.rl3
                 mov     ptrb, ##@kbCurReport+2
                 mov     pb, #6
-.l2             rdbyte  htmp, ptrb++
+.rl2            rdbyte  htmp, ptrb++
                 cmp     hpar1, htmp     wz
-        if_z    jmp     #.l3
-                djnz    pb, #.l2
+        if_z    jmp     #.rl3
+                djnz    pb, #.rl2
                 call    #\hkbd_translate
-.l3             djnz    pa, #.l1
+.rl3            djnz    pa, #.rl1
 
                 mov     hpar3, #0
                 bith    hpar3, #31
 
-_press          modc    _clr    wc
+.press          modc    _clr    wc
                 mov     ptra, ##@kbCurReport+2
                 mov     pa, #6
-.l1             rdbyte  hpar1, ptra++   wz
-        if_z    jmp     #.l3
+.pl1            rdbyte  hpar1, ptra++   wz
+        if_z    jmp     #.pl3
                 mov     ptrb, ##@kbPreReport+2
                 mov     pb, #6
-.l2             rdbyte  htmp, ptrb++
+.pl2            rdbyte  htmp, ptrb++
                 cmp     hpar1, htmp     wz
-        if_z    jmp     #.l3
-                djnz    pb, #.l2
+        if_z    jmp     #.pl3
+                djnz    pb, #.pl2
                 call    #\hkbd_translate
-.l3             djnz    pa, #.l1
+.pl3            djnz    pa, #.pl1
 
-_copy           mov     ptra, ##@kbCurReport
+.copy           mov     ptra, ##@kbCurReport
                 mov     ptrb, ##@kbPreReport
                 rdlong  htmp, ptra++
                 wrlong  htmp, ptrb++
@@ -1858,6 +1844,19 @@ _copy           mov     ptra, ##@kbCurReport
 
                 ret
 
+'------------------------------------------------------------------------------
+' Translate keyboard scancode to ASCII
+'------------------------------------------------------------------------------
+' On entry:
+'   hpar1 - scancode
+'   hpar2 - key modifiers state
+'       c - pressed (0) or released (1) flag
+' On exit:
+'   hpar1 - bit     31 = 0 pressed, 1 released
+'               23..16 = key modifiers state
+'                15..8 = scancode
+'                 7..0 = ASCII key code (or 0 if none)
+'------------------------------------------------------------------------------
 hkbd_translate
                 mov     htmp, hpar1
                 shl     htmp, #1
@@ -1918,6 +1917,12 @@ hget_gp_in_report
                 mov     gp_next_datax, hpar1
                 mov     gp_max_index, hpar3             ' Save actual bytes read
 
+' Note: the following code compares the current and previous reports
+' and process the data if there are changes to ease the debug output.
+' Actual implementations should remove this block, along with gp_pre_report_p and
+' gpPreReport buffer.
+
+                ' ----- start of block to remove
                 mov     ptra, gp_cur_report_p           ' Attempt to notify changes
                 mov     ptrb, gp_pre_report_p           ' by comparing the report bytes
 
@@ -1932,8 +1937,13 @@ hget_gp_in_report
         if_z    cmp     htmp1, htmp2    wz
                 wrbyte  htmp1, ptrb++
                 djnz    pa, #.lp
-        if_z    ret
+        if_z    ret                                     ' Ignore report if not changed
+                ' ----- end of block to remove
 
+'------------------------------------------------------------------------------
+' Decode controller report
+'------------------------------------------------------------------------------
+hid_decode
                 mov     htmp, #hidr_start       ' clear all hid report registers
 .cl             altd    htmp
                 mov     0-0, #0
@@ -1947,7 +1957,11 @@ hget_gp_in_report
                 cmp     hdev_ready, #PS3_READY      wz
         if_z    jmp     #hpad_ps3
 
+'------------------------------------------------------------------------------
 ' Handle HID controller
+' On entry:
+'   ptrb - controller report
+'------------------------------------------------------------------------------
 hpad_hid
                 mov     ptra, gp_descr
                 mov     pa, gp_descr_len
@@ -1955,7 +1969,7 @@ hpad_hid
 
 .next
                 cmps    pa, #0      wcz
-        if_be   jmp     #hpad_hid_done
+        if_be   jmp     #hpad_translate
 
                 rdbyte  hpar1, ptra++
                 sub     pa, #1
@@ -2013,8 +2027,8 @@ hpad_hid
                 add     hidr_offset, htmp
                 jmp     #.next
 .axes
-                'debug(".axes", udec(hidr_state,hidr_offset,hidr_size,hidr_count))
-                getnib  hr0, hidr_counts, #2
+                'debug(".axes ", udec(hidr_offset,hidr_size,hidr_count))
+                getnib  hr0, hidr_flags, #2
                 mov     hr1, hidr_count
 .l1
                 mov     hpar1, hidr_offset
@@ -2030,34 +2044,34 @@ hpad_hid
                 add     hidr_offset, hidr_size
                 djnz    hr1, #.l1
 
-                setnib  hidr_counts, hr0, #2
+                setnib  hidr_flags, hr0, #2
                 mov     hidr_state, #1
                 jmp     #.next
 .hats
-                'debug(".hats", udec(hidr_state,hidr_offset,hidr_size,hidr_count))
+                'debug(".hats ", udec(hidr_offset,hidr_size,hidr_count))
                 mov     hpar1, hidr_offset
                 mov     hpar2, hidr_size
                 call    #hpad_getbits
                 setbyte hidr_hats, retval, #0
-                setnib  hidr_counts, #1, #3
+                setnib  hidr_flags, #1, #3
                 mov     hidr_state, #1
                 jmp     #.skip
 .buttons
-                'debug(".buttons", udec(hidr_state,hidr_offset,hidr_size,hidr_count))
+                'debug(".buttons ", udec(hidr_offset,hidr_size,hidr_count))
                 mov     hpar1, hidr_offset
                 mov     hpar2, hidr_size
                 mul     hpar2, hidr_count
                 call    #hpad_getbits
-                getbyte htmp, hidr_counts, #0
+                getbyte htmp, hidr_flags, #0
                 shl     retval, htmp
                 or      hidr_buttons, retval
                 add     htmp, hidr_count
-                setbyte hidr_counts, htmp, #0
+                setbyte hidr_flags, htmp, #0
                 mov     hidr_state, #1
                 jmp     #.skip
 .report_id
                 cmp     hidr_id, #0     wz
-        if_nz   jmp     #hpad_hid_done
+        if_nz   jmp     #hpad_translate
                 rdbyte  hidr_id, ptrb++
                 cmp     hidr_id, hpar2  wz
         if_nz   ret
@@ -2089,57 +2103,22 @@ hpad_hid
 
                 sub     hpar2, #HID_USAGE_X - 16
                 decod   hpar2
-                or      hidr_counts, hpar2
+                or      hidr_flags, hpar2
 
                 add     hidr_usage_idx, #1
                 cmp     hidr_state, #1      wz
         if_z    mov     hidr_state, #2
-        if_z    jmp     #.next
                 jmp     #.next
 
-hpad_hid_done
-                mov     htmp, #0
-
-                getword htmp1, hidr_axis, #0
-                signx   htmp1, #15
-                testb   hidr_counts, #16+0  wz
-                bitz    htmp, #0
-                debug(if(htmp), "X: ", sdec_(htmp1))
-                getword htmp1, hidr_axis, #1
-                signx   htmp1, #15
-                testb   hidr_counts, #16+1  wz
-                bitz    htmp, #0
-                debug(if(htmp), "Y: ", sdec_(htmp1))
-                getword htmp1, hidr_axis+1, #0
-                signx   htmp1, #15
-                testb   hidr_counts, #16+2  wz
-                bitz    htmp, #0
-                debug(if(htmp), "Z: ", sdec_(htmp1))
-                getword htmp1, hidr_axis+1, #1
-                signx   htmp1, #15
-                testb   hidr_counts, #16+3  wz
-                bitz    htmp, #0
-                debug(if(htmp), "RX: ", sdec_(htmp1))
-                getword htmp1, hidr_axis+2, #0
-                signx   htmp1, #15
-                testb   hidr_counts, #16+4  wz
-                bitz    htmp, #0
-                debug(if(htmp), "RY: ", sdec_(htmp1))
-                getword htmp1, hidr_axis+2, #1
-                signx   htmp1, #15
-                testb   hidr_counts, #16+5  wz
-                bitz    htmp, #0
-                debug(if(htmp), "RZ: ", sdec_(htmp1))
-
-                getnib  htmp, hidr_counts, #3
-                getbyte htmp1, hidr_hats, #0
-                debug(if(htmp), "hat: ", uhex_byte_(htmp1))
-
-                debug("btn: ", ubin_long_(hidr_buttons))
-
-                ret
-
+'------------------------------------------------------------------------------
 ' Handle XInput controller
+' On entry:
+'   ptrb - controller report
+'------------------------------------------------------------------------------
+'   Default implementation translates the report to a pseudo-defacto hid
+'   standard and jumps to hpad_translate for actions.
+'   Implementors may take specific actions for this kind of controller.
+'------------------------------------------------------------------------------
 hpad_xinput
                 rdbyte  htmp, ptrb      wz
         if_nz   ret                         ' Ignore message type <> $00
@@ -2150,21 +2129,21 @@ hpad_xinput
                 rdword  retval, ptrb[3]     ' X = left stick X
                 signx   retval, #15
                 setword hidr_axis, retval, #0
-                bith    hidr_counts, #16+0
+                bith    hidr_flags, #HID_AXIS_X
                 rdword  retval, ptrb[3]     ' Y = left stick Y (inverted)
                 not     retval
                 signx   retval, #15
                 setword hidr_axis, retval, #1
-                bith    hidr_counts, #16+1
+                bith    hidr_flags, #HID_AXIS_Y
                 rdword  retval, ptrb[5]     ' Z = right stick X
                 signx   retval, #15
                 setword hidr_axis+1, retval, #0
-                bith    hidr_counts, #16+2
+                bith    hidr_flags, #HID_AXIS_Z
                 rdword  retval, ptrb[6]     ' RZ = right stick Y (inverted)
                 not     retval
                 signx   retval, #15
                 setword hidr_axis+2, retval, #1
-                bith    hidr_counts, #16+5
+                bith    hidr_flags, #HID_AXIS_RZ
 
                 mov     hidr_lminmax, #$0000_00FF
                 rdbyte  retval, ptrb[4]     ' left analog trigger
@@ -2172,13 +2151,13 @@ hpad_xinput
         if_ae   bith    hidr_buttons, #6    ' left analog trigger (button)
                 call    #hpad_normalize
                 setword hidr_axis+1, retval, #1
-                bith    hidr_counts, #16+3
+                bith    hidr_flags, #16+3
                 rdbyte  retval, ptrb[5]     ' right analog trigger
                 cmp     retval, #192    wcz
         if_ae   bith    hidr_buttons, #7    ' right analog trigger (button)
                 call    #hpad_normalize
                 setword hidr_axis+2, retval, #0
-                bith    hidr_counts, #16+4
+                bith    hidr_flags, #16+4
 
                 rdword  retval, ptrb[1]
                 testb   retval, #12     wc  ' A
@@ -2204,7 +2183,7 @@ hpad_xinput
                 testb   retval, #10     wc  ' XBOX
                 bitc    hidr_buttons, #12
 
-                setnib  hidr_counts, #1, #3
+                setnib  hidr_flags, #1, #3
                 setbyte hidr_hats, #$0F, #0
                 getnib  htmp, retval, #0    ' map dpad buttons to hat direction
                 cmp     htmp, #%0001    wz
@@ -2224,9 +2203,17 @@ hpad_xinput
                 cmp     htmp, #%0101    wz
         if_z    setbyte hidr_hats, #7, #0
 
-                jmp     #hpad_hid_done
+                jmp     #hpad_translate
 
+'------------------------------------------------------------------------------
 ' Handle PS3 controller
+' On entry:
+'   ptrb - controller report
+'------------------------------------------------------------------------------
+'   Default implementation translates the report to a pseudo-defacto hid
+'   standard and jumps to hpad_translate for actions.
+'   Implementors may take specific actions for this kind of controller.
+'------------------------------------------------------------------------------
 hpad_ps3
                 rdbyte  htmp, ptrb++
                 cmp     htmp, #$01      wz
@@ -2236,19 +2223,19 @@ hpad_ps3
                 rdbyte  retval, ptrb[5]         ' X = left stick X
                 call    #hpad_normalize
                 setword hidr_axis, retval, #0
-                bith    hidr_counts, #16+0
+                bith    hidr_flags, #HID_AXIS_X
                 rdbyte  retval, ptrb[6]         ' Y = left stick Y
                 call    #hpad_normalize
                 setword hidr_axis, retval, #1
-                bith    hidr_counts, #16+1
+                bith    hidr_flags, #HID_AXIS_Y
                 rdbyte  retval, ptrb[7]         ' Z = right stick X
                 call    #hpad_normalize
                 setword hidr_axis+1, retval, #0
-                bith    hidr_counts, #16+2
+                bith    hidr_flags, #HID_AXIS_Z
                 rdbyte  retval, ptrb[8]         ' RZ = right stick Y
                 call    #hpad_normalize
                 setword hidr_axis+2, retval, #1
-                bith    hidr_counts, #16+5
+                bith    hidr_flags, #HID_AXIS_RZ
 
                 mov     hpar1, #8
                 mov     hpar2, #19
@@ -2281,7 +2268,7 @@ hpad_ps3
                 testb   retval, #16     wc  ' HOME
                 bitc    hidr_buttons, #12
 
-                setnib  hidr_counts, #1, #3
+                setnib  hidr_flags, #1, #3
                 setbyte hidr_hats, #$0F, #0
                 getnib  htmp, retval, #1    ' map dpad buttons to hat direction
                 cmp     htmp, #%0001    wz
@@ -2301,7 +2288,7 @@ hpad_ps3
                 cmp     htmp, #%1001    wz
         if_z    setbyte hidr_hats, #7, #0
 
-                jmp     #hpad_hid_done
+                jmp     #hpad_translate
 
 '------------------------------------------------------------------------------
 ' Read bits from report data buffer
@@ -2343,6 +2330,18 @@ hpad_getbits
                 or      retval, htmp2
                 ret
 
+'------------------------------------------------------------------------------
+' Normalize value to signed word (-32768 / 32767)
+'------------------------------------------------------------------------------
+' On entry:
+'   retval - value to normalize
+'   hidr_lminmax - min (word 1) max (word 0) value range
+'   - or -
+'   hidr_pminmax - min (word 1) max (word 0) value range
+'   hidr_size - value bits length
+' On exit:
+'   retval - normalized value
+'------------------------------------------------------------------------------
 hpad_normalize
                 mov     htmp, hidr_lminmax  wz
         if_z    mov     htmp, hidr_pminmax  wz
@@ -2364,6 +2363,70 @@ hpad_normalize
                 getqx   retval
     if_c_ne_z   neg     retval              ' retval = (((retval - min) << 16) - 1) / (max - min)
                 adds    retval, ##$8000 signx 15
+                ret
+
+'------------------------------------------------------------------------------
+' Perform controller actions
+' On entry:
+'    hidr_id        report id
+'    hidr_axis      axis value (signed word, 2 axes per long)
+'                      X = hidr_axis+0, #0
+'                      Y = hidr_axis+0, #1
+'                      Z = hidr_axis+1, #0
+'                     RX = hidr_axis+1, #1
+'                     RY = hidr_axis+2, #0
+'                     RZ = hidr_axis+2, #1
+'    hidr_buttons   buttons state (bits 0 to 31)
+'    hidr_hats      hats state (byte 0, 1, 2, 3)
+'
+'                     -------3 -------2 -------1 -------0 byte
+'                     ---7---6 ---5---4 ---3---2 ---1---0 nibble
+'    hidr_flags       xxxxxxxx_xxrrrzyx_hhhhaaaa_bbbbbbbb
+'                                zyx||| |||||||| ++++++++ n. buttons
+'                                |||||| ||||++++--------- n. axes
+'                                |||||| ++++------------- n. hats
+'                                ++++++------------------ valid axes
+'------------------------------------------------------------------------------
+hpad_translate
+                mov     htmp, #0
+
+                getword htmp1, hidr_axis, #0
+                signx   htmp1, #15
+                testb   hidr_flags, #HID_AXIS_X  wz
+                bitz    htmp, #0
+                debug(if(htmp), "X: ", sdec_(htmp1))
+                getword htmp1, hidr_axis, #1
+                signx   htmp1, #15
+                testb   hidr_flags, #HID_AXIS_Y  wz
+                bitz    htmp, #0
+                debug(if(htmp), "Y: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+1, #0
+                signx   htmp1, #15
+                testb   hidr_flags, #HID_AXIS_Z  wz
+                bitz    htmp, #0
+                debug(if(htmp), "Z: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+1, #1
+                signx   htmp1, #15
+                testb   hidr_flags, #HID_AXIS_RX  wz
+                bitz    htmp, #0
+                debug(if(htmp), "RX: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+2, #0
+                signx   htmp1, #15
+                testb   hidr_flags, #HID_AXIS_RY  wz
+                bitz    htmp, #0
+                debug(if(htmp), "RY: ", sdec_(htmp1))
+                getword htmp1, hidr_axis+2, #1
+                signx   htmp1, #15
+                testb   hidr_flags, #HID_AXIS_RZ  wz
+                bitz    htmp, #0
+                debug(if(htmp), "RZ: ", sdec_(htmp1))
+
+                getnib  htmp, hidr_flags, #3
+                getbyte htmp1, hidr_hats, #0
+                debug(if(htmp), "hat: ", uhex_byte_(htmp1))
+
+                debug("btn: ", ubin_long_(hidr_buttons))
+
                 ret
 
 '------------------------------------------------------------------------------
@@ -2423,15 +2486,6 @@ get_desc        byte    (DIR_DEV_TO_HOST | TYPE_STANDARD | RECIP_INTERFACE)
                 word    TYPE_REPORT << 8
                 word    0       ' Zero or Language ID (Section 9.6.7)
                 word    0       ' Number of bytes to transfer if there is a data stage
-
-'------------------------------------------------------------------------------
-' The USB data cache area gets zero-filled at every device disconnect
-'------------------------------------------------------------------------------
-usb_cache_start
-urx_buff        byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
-dev_desc_buff   byte    0[DEV_DESC_LEN]         ' Device descriptor
-con_desc_buff   byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
-usb_cache_end
 '------------------------------------------------------------------------------
 ps3_enable_cmd  byte    $42, $0C, $00, $00
 ps3_command_buff
@@ -2464,9 +2518,11 @@ xinp_rumble_cmd byte    $00, $08, $00
                 byte    $00             ' Left rumble
                 byte    $00             ' Right rumble
                 byte    $00, $00, $00
-'------------------------------------------------------------------------------
 
-dataBuffersStart
+'------------------------------------------------------------------------------
+' The USB data cache area gets zero-filled at every device disconnect
+'------------------------------------------------------------------------------
+usb_cache_start
 
 ' Keyboard report buffers
 kbCurReport     byte    0[KBD_IN_RPT_LEN]
@@ -2477,7 +2533,11 @@ gpDescriptor    byte    0[HID_DESCR_LEN]
 gpCurReport     byte    0[HID_IN_RPT_LEN]
 gpPreReport     byte    0[HID_IN_RPT_LEN]
 
-dataBuffersEnd
+usb_cache_end
+
+urx_buff        byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
+dev_desc_buff   byte    0[DEV_DESC_LEN]         ' Device descriptor
+con_desc_buff   byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
 
 CON ' USB Host Shared constants
 '------------------------------------------------------------------------------
@@ -2863,15 +2923,8 @@ CON ' USB Descriptor Definitions
     HID_bNumDesc     = 5    ' 1     Number          Number of HID class descriptors to follow, always at least one.
     HID_bDescType    = 6    ' 1     Constant        Type of HID class descriptor e.g. TYPE_REPORT ($22).
     HID_wDescLength  = 7    ' 2     Number          Total length of descriptor(s).
-' Keyboard report data buffer lengths (boot protocol):
-    KBD_OUT_RPT_LEN = 1     ' CapsLock, NumLock and ScrollLock status bits
-    KBD_IN_RPT_LEN  = 8     ' Maximum keyboard boot protocol IN data packet size
-' Gamepad report and descriptor data buffer lengths:
-    HID_IN_RPT_LEN   = 256
-    HID_DESCR_LEN    = 256
 
-CON
-    ' HID Report Items from HID 1.11 Section 6.2.2
+' HID Report Items from HID 1.11 Section 6.2.2
     HID_USAGE_PAGE      = $04
     HID_USAGE           = $08
     HID_COLLECTION      = $A0
@@ -2888,13 +2941,13 @@ CON
     HID_REPORT_ID       = $84
     HID_OUTPUT          = $90
 
-    ' HID Report Usage Pages from HID Usage Tables 1.12 Section 3, Table 1
+' HID Report Usage Pages from HID Usage Tables 1.12 Section 3, Table 1
     HID_USAGE_PAGE_GENERIC_DESKTOP = $01
     HID_USAGE_PAGE_KEY_CODES       = $07
     HID_USAGE_PAGE_LEDS            = $08
     HID_USAGE_PAGE_BUTTONS         = $09
 
-    ' HID Report Usages from HID Usage Tables 1.12 Section 4, Table 6
+' HID Report Usages from HID Usage Tables 1.12 Section 4, Table 6
     HID_USAGE_POINTER   = $01
     HID_USAGE_MOUSE     = $02
     HID_USAGE_JOYSTICK  = $04
@@ -2910,11 +2963,26 @@ CON
     HID_USAGE_WHEEL     = $38
     HID_USAGE_HATSWITCH = $39
 
-    ' HID Report Collection Types from HID 1.12 6.2.2.6
+' HID Report Collection Types from HID 1.12 6.2.2.6
     HID_COLLECTION_PHYSICAL    = 0
     HID_COLLECTION_APPLICATION = 1
 
-    ' HID Input/Output/Feature Item Data (attributes) from HID 1.11 6.2.2.5
+' HID Input/Output/Feature Item Data (attributes) from HID 1.11 6.2.2.5
     HID_ITEM_CONSTANT = $1
     HID_ITEM_VARIABLE = $2
     HID_ITEM_RELATIVE = $4
+
+' Keyboard report data buffer lengths (boot protocol):
+    KBD_OUT_RPT_LEN = 1     ' CapsLock, NumLock and ScrollLock status bits
+    KBD_IN_RPT_LEN  = 8     ' Maximum keyboard boot protocol IN data packet size
+' Gamepad report and descriptor data buffer lengths:
+    HID_IN_RPT_LEN   = 256
+    HID_DESCR_LEN    = 256
+
+' Gamepad axes flag bits
+    HID_AXIS_X   = 16+0
+    HID_AXIS_Y   = 16+1
+    HID_AXIS_Z   = 16+2
+    HID_AXIS_RX  = 16+3
+    HID_AXIS_RY  = 16+4
+    HID_AXIS_RZ  = 16+5
