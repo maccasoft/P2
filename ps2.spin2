@@ -11,7 +11,7 @@ CON
     PS2_DATA_PIN  = 47
     PS2_CLOCK_PIN = 46
 
-DAT             ' PS/2 Keyboard river
+DAT             ' PS/2 keyboard driver
                 org     $000
 
 ps2_driver
@@ -102,16 +102,12 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
 
                 altgb   ps2_code, #ps2_table ' get usb scancode
                 getbyte ps2_key              ' |
-                shl     ps2_key, #8     wz
-        if_z    jmp     #ps2_loop
+
+                cmp     ps2_key, #$E0   wcz
+        if_ae   mov     ps2_key, #0
+        if_b    testb   ps2_state, #7   wc  ' release
 
                 call    #ps2_translate
-
-                setbyte ps2_key, ps2_shift, #2
-                setbyte ps2_key, ps2_state, #3
-                debug(uhex_long(ps2_key))
-
-                ' TODO
 
                 jmp     #ps2_loop
 
@@ -162,7 +158,7 @@ ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
                 bith    ps2_data, #9        ' append stop bit
 
                 getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ps2_us2000
+                addct1  ps2_tout, ps2_us6000
 
                 mov     ps2_bits, #10
 .l1             testp   #PS2_CLOCK_PIN  wz  ' wait until clock low
@@ -190,7 +186,7 @@ ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
                 ' Fall through to receive ack
 
 ps2_receive     getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ps2_us2000
+                addct1  ps2_tout, ps2_us6000
 
                 mov     ps2_bits, #11
 .l1             testp   #PS2_CLOCK_PIN  wz  ' wait until clock low
@@ -214,40 +210,41 @@ ps2_receive     getct   ps2_tout            ' safety timeout
         _ret_   and     ps2_data, #$FF      ' ok
 
 
+'------------------------------------------------------------------------------
+' Translate keyboard scancode to ASCII
+'------------------------------------------------------------------------------
+' On entry:
+'   ps2_key   - scancode
+'   ps2_shift - key modifiers state
+'           c - pressed (0) or released (1) flag
+' On exit:
+'   ps2_key - bit     31 = 0 pressed, 1 released
+'                 23..16 = key modifiers state
+'                  15..8 = scancode
+'                   7..0 = ASCII key code (or 0 if none)
+'------------------------------------------------------------------------------
 ps2_translate
+                mov     ps2_temp, ps2_key
+                shl     ps2_temp, #1
+                test    ps2_shift, #LEFT_SHIFT|RIGHT_SHIFT wz
+        if_nz   add     ps2_temp, #1
+                add     ps2_temp, ##@kbd_table
+                rdbyte  ps2_temp, ps2_temp
 
-                mov     ps2_temp, #ps2_map
-.l1             alts    ps2_temp
-                mov     ps2_data, 0-0       wz
-        if_z    ret
-                add     ps2_temp, #1
-                getbyte ps2_code, ps2_data, #3  ' target shift state
-                cmp     ps2_code, ps2_shift wz  ' compare shift state
-        if_ne   jmp     #.l1                    ' skip if not equal
+                shl     ps2_key, #8
+                setbyte ps2_key, ps2_temp, #0
+                setbyte ps2_key, ps2_shift, #2
+                setbyte ps2_key, ps2_state, #3
+                bitc    ps2_key, #31
 
-                setbyte ps2_data, #0, #3        ' mask map address
-                getbyte ps2_code, ps2_key, #1
-                cmp     ps2_code, #$80      wc  ' max. 128 keys
-        if_nc   ret
-                add     ps2_data, ps2_code
-                rdbyte  ps2_data, ps2_data      ' read key
+                debug(uhex_long(ps2_key))
 
-                testbn  ps2_state, #0       wz  ' num. lock
- if_z           cmp     ps2_code, #$54      wc
- if_z_and_nc    cmpr    ps2_code, #$62 +1   wc
- if_z_and_nc    setbyte ps2_data, #0, #0
-
-                testbn  ps2_state, #1       wz  ' caps lock
- if_nz          cmp     ps2_data, #$61      wc
- if_nz_and_nc   cmpr    ps2_data, #$7A +1   wc
- if_nz_and_nc   xor     ps2_data, #%00100000
-
-        _ret_   setbyte ps2_key, ps2_data, #0
+                ret
 
 ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
 ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
 ps2_us128       long    _CLKFREQ / 1000_000 * 128   ' 128 usec.
-ps2_us2000      long    _CLKFREQ / 1000_000 * 4000  ' 2000 usec.
+ps2_us6000      long    _CLKFREQ / 1000_000 * 6000  ' 6000 usec.
 
 ps2_bits        long    0
 ps2_code        long    0
@@ -258,19 +255,6 @@ ps2_key         long    0
 ps2_data        long    0
 ps2_tout        long    0
 ps2_temp        long    0
-ps2_ptr         long    0
-
-ps2_map
-                'long                                   @map_us
-                'long    LEFT_SHIFT             << 24 | @map_us_shift
-                'long    RIGHT_SHIFT            << 24 | @map_us_shift
-                long                                   @map_it
-                long    LEFT_SHIFT             << 24 | @map_it_shift
-                long    RIGHT_SHIFT            << 24 | @map_it_shift
-                long    RIGHT_ALT              << 24 | @map_it_altgr
-                long   (RIGHT_SHIFT|RIGHT_ALT) << 24 | @map_it_shift_altgr
-                long   (LEFT_SHIFT|RIGHT_ALT)  << 24 | @map_it_shift_altgr
-                long    0 ' end of maps
 
 ps2_table       byte    $00, $00    '00
                 byte    $42, $00    '01     F9
@@ -407,7 +391,26 @@ ps2_table       byte    $00, $00    '00
 
                 fit     $1F0
 
-CON
+DAT ' Scancode translation table
+                orgh
+
+kbd_table ' Index is the key scan code
+          {$00} word    $0000, $0000, $0000, $0000 ' $03
+          {$04} word    $4161, $4262, $4363, $4464                                 ' $07: Aa Bb Cc Dd
+          {$08} word    $4565, $4666, $4767, $4868, $4969, $4A6A, $4B6B, $4C6C     ' $0f: Ee Ff Gg Hh Ii Jj Kk Ll
+          {$10} word    $4D6D, $4E6E, $4F6F, $5070, $5171, $5272, $5373, $5474     ' $17: Mm Nn Oo Pp Qq Rr Ss Tt
+          {$18} word    $5575, $5676, $5777, $5878, $5979, $5A7A, $2131, $4032     ' $1f: Uu Vv Ww Xx Yy Zz !1 @2
+          {$20} word    $2333, $2434, $2535, $5E36, $2637, $2A38, $2839, $2930     ' $27: #3 $4 %5 ^6 &7 *8 (9 )0
+          {$28} word    $0D0D, $1B1B, $0808, $0909, $2020, $5F2D, $2B3D, $7B5B     ' $2f: Enter Esc BkSpc Tab Spc _- += {[
+          {$30} word    $7D5D, $7C5C, $7E23, $3A3B, $2227, $7E60, $3C2C, $3E2E     ' $37: }] |\ ~# :; "' ~` <, >.
+          {$38} word    $3F2F, $0000, $0000, $0000, $0000, $0000, $0000, $0000     ' $3f: ?/ CapsLock F1 F2 F3 F4 F5 F6
+          {$40} word    $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000     ' $47: F7 F8 F9 F10 F11 F12 PrtSc, ScrLk
+          {$48} word    $0000, $0000, $0000, $0000, $7F7F, $0000, $0000, $0000     ' $4f: Pause, Ins, Home PgUp BkSpc_Del End PgDn Right
+          {$50} word    $0000, $0000, $0000, $0000, $2F2F, $2A2A, $2D2D, $2B2B     ' $57: Left Down Up KpdNumLck Kp/ Kp* Kp- Kp+
+          {$58} word    $0D0D, $3131, $3232, $3333, $5034, $3535, $3636, $3737     ' $5f: KpEnter Kp1_End Kp2_Down Kp3_PgDn Kp4_Left Kp5 Kp6_Right Kp7_Home
+          {$60} word    $3838, $3939, $3030, $7F2E, $5C7C, $0000                   ' $65: Kp8_Up Kp9_PgUp Kp0_Ins Kp._Del Kp\_| App
+
+CON ' PS/2 keyboard constants
 
     LEFT_CTRL   = %0000_0001
     LEFT_SHIFT  = %0000_0010
@@ -417,115 +420,6 @@ CON
     RIGHT_SHIFT = %0010_0000
     RIGHT_ALT   = %0100_0000
     RIGHT_GUI   = %1000_0000
-
-DAT ' US
-                orgh
-
-map_us          byte    $00, $00, $00, $00, "a", "b", "c", "d"  ' 00-07
-                byte    "e", "f", "g", "h", "i", "j", "k", "l"  ' 08-0F
-                byte    "m", "n", "o", "p", "q", "r", "s", "t"  ' 10-17
-                byte    "u", "v", "w", "x", "y", "z", "1", "2"  ' 18-1F
-                byte    "3", "4", "5", "6", "7", "8", "9", "0"  ' 20-27
-                byte    $0D, $1B, $08, $09, " ", "-", "=", "["  ' 28-2F
-                byte    "]", "\", "#", ";", "'", $60, ",", "."  ' 30-37
-                byte    "/", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
-                byte    $00, $00, $00, $00, "/", "+", "-", "+"  ' 50-57
-                byte    $0D, "1", "2", "3", "4", "5", "6", "7"  ' 58-5F
-                byte    "8", "9", "0", $00, "\", $00, $00, $00  ' 60-67
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
-
-map_us_shift    byte    $00, $00, $00, $00, "A", "B", "C", "D"  ' 00-07
-                byte    "E", "F", "G", "H", "I", "J", "K", "L"  ' 08-0F
-                byte    "M", "N", "O", "P", "Q", "R", "S", "T"  ' 10-17
-                byte    "U", "V", "W", "X", "Y", "Z", "!", "@"  ' 18-1F
-                byte    "#", "$", "%", "^", "&", "*", "(", ")"  ' 20-27
-                byte    $0D, $1B, $08, $09, " ", "_", "+", "{"  ' 28-2F
-                byte    "}", "|", "~", ":", $22, "~", "<", ">"  ' 30-37
-                byte    "?", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
-                byte    $00, $00, $00, $00, "|", $00, $00, $00  ' 60-67
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
-
-DAT ' Italian
-                orgh
-
-map_it          byte    $00, $00, $00, $00, "a", "b", "c", "d"  ' 00-07
-                byte    "e", "f", "g", "h", "i", "j", "k", "l"  ' 08-0F
-                byte    "m", "n", "o", "p", "q", "r", "s", "t"  ' 10-17
-                byte    "u", "v", "w", "x", "y", "z", "1", "2"  ' 18-1F
-                byte    "3", "4", "5", "6", "7", "8", "9", "0"  ' 20-27
-                byte    $0D, $1B, $08, $09, " ", "'", $8D, $8A  ' 28-2F
-                byte    "+", $A3, $97, $95, $85, "\", ",", "."  ' 30-37
-                byte    "-", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
-                byte    $00, $00, $00, $00, "/", "+", "-", "+"  ' 50-57
-                byte    $0D, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
-                byte    $00, $00, $00, $00, "<", $00, $00, $00  ' 60-67
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
-
-map_it_shift    byte    $00, $00, $00, $00, "A", "B", "C", "D"  ' 00-07
-                byte    "E", "F", "G", "H", "I", "J", "K", "L"  ' 08-0F
-                byte    "M", "N", "O", "P", "Q", "R", "S", "T"  ' 10-17
-                byte    "U", "V", "W", "X", "Y", "Z", "!", $22  ' 18-1F
-                byte    $9C, "$", "%", "&", "/", "(", ")", "="  ' 20-27
-                byte    $0D, $1B, $08, $09, " ", "?", "^", $82  ' 28-2F
-                byte    "*", $15, $15, $87, $F8, "|", ";", ":"  ' 30-37
-                byte    "_", $00, $00, $00, $00, $00, $00, $00  ' 38-3F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
-                byte    $0D, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
-                byte    $00, $00, $00, $00, ">", $00, $00, $00  ' 60-67
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
-
-map_it_altgr    byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 00-07
-                byte    $EE, $00, $00, $00, $00, $00, $00, $00  ' 08-0F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 10-17
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 18-1F
-                byte    $00, $00, $80, $00, $00, $00, $00, $00  ' 20-27
-                byte    $00, $00, $00, $00, $00, $00, $7E, "["  ' 28-2F
-                byte    "]", $00, $00, "@", "#", $00, $00, $00  ' 30-37
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 38-3F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 60-67
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
-
-map_it_shift_altgr
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 00-07
-                byte    $EE, $00, $00, $00, $00, $00, $00, $00  ' 08-0F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 10-17
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 18-1F
-                byte    $00, $00, $80, $00, $00, $00, $00, $00  ' 20-27
-                byte    $00, $00, $00, $00, $00, $00, $00, "{"  ' 28-2F
-                byte    "}", $00, $00, $00, $00, $00, $00, $00  ' 30-37
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 38-3F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 40-47
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 48-4F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 50-57
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 58-5F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 60-67
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 68-6F
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 70-77
-                byte    $00, $00, $00, $00, $00, $00, $00, $00  ' 78-7F
 
 CON ' License
 {{

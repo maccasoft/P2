@@ -1795,14 +1795,12 @@ hkbd_compare
         if_z    cmp     htmp1, htmp2    wz
         if_z    ret
 
+                mov     hpar1, #0
                 rdbyte  hpar2, kb_cur_report_p
                 rdbyte  htmp, kb_pre_report_p
                 cmp     hpar2, htmp     wz
-        if_z    jmp     #.release
-
-                mov     hpar1, hpar2            ' shift status update
-                shl     hpar1, #16
-                debug(uhex_long(hpar1))
+        if_nz   modc    _clr    wc
+        if_nz   call    #hkbd_translate
 
 .release        modc    _set    wc
                 mov     ptra, ##@kbPreReport+2
