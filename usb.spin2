@@ -2128,7 +2128,7 @@ hpad_xinput
                 signx   retval, #15
                 setword hidr_axis, retval, #0
                 bith    hidr_flags, #HID_AXIS_X
-                rdword  retval, ptrb[3]     ' Y = left stick Y (inverted)
+                rdword  retval, ptrb[4]     ' Y = left stick Y (inverted)
                 not     retval
                 signx   retval, #15
                 setword hidr_axis, retval, #1
