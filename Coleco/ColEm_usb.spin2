@@ -26,29 +26,24 @@ CON
     AUDIO_LEFT_PIN  = 38
     AUDIO_RIGHT_PIN = 39
 
-DAT             ' Startup and USB keyboard driver
+DAT             ' Startup
                 org     $000
 
-usb_host_start
                 asmclk
                 drvl    #56
                 drvl    #57
-
-                mov     hcog_base_addr, ptrb
-
-                add     ptrb, ##@hlut_start - @usb_host_start
-                setq2   #512-1
-                rdlong  0, ptrb
 
                 rep     @.lockmadness,#16
                 locknew pb
                 nop
 .lockmadness
 
-                coginit #1, ##@zk_cogbase       'start Z80 on cog #1
-                coginit #2, ##@tms_driver       'start TMS9918 on cog #2
-                coginit #3, ##@psg_driver       'start SN76489 on cog #3
-                jmp     #\usb_host_init         'cog #0 (this) USB host
+                coginit #5, ##@psg_driver   ' start SN76489 on cog #5
+                coginit #4, ##@tms_driver   ' start TMS9918 on cog #4
+                coginit #1, ##@usb_host_start ' start USB driver on cog #1
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
+
+                orgh
 
 ' Controller status
 
@@ -77,6 +72,22 @@ psg_registers
                 long    $0F     ' 05  3..0 channel 3 attunation
                 long    $00     ' 06  4..0 noise control
                 long    $0F     ' 07  7..0 noise attunation
+
+DAT             ' USB Host keyboard driver
+                org     $000
+
+usb_host_start
+                asmclk
+                drvl    #56
+                drvl    #57
+
+                mov     hcog_base_addr, ptrb
+
+                add     ptrb, ##@hlut_start - @usb_host_start
+                setq2   #512-1
+                rdlong  0, ptrb
+
+                jmp     #\usb_host_init
 
 '------------------------------------------------------------------------------
 ' Post interrupt IN transactions at configured intervals.

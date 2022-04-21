@@ -35,10 +35,12 @@ DAT             ' Startup
                 nop
 .lockmadness
 
-                coginit #1, ##@zk_cogbase       'start Z80 on cog #1
-                coginit #2, ##@tms_driver       'start TMS9918 on cog #2
-                coginit #3, ##@psg_driver       'start SN76489 on cog #3
-                jmp     #\ps2_driver            'cog #0 (this) PS/2 keyboard
+                coginit #5, ##@psg_driver   ' start SN76489 on cog #5
+                coginit #4, ##@tms_driver   ' start TMS9918 on cog #4
+                coginit #3, ##@ps2_driver   ' start PS/2 driver on cog #3
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
+
+                orgh
 
 ' Controller status
 
@@ -68,9 +70,9 @@ psg_registers
                 long    $00     ' 06  4..0 noise control
                 long    $0F     ' 07  7..0 noise attunation
 
-'
-' PS/2 Keyboard river
-'
+DAT ' PS/2 Keyboard driver
+                org     $000
+
 ps2_driver
                 fltl    #PS2_DATA_PIN
                 fltl    #PS2_CLOCK_PIN

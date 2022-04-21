@@ -24,40 +24,29 @@ CON
 DAT             ' Startup
                 org     $000
 
-usb_host_start
                 asmclk
                 drvl    #56
                 drvl    #57
 
-                mov     hcog_base_addr, ptrb
-
-                add     ptrb, ##@hlut_start - @usb_host_start
-                setq2   #512-1
-                rdlong  0, ptrb
-
-sys_reset
-                cogid   #2      wc          ' check if user reset
-                cogstop #2
-
                 mov     pa, ##48*1024/4
                 mov     ptra, ##@z80_4000   ' initialize memory
-.l1             wrlong  #0, ptra++          '   0 if user reset
+.l1             wrlong  #0, ptra++
                 djnz    pa, #.l1
 
-        if_nc   coginit #1, ##@video_driver ' start video on cog #1
-        if_nc   waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                coginit #4, ##@video_driver ' start video on cog #4
+                coginit #1, ##@usb_host_start ' start USB driver on cog #1
 
-                coginit #2, ##@zk_cogbase   ' start Z80 on cog #2
+                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
 
-                jmp     #\usb_host_init         'cog #0 (this) USB host
+                orgh
 
 ' Shared variables
 
 zk_nmi_mem      long    0                   ' bit 8 = NMI
 zk_irq_mem      long    0                   ' bit 8 = IRQ, 7..0 vector
 
-zx_border       byte    $00
-                byte    $00[3]
+zx_border       byte    $00                 ' screen border
 
                                             ' ROW  D4 D3 D2 D1 D0
 zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
@@ -68,6 +57,18 @@ zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
                                             '  5   Y  U  I  O  P
                                             '  6   H  J  K  L  ENTER
                                             '  7   B  N  M  SS SPACE
+
+DAT             ' USB Host driver
+                org     $000
+
+usb_host_start
+                mov     hcog_base_addr, ptrb
+
+                add     ptrb, ##@hlut_start - @usb_host_start
+                setq2   #512-1
+                rdlong  0, ptrb
+
+                jmp     #\usb_host_init
 
 '------------------------------------------------------------------------------
 ' SETUP transaction. The mechanics of SETUP are identical to OUT, but it's
@@ -1811,6 +1812,17 @@ _copy           mov     ptra, ##@kbCurReport
         if_nz   jmp     #\sys_reset             ' jump to system reset
 
                 ret
+
+sys_reset
+                cogstop #0                  ' stop Z80
+
+                mov     pa, ##48*1024/4
+                mov     ptra, ##@z80_4000   ' initialize memory
+.l1             wrlong  #0, ptra++          '   0 if user reset
+                djnz    pa, #.l1
+
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0
+                ret     wcz
 
 ' On entry:
 '   hpar1 - USB key code
@@ -3685,7 +3697,7 @@ vga_field       mov     ptra, zx_screen
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
 
-                cogatn  #1 << 2             ' vsync atn to Z80 cog (#2)
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
 
                 callpa  #33, #.blank        ' front porch
 
@@ -3849,7 +3861,7 @@ cvbs_field
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
 
-                cogatn  #1 << 2             ' vsync atn to Z80 cog (#2)
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
 
                 callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
 

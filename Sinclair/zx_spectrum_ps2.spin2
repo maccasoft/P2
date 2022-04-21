@@ -28,44 +28,39 @@ DAT             ' Startup
                 drvl    #56
                 drvl    #57
 
-sys_reset
-                cogid   #2      wc          ' check if user reset
-                cogstop #2
-
                 mov     pa, ##48*1024/4
                 mov     ptra, ##@z80_4000   ' initialize memory
-.l1             wrlong  #0, ptra++          '   0 if user reset
+.l1             wrlong  #0, ptra++
                 djnz    pa, #.l1
 
-        if_nc   coginit #1, ##@video_driver ' start video on cog #1
-        if_nc   waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                coginit #4, ##@video_driver ' start video on cog #4
+                coginit #3, ##@ps2_driver   ' start PS/2 driver on cog #3
 
-                coginit #2, ##@zk_cogbase   ' start Z80 on cog #2
+                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
 
-                jmp     #\ps2_driver        ' cog #0 (this) PS/2 keyboard
+                orgh
 
 ' Shared variables
 
 zk_nmi_mem      long    0                   ' bit 8 = NMI
 zk_irq_mem      long    0                   ' bit 8 = IRQ, 7..0 vector
 
-zx_border       byte    $00
-                byte    $00[3]
+zx_border       byte    $00                 ' screen border
 
-                                            '     D4 D3 D2 D1 D0
-                                            '
-zx_keys         byte    $FF[8]              ' 000  V  C  X  Z  CS
-                                            ' 001  G  F  D  S  A
-                                            ' 010  T  R  E  W  Q
-                                            ' 011  5  4  3  2  1
-                                            ' 100  6  7  8  9  0
-                                            ' 101  Y  U  I  O  P
-                                            ' 110  H  J  K  L  ENTER
-                                            ' 111  B  N  M SS  SPACE
+                                            ' ROW  D4 D3 D2 D1 D0
+zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
+                                            '  1   G  F  D  S  A
+                                            '  2   T  R  E  W  Q
+                                            '  3   5  4  3  2  1
+                                            '  4   6  7  8  9  0
+                                            '  5   Y  U  I  O  P
+                                            '  6   H  J  K  L  ENTER
+                                            '  7   B  N  M  SS SPACE
 
-'
-' PS/2 Keyboard river
-'
+DAT             ' PS/2 Keyboard driver
+                org     $000
+
 ps2_driver
                 fltl    #PS2_DATA_PIN
                 fltl    #PS2_CLOCK_PIN
@@ -286,6 +281,16 @@ ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
         if_nc   jmp     #ps2_reset          ' |
         _ret_   and     ps2_data, #$FF      ' ok
 
+sys_reset
+                cogstop #0                  ' stop Z80
+
+                mov     pa, ##48*1024/4
+                mov     ptra, ##@z80_4000   ' initialize memory
+.l1             wrlong  #0, ptra++          '   0 if user reset
+                djnz    pa, #.l1
+
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0
+                jmp     #ps2_loop
 
 ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
 ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
@@ -1793,7 +1798,7 @@ vga_field       mov     ptra, zx_screen
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
 
-                cogatn  #1 << 2             ' vsync atn to Z80 cog (#2)
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
 
                 callpa  #33, #.blank        ' front porch
 
@@ -1957,7 +1962,7 @@ cvbs_field
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
 
-                cogatn  #1 << 2             ' vsync atn to Z80 cog (#2)
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
 
                 callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
 

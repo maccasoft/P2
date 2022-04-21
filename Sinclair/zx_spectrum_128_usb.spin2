@@ -29,43 +29,25 @@ CON
 DAT             ' Startup
                 org     $000
 
-usb_host_start
                 asmclk
                 drvl    #56
                 drvl    #57
-
-                mov     hcog_base_addr, ptrb
-
-                add     ptrb, ##@hlut_start - @usb_host_start
-                setq2   #512-1
-                rdlong  0, ptrb
-
-sys_reset
-                cogid   #2      wc          ' check if user reset
-                cogstop #2
-
-                mov     pa, #7
-                mov     ptra, #@ay_registers ' initialize psg registers
-.l1             wrword  #0, ptra++
-                djnz    pa, #.l1
 
                 mov     pa, ##128*1024/4
                 mov     ptra, ##@zx_ram     ' initialize memory
 .l2             wrlong  #0, ptra++
                 djnz    pa, #.l2
 
-                wrlong  ##@zx_ram + ($4000 * 5), #@zx_screen
-                wrlong  ##@zx_ram + ($4000 * 5) + (32 * 192), #@zx_attribute
-
-        if_nc   coginit #1, ##@video_driver ' start video on cog #1
-
                 setq    #@ay_registers
-                coginit #2, ##@ay_emu       ' start AY-3-8912 on cog #2
+                coginit #5, ##@ay_emu       ' start AY-3-8912 on cog #5
 
-        if_nc   waitx   ##_CLKFREQ          ' delay to allow monitor to settle
-                coginit #3, ##@zk_cogbase   ' start Z80 on cog #3
+                coginit #4, ##@video_driver ' start video on cog #4
+                coginit #1, ##@usb_host_start ' start USB driver on cog #1
 
-                jmp     #\usb_host_init         'cog #0 (this) USB host
+                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
+
+                orgh
 
 ' Shared variables
 
@@ -75,7 +57,7 @@ zk_irq_mem      long    0                   ' bit 8 = IRQ, 7..0 vector
 zx_screen       long    @zx_ram + ($4000 * 5)
 zx_attribute    long    @zx_ram + ($4000 * 5) + (32 * 192)
 
-zx_border       long    $00
+zx_border       byte    $00                 ' screen border
 
                                             ' ROW  D4 D3 D2 D1 D0
 zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
@@ -90,6 +72,18 @@ zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
 ay_registers    byte    $00[14]
                 byte    $FF ' port A
                 byte    $FF ' port B
+
+DAT             ' USB Host driver
+                org     $000
+
+usb_host_start
+                mov     hcog_base_addr, ptrb
+
+                add     ptrb, ##@hlut_start - @usb_host_start
+                setq2   #512-1
+                rdlong  0, ptrb
+
+                jmp     #\usb_host_init         'cog #0 (this) USB host
 
 '------------------------------------------------------------------------------
 ' SETUP transaction. The mechanics of SETUP are identical to OUT, but it's
@@ -1833,6 +1827,25 @@ _copy           mov     ptra, ##@kbCurReport
         if_nz   jmp     #\sys_reset             ' jump to system reset
 
                 ret
+
+sys_reset
+                cogstop #0                  ' stop Z80
+
+                mov     pa, #7
+                mov     ptra, #@ay_registers ' initialize psg registers
+.l1             wrword  #0, ptra++
+                djnz    pa, #.l1
+
+                mov     pa, ##128*1024/4
+                mov     ptra, ##@zx_ram     ' initialize memory
+.l2             wrlong  #0, ptra++
+                djnz    pa, #.l2
+
+                wrlong  ##@zx_ram + ($4000 * 5), #@zx_screen
+                wrlong  ##@zx_ram + ($4000 * 5) + (32 * 192), #@zx_attribute
+
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0
+                ret     wcz
 
 ' On entry:
 '   hpar1 - USB key code
@@ -3733,7 +3746,7 @@ vga_field
                 callpa  #2, #.blank
                 drvnot  vga_pn              ' vertical sync off
 
-                cogatn  #1 << 3             ' vsync atn to Z80 cog (#3)
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
 
                 callpa  #33, #.blank        ' front porch
 
@@ -3897,7 +3910,7 @@ cvbs_field
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
                 callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
 
-                cogatn  #1 << 3             ' vsync atn to Z80 cog (#3)
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
 
                 callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
 

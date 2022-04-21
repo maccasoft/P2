@@ -26,70 +26,6 @@ CON
     TAPE_EAR = 1   ' IN
     TAPE_REM = 2   ' OUT (motor)
 
-DAT             ' Startup
-                org     $000
-
-usb_host_start
-                asmclk
-                drvl    #56
-                drvl    #57
-
-                mov     hcog_base_addr, ptrb
-
-                add     ptrb, ##@hlut_start - @usb_host_start
-                setq2   #512-1
-                rdlong  0, ptrb
-
-                rep     @.lockmadness,#16   ' allocate all locks, to be safe...
-                locknew pb
-                nop
-.lockmadness
-
-sys_reset
-                cogid   #3      wc          ' check if user reset
-                cogstop #3
-
-        if_nc   coginit #1, ##@tms_driver   ' start video on cog #1
-
-                setq    #@psg_regs
-                coginit #2, ##@ay_emu       ' start AY-3-8912 on cog #2
-
-                coginit #3, ##@zk_cogbase   ' start Z80 on cog #3
-
-                jmp     #\usb_host_init         'cog #0 (this) USB host
-
-' Shared variables
-
-zk_irq_mem      long    $0_FF               ' bit 8 = IRQ, 7..0 vector
-
-msx_keys        byte    $FF[16]
-
-' TMS9918 registers
-
-tms_regs        byte    $00, $00, $00, $00, $00, $00, $00, $00
-tms_status      long    $0_00   ' bit 8 = VDP_IRQ, 7..0 = VDP status
-
-' AY-3-8910 registers
-
-psg_regs        byte    $00[14]
-                byte    $FF ' port A
-                byte    $FF ' port B
-
-' Keyboard Matrix
-'
-'            bit 7       bit 6   bit 5   bit 4   bit 3   bit 2   bit 1   bit 0
-'    row 0       7 &     6 ^     5 %     4 $     3 #     2 @     1 !     0 )
-'    row 1       ; :     ] }     [ {     \ ¦     = +     - _     9 (     8 *
-'    row 2       B       A       DEAD    / ?     . >     , <     ` ~     ' "
-'    row 3       J       I       H       G       F       E       D       C
-'    row 4       R       Q       P       O       N       M       L       K
-'    row 5       Z       Y       X       W       V       U       T       S
-'    row 6       F3      F2      F1      CODE    CAPS    GRAPH   CTRL    SHIFT
-'    row 7       RET     SELECT  BS      STOP    TAB     ESC     F5      F4
-'    row 8       →       ↓       ↑       ←       DEL     INS     HOME    SPACE
-'    row 9       NUM4    NUM3    NUM2    NUM1    NUM0    NUM/    NUM+    NUM*
-'    row 10      NUM.    NUM,    NUM-    NUM9    NUM8    NUM7    NUM6    NUM5
-'
 ' PS/2 Keyboard
 '
 '  +-------+--------+--------+--------+--------+---------+--------+--------+
@@ -113,6 +49,58 @@ psg_regs        byte    $00[14]
 '    Numeric Keypad
 '
 '  WIN+WIN = RESET
+
+DAT             ' Startup
+                org     $000
+
+                asmclk
+                drvl    #56
+                drvl    #57
+
+                rep     @.lockmadness,#16   ' allocate all locks, to be safe...
+                locknew pb
+                nop
+.lockmadness
+
+                setq    #@psg_regs
+                coginit #5, ##@ay_emu       ' start AY-3-8912 on cog #5
+
+                coginit #4, ##@tms_driver   ' start video on cog #4
+                coginit #1, ##@usb_host_start ' start USB driver on cog #1
+
+                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
+
+                orgh
+
+' Shared variables
+
+zk_irq_mem      long    $0_FF               ' bit 8 = IRQ, 7..0 vector
+
+msx_keys        byte    $FF[16]
+
+' TMS9918 registers
+
+tms_regs        byte    $00, $00, $00, $00, $00, $00, $00, $00
+tms_status      long    $0_00   ' bit 8 = VDP_IRQ, 7..0 = VDP status
+
+' AY-3-8910 registers
+
+psg_regs        byte    $00[14]
+                byte    $FF ' port A
+                byte    $FF ' port B
+
+DAT             ' USB Host driver
+                org     $000
+
+usb_host_start
+                mov     hcog_base_addr, ptrb
+
+                add     ptrb, ##@hlut_start - @usb_host_start
+                setq2   #512-1
+                rdlong  0, ptrb
+
+                jmp     #\usb_host_init         'cog #0 (this) USB host
 
 '------------------------------------------------------------------------------
 ' SETUP transaction. The mechanics of SETUP are identical to OUT, but it's
@@ -1857,6 +1845,22 @@ _copy           mov     ptra, ##@kbCurReport
 
                 ret
 
+sys_reset
+                cogstop #0                  ' stop Z80
+
+                mov     pa, #7
+                mov     ptra, #@psg_regs    ' initialize psg registers
+.l1             wrword  #0, ptra++
+                djnz    pa, #.l1
+
+                mov     pa, ##64*1024/4
+                mov     ptra, ##@msx_slot3  ' initialize memory
+.l2             wrlong  #0, ptra++
+                djnz    pa, #.l2
+
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0
+                ret     wcz
+
 ' On entry:
 '   hpar1 - USB key code
 '   hpar2 - Shift state
@@ -1885,7 +1889,21 @@ msx_set_key
                 muxc    htmp, hpar1
         _ret_   wrbyte  htmp, ptrb
 
-' Translation table from USB key code to MSX keyboard matrix
+' Keyboard Matrix
+'
+'            bit 7       bit 6   bit 5   bit 4   bit 3   bit 2   bit 1   bit 0
+'    row 0       7 &     6 ^     5 %     4 $     3 #     2 @     1 !     0 )
+'    row 1       ; :     ] }     [ {     \ ¦     = +     - _     9 (     8 *
+'    row 2       B       A       DEAD    / ?     . >     , <     ` ~     ' "
+'    row 3       J       I       H       G       F       E       D       C
+'    row 4       R       Q       P       O       N       M       L       K
+'    row 5       Z       Y       X       W       V       U       T       S
+'    row 6       F3      F2      F1      CODE    CAPS    GRAPH   CTRL    SHIFT
+'    row 7       RET     SELECT  BS      STOP    TAB     ESC     F5      F4
+'    row 8       →       ↓       ↑       ←       DEL     INS     HOME    SPACE
+'    row 9       NUM4    NUM3    NUM2    NUM1    NUM0    NUM/    NUM+    NUM*
+'    row 10      NUM.    NUM,    NUM-    NUM9    NUM8    NUM7    NUM6    NUM5
+
 usb_table
                 word                       0  '00
                 word                       0  '01
@@ -4887,8 +4905,8 @@ psg_read
 DAT             ' Z80 Memory Space
                 orgh
 
-msx_slot0       'file    "cbios_main_msx1.rom"
-                file    "msx.rom"
+msx_slot0       file    "cbios_main_msx1.rom"
+                'file    "msx.rom"
                 file    "cbios_logo_msx1.rom"
 
 msx_slot1

@@ -27,6 +27,30 @@ CON
     TAPE_EAR = 1   ' IN
     TAPE_REM = 2   ' OUT (motor)
 
+' PS/2 Keyboard
+'
+'  +-------+--------+--------+--------+--------+---------+--------+--------+
+'  | ESC   |  F1-6  |  F2-7  |  F3-8  |  F4-9  |  F-5-10 | SELECT |  STOP  |
+'  +-----+-+---+----++-----+-+---+----++-----+-+---+-----+-----+--+--+-----+-----+-----------+
+'  | ` ~ | 1 ! | 2 @ | 3 # | 4 $ | 5 % | 6 ^ | 7 & | 8 * | 9 ( | 0 ) | - _ | = + |    BS     |
+'  +-----+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--------+
+'  | TAB    |  Q  |  W  |  E  |  R  |  T  |  Y  |  U  |  I  |  O  |  P  | [ { | ] } |        |
+'  +--------++----++----++----++----++----++----++----++----++----++----++----++----++       |
+'            |  A  |  S  |  D  |  F  |  G  |  H  |  J  |  K  |  L  | ; : | ' " | \ ¦ | ENTER |
+'  +-------+-++----++----++----++----++----++----++----++----++----++----++-------+--+-------+
+'  | SHIFT |  |  Z  |  X  |  C  |  V  |  B  |  N  |  M  | , < | . > | / ? |      SHIFT       |
+'  +-------+--+-+---+---+-+-----+-----+-----+-----+-----+-----+-+---+--+--+----+------+------+
+'  | CTRL  |    | GRAPH |                 SPACE                 | CODE |       | DEAD | CTRL |
+'  +-------+----+-------+---------------------------------------+------+-------+------+------+
+'
+'  Other mapped keys:
+'
+'    HOME/INS/DEL
+'    UP/DOWN/LEFT/RIGHT Arrows
+'    Numeric Keypad
+'
+'  WIN+WIN = RESET
+
 DAT             ' Startup
                 org     $000
 
@@ -39,18 +63,16 @@ DAT             ' Startup
                 nop
 .lockmadness
 
-sys_reset
-                cogid   #3      wc          ' check if user reset
-                cogstop #3
-
-        if_nc   coginit #1, ##@tms_driver   ' start video on cog #1
-
                 setq    #@psg_regs
-                coginit #2, ##@ay_emu       ' start AY-3-8912 on cog #2
+                coginit #5, ##@ay_emu       ' start AY-3-8912 on cog #5
 
-                coginit #3, ##@zk_cogbase   ' start Z80 on cog #3
+                coginit #4, ##@tms_driver   ' start video on cog #4
+                coginit #3, ##@ps2_driver   ' start PS/2 driver on cog #3
 
-                jmp     #\ps2_driver        ' cog #0 (this) PS/2 keyboard
+                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
+
+                orgh
 
 ' Shared variables
 
@@ -69,9 +91,9 @@ psg_regs        byte    $00[14]
                 byte    $FF ' port A
                 byte    $FF ' port B
 
-'
-' PS/2 Keyboard river
-'
+DAT             ' PS/2 Keyboard driver
+                org     $000
+
 ps2_driver
                 fltl    #PS2_DATA_PIN
                 fltl    #PS2_CLOCK_PIN
@@ -272,6 +294,21 @@ ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
         if_nc   jmp     #ps2_reset          ' |
         _ret_   and     ps2_data, #$FF      ' ok
 
+sys_reset
+                cogstop #0                  ' stop Z80
+
+                mov     pa, #7
+                mov     ptra, #@psg_regs    ' initialize psg registers
+.l1             wrword  #0, ptra++
+                djnz    pa, #.l1
+
+                mov     pa, ##64*1024/4
+                mov     ptra, ##@msx_slot3  ' initialize memory
+.l2             wrlong  #0, ptra++
+                djnz    pa, #.l2
+
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0
+                jmp     #ps2_loop
 
 ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
 ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
@@ -308,33 +345,8 @@ DAT             ' PS/2 Lookup table
 '    row 8       →       ↓       ↑       ←       DEL     INS     HOME    SPACE
 '    row 9       NUM4    NUM3    NUM2    NUM1    NUM0    NUM/    NUM+    NUM*
 '    row 10      NUM.    NUM,    NUM-    NUM9    NUM8    NUM7    NUM6    NUM5
-'
-' PS/2 Keyboard
-'
-'  +-------+--------+--------+--------+--------+---------+--------+--------+
-'  | ESC   |  F1-6  |  F2-7  |  F3-8  |  F4-9  |  F-5-10 | SELECT |  STOP  |
-'  +-----+-+---+----++-----+-+---+----++-----+-+---+-----+-----+--+--+-----+-----+-----------+
-'  | ` ~ | 1 ! | 2 @ | 3 # | 4 $ | 5 % | 6 ^ | 7 & | 8 * | 9 ( | 0 ) | - _ | = + |    BS     |
-'  +-----+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--------+
-'  | TAB    |  Q  |  W  |  E  |  R  |  T  |  Y  |  U  |  I  |  O  |  P  | [ { | ] } |        |
-'  +--------++----++----++----++----++----++----++----++----++----++----++----++----++       |
-'            |  A  |  S  |  D  |  F  |  G  |  H  |  J  |  K  |  L  | ; : | ' " | \ ¦ | ENTER |
-'  +-------+-++----++----++----++----++----++----++----++----++----++----++-------+--+-------+
-'  | SHIFT |  |  Z  |  X  |  C  |  V  |  B  |  N  |  M  | , < | . > | / ? |      SHIFT       |
-'  +-------+--+-+---+---+-+-----+-----+-----+-----+-----+-----+-+---+--+--+----+------+------+
-'  | CTRL  |    | GRAPH |                 SPACE                 | CODE |       | DEAD | CTRL |
-'  +-------+----+-------+---------------------------------------+------+-------+------+------+
-'
-'  Other mapped keys:
-'
-'    HOME/INS/DEL
-'    UP/DOWN/LEFT/RIGHT Arrows
-'    Numeric Keypad
-'
-'  WIN+WIN = RESET
 
 '                         ROW B7....B0    ROW B7....B0
-
 ps2_table       word    %0000_00000000, %0000_00000000  '00
                 word    %0000_00000000, %0000_00000000  '01    F9
                 word    %0000_00000000, %0000_00000000  '02
