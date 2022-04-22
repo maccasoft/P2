@@ -251,8 +251,7 @@ utx_data
 '------------------------------------------------------------------------------
 urx_data
                 mov     htmp2, pb
-                loc     pb, #@urx_buff - @usb_host_start
-                add     pb, hcog_base_addr
+                mov     pb, urx_buff_p
                 wrfast  ##$80000000, pb                 ' Use hub RAM FIFO interface to buffer bytes received
                 mov     pb, htmp2
                 bmask   crc, #15                        ' Prime the CRC16 pump
@@ -547,6 +546,23 @@ poll_gamepad
 cmd_data        long    0
 usb_err_code    long    ERR_NONE
 
+' Parameters block assigned at cog startup
+dm              long    USB_BASE_PIN + 2    ' Client defines the basepin for four consecutive USB port pins
+dp              long    USB_BASE_PIN + 3
+usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
+host_active_led long    57                  ' Client defines the LED pin# for host bus activity
+host_error_led  long    56                  ' Client defines the LED pin# to light on error
+kb_cur_report_p long    @kb_cur_report
+kb_pre_report_p long    @kb_pre_report
+gp_descr_p      long    @gp_descr
+gp_cur_report_p long    @gp_cur_report
+gp_pre_report_p long    @gp_pre_report
+urx_buff_p      long    @urx_buff
+dev_desc_buff_p long    @dev_desc_buff
+con_desc_buff_p long    @con_desc_buff
+cache_start_p   long    @usb_cache_start
+cache_end_p     long    @usb_cache_end
+
 hdev_init_start
 kb_intf_num     long    0
 kb_interval     long    0
@@ -554,7 +570,6 @@ kb_in_max_pkt   long    0
 kb_next_datax   long    0
 kb_max_index    long    0
 kb_led_states   long    0
-
 gp_intf_num     long    0
 gp_interval     long    0
 gp_in_max_pkt   long    0
@@ -562,13 +577,6 @@ gp_next_datax   long    0
 gp_max_index    long    0
 gp_descr_len    long    0
 hdev_init_end
-
-kb_cur_report_p long    @kbCurReport
-kb_pre_report_p long    @kbPreReport
-
-gp_descr        long    @gpDescriptor
-gp_cur_report_p long    @gpCurReport
-gp_pre_report_p long    @gpPreReport
 
 hidr_start
 hidr_id         long    0
@@ -589,11 +597,6 @@ hidr_end
 ' Initialized at cog startup:
 save_sysclk     long    0         ' Save the current sysclock as the client may change it
 hcog_base_addr  long    0         ' This object's start address in hub, read from PTRB at cog creation
-dm              long    USB_BASE_PIN + 2 ' Client defines the basepin for four consecutive USB port pins
-dp              long    USB_BASE_PIN + 3
-usb_event_pin   long    USB_BASE_PIN ' Host event reporting uses a long repository smart pin
-host_active_led long    57 ' USB_BASE_PIN ' Client defines the LED pin# for host bus activity
-host_error_led  long    56        ' Client defines the LED pin# to light on error
 iframe_ct_new   long    0
 iframe_ct_base  long    0
 p2rev_val       long    P2RevB
@@ -768,8 +771,7 @@ on_connect
                 loc     ptra, #@get_dev_desc - @usb_host_start ' Hub start address of GetDeviceDescriptor SETUP struct
                 add     ptra, hcog_base_addr
                 wrword  #$40, ptra[wLength]             ' Request IN data stage max of 64 bytes will test actual < requested logic
-                loc     pb, #@dev_desc_buff - @usb_host_start ' Start address of DeviceDescriptor struct for IN data
-                add     pb, hcog_base_addr
+                mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct for IN data
                 call    #control_read                   ' Execute GetDeviceDescriptor()
                 cmp     retval, #PID_ACK        wz
         if_z    jmp     #.get_dev_desc
@@ -780,8 +782,7 @@ on_connect
                 call    #reset                          ' Try another reset to see if the device responds
                 jmp     #.retry
 .get_dev_desc
-                loc     pa, #@dev_desc_buff - @usb_host_start
-                add     pa, hcog_base_addr              ' Fetch the max packet size for control transactions from the
+                mov     pa, dev_desc_buff_p             ' Fetch the max packet size for control transactions from the
                 add     pa, #DEV_bMaxPktSize0           ' appropriate Device Descriptor struct member offset
                 rdbyte  max_pkt_size, pa
                 mov     hctwait, _1ms_
@@ -799,29 +800,25 @@ on_connect
                 call    #calc_crc5
                 loc     ptra, #@get_dev_desc - @usb_host_start ' Repeat SETUP for GetDeviceDescriptor()
                 add     ptra, hcog_base_addr
-                loc     pb, #@dev_desc_buff - @usb_host_start ' Start address of DeviceDescriptor struct has exact descriptor length
-                add     pb, hcog_base_addr
+                mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct has exact descriptor length
                 rdbyte  total_data, pb
                 wrword  total_data, ptra[wLength]       ' Assign it to the SETUP wLength struct member
                 call    #control_read                   ' Execute GetDeviceDescriptor() again, but with updated data length
                 cmp     retval, #PID_ACK        wz
         if_nz   ret                                     ' Back to idle if not ACK
                 mov     hctrl_ep_addr, ep_addr_pid      ' Make the device control address and endpoint official
-                loc     ptra, #@dev_desc_buff - @usb_host_start ' Do the same with the control max packet size
-                add     ptra, hcog_base_addr
+                mov     ptra, dev_desc_buff_p           ' Do the same with the control max packet size
                 rdbyte  hctrl_max_pkt, ptra[DEV_bMaxPktSize0]
                 mov     hctwait, _500us_
                 call    #poll_waitx
                 loc     ptra, #@get_config_desc - @usb_host_start ' Hub start address of GetConfigurationDescriptor SETUP struct
                 add     ptra, hcog_base_addr
                 wrword  #$ff, ptra[wLength]             ' Maximum DATAx bytes for receive to the SETUP struct
-                loc     pb, #@con_desc_buff - @usb_host_start ' Hub start address of ConfigurationDescriptor structure
-                add     pb, hcog_base_addr
+                mov     pb, con_desc_buff_p             ' Hub start address of ConfigurationDescriptor structure
                 call    #control_read                   ' Execute GetConfigurationDescriptor()
                 cmp     retval, #PID_ACK        wz
         if_nz   ret
-                loc     ptra, #@con_desc_buff - @usb_host_start ' Check the config descriptor struct for expected data
-                add     ptra, hcog_base_addr
+                mov     ptra, con_desc_buff_p           ' Check the config descriptor struct for expected data
                 mov     hconfig_base, ptra              ' Will need this for configuration
                 rdbyte  hr0, ptra++                     ' Config.bLength is at offset zero, expect >= CON_DESC_LEN
                 rdbyte  hr1, ptra++                     ' Config.bDescType is next member, expect = TYPE_CONFIG constant
@@ -890,8 +887,7 @@ control_read
 .commit
                 cmp     pkt_cnt, #0             wz      ' Empty pkt means previous pkt was max_pkt_len
         if_z    jmp     #.pre_status                    ' and also end-of-data
-                loc     ptra, #@urx_buff - @usb_host_start ' Copy DATAx in rx buffer to dest struct
-                add     ptra, hcog_base_addr
+                mov     ptra, urx_buff_p                ' Copy DATAx in rx buffer to dest struct
                 mov     hr0, pkt_cnt
                 call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
                 add     stage_data, pkt_cnt             ' Update bytes received on commit
@@ -1036,8 +1032,7 @@ do_int_in
 .commit
                 cmp     pkt_cnt, #0             wz
         if_z    jmp     #.post_ret                      ' Skip copy if it's an empty packet
-                loc     ptra, #@urx_buff - @usb_host_start ' Copy the rx buffer
-                add     ptra, hcog_base_addr
+                mov     ptra, urx_buff_p                ' Copy the rx buffer
                 mov     pb, hpar2                       ' to the destination buffer
                 mov     hr0, pkt_cnt
                 call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
@@ -1442,7 +1437,7 @@ hinit_usb_timings
 hparse_con_desc
                 call    #init_kbdm_data                 ' Reset device data area to start-up values
 
-                loc     ptrb, #dev_desc_buff
+                mov     ptrb, dev_desc_buff_p
                 rdword  htmp, ptrb[4]       ' idVendor
                 rdword  hdev_id, ptrb[5]    ' idProduct
                 setword hdev_id, htmp, #1
@@ -1643,7 +1638,7 @@ hset_config
 .noxinput
                 loc     ptra, #get_desc                 ' Hub start address of GetConfigurationDescriptor SETUP struct
                 wrword  #$ff, ptra[wLength]             ' Maximum DATAx bytes for receive to the SETUP struct
-                mov     pb, gp_descr                    ' Hub start address of ConfigurationDescriptor structure
+                mov     pb, gp_descr_p                  ' Hub start address of ConfigurationDescriptor structure
                 call    #control_read                   ' Execute GetConfigurationDescriptor()
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hpad_ep_addr, #0
@@ -1689,8 +1684,8 @@ init_kbdm_data
                 mov     hkbd_ep_addr, #0
                 mov     hpad_ep_addr, #0
 
-                loc     ptra, #usb_cache_start      ' Clear cached data buffers
-                loc     pa, #usb_cache_end
+                mov     ptra, cache_start_p         ' Clear cached data buffers
+                mov     pa, cache_end_p
 .loop
                 wrbyte  #0, ptra++
                 cmp     ptra, pa                wcz
@@ -1738,7 +1733,7 @@ hset_kbdled_report
                 wrword  ##(TYPE_OUTPUT << 8), ptra[wValue] ' Byte1 report type, byte0 reportID (0)
                 wrword  htmp, ptra[wIndex]
                 wrword  #KBD_OUT_RPT_LEN, ptra[wLength]
-                loc     pb, #urx_buff
+                mov     pb, urx_buff_p
                 wrbyte  kb_led_states, pb
                 jmp     #control_write                  ' Execute ControlWrite(SET_REPORT) and back to caller
 
@@ -1803,11 +1798,13 @@ hkbd_compare
         if_nz   call    #hkbd_translate
 
 .release        modc    _set    wc
-                mov     ptra, ##@kbPreReport+2
+                mov     ptra, kb_pre_report_p
+                add     ptra, #2
                 mov     pa, #6
 .rl1            rdbyte  hpar1, ptra++   wz
         if_z    jmp     #.rl3
-                mov     ptrb, ##@kbCurReport+2
+                mov     ptrb, kb_cur_report_p
+                add     ptrb, #2
                 mov     pb, #6
 .rl2            rdbyte  htmp, ptrb++
                 cmp     hpar1, htmp     wz
@@ -1820,11 +1817,13 @@ hkbd_compare
                 bith    hpar3, #31
 
 .press          modc    _clr    wc
-                mov     ptra, ##@kbCurReport+2
+                mov     ptra, kb_cur_report_p
+                add     ptra, #2
                 mov     pa, #6
 .pl1            rdbyte  hpar1, ptra++   wz
         if_z    jmp     #.pl3
-                mov     ptrb, ##@kbPreReport+2
+                mov     ptrb, kb_pre_report_p
+                add     ptrb, #2
                 mov     pb, #6
 .pl2            rdbyte  htmp, ptrb++
                 cmp     hpar1, htmp     wz
@@ -1833,8 +1832,8 @@ hkbd_compare
                 call    #\hkbd_translate
 .pl3            djnz    pa, #.pl1
 
-.copy           mov     ptra, ##@kbCurReport
-                mov     ptrb, ##@kbPreReport
+.copy           mov     ptra, kb_cur_report_p
+                mov     ptrb, kb_pre_report_p
                 rdlong  htmp, ptra++
                 wrlong  htmp, ptrb++
                 rdlong  htmp, ptra++
@@ -1961,7 +1960,7 @@ hid_decode
 '   ptrb - controller report
 '------------------------------------------------------------------------------
 hpad_hid
-                mov     ptra, gp_descr
+                mov     ptra, gp_descr_p
                 mov     pa, gp_descr_len
                 mov     hidr_usage, ##$76543210
 
@@ -2523,13 +2522,13 @@ xinp_rumble_cmd byte    $00, $08, $00
 usb_cache_start
 
 ' Keyboard report buffers
-kbCurReport     byte    0[KBD_IN_RPT_LEN]
-kbPreReport     byte    0[KBD_IN_RPT_LEN]
+kb_cur_report   byte    0[KBD_IN_RPT_LEN]
+kb_pre_report   byte    0[KBD_IN_RPT_LEN]
 
 ' Gamepad descriptor and report buffers
-gpDescriptor    byte    0[HID_DESCR_LEN]
-gpCurReport     byte    0[HID_IN_RPT_LEN]
-gpPreReport     byte    0[HID_IN_RPT_LEN]
+gp_descr        byte    0[HID_DESCR_LEN]
+gp_cur_report   byte    0[HID_IN_RPT_LEN]
+gp_pre_report   byte    0[HID_IN_RPT_LEN]
 
 usb_cache_end
 
