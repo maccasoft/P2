@@ -1,30 +1,31 @@
 {
-    ColecoVision Console Emulator
+    ZX Spectrum 48K Emulator
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
 
     Based on ZiKore Z80 Emulator by Ada Gottensträter
     with modifications by Marco Maccaferri
 
-    TMS9918 Emulator by Marco Maccaferri
-    SN76489 Emulator by Johannes Ahlebrand port to P2 by Ada Gottensträter
+    PS/2 Keyboard driver by Marco Maccaferri
 
-    USB Keyboard driver by Garry Jordan ("garryj")
-    with modifications by Marco Maccaferri
+    USB host driver based on 1CogKbM code by Garry Jordan ("garryj")
+    with gamepad support and other modifications by Marco Maccaferri
+    and portions derived from code by Ada Gottensträter
 }
 CON
 
-    _CLKFREQ = 250_000_000
+    _CLKFREQ = 240_000_000
 
     VIDEO    = VGA ' video mode VGA, NTSC or PAL
     VGA_PIN  = 48
     CVBS_PIN = 32 addpins 1 ' 32=CVBS/Y, 33=C
 
-    PS2_DATA_PIN  = 47
-    PS2_CLOCK_PIN = 46
     USB_BASE_PIN  = 40
 
-    AUDIO_LEFT_PIN  = 38
-    AUDIO_RIGHT_PIN = 39
+    PS2_DATA_PIN  = 47
+    PS2_CLOCK_PIN = 46
+
+    ZX_MIC        = 0   ' OUT
+    ZX_EAR        = 1   ' IN
 
 DAT             ' Startup
                 org     $000
@@ -33,54 +34,415 @@ DAT             ' Startup
                 drvl    #56
                 drvl    #57
 
-                rep     @.lockmadness,#16
-                locknew pb
-                nop
-.lockmadness
+                mov     pa, ##48*1024/4
+                mov     ptra, ##@z80_4000   ' initialize memory
+.l1             wrlong  #0, ptra++
+                djnz    pa, #.l1
 
-                coginit #5, ##@psg_driver   ' start SN76489 on cog #5
-                coginit #4, ##@tms_driver   ' start TMS9918 on cog #4
+                coginit #4, ##@video_driver ' start video on cog #4
+                coginit #3, ##@ps2_driver   ' start PS/2 driver on cog #3
                 coginit #1, ##@usb_host_start ' start USB driver on cog #1
+
+                waitx   ##_CLKFREQ          ' delay to allow monitor to settle
                 coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
 
                 orgh
 
-' Controller status
+' Shared variables
 
-coleco_ctrls
-                byte    $7F     ' keypad 0
-                byte    $7F     ' joystick 0
-                byte    $7F     ' keypad 1
-                byte    $7F     ' joystick 1
+zk_nmi_mem      long    0                   ' bit 8 = NMI
+zk_irq_mem      long    0                   ' bit 8 = IRQ, 7..0 vector
 
-' TMS9918 registers
+zx_border       byte    $00                 ' screen border
 
-tms_regs        byte    $00, $00, $00, $00, $00, $00, $00, $00
-tms_status      long    $00     ' 7..0 = VDP status
-                                '    8 = NMI
+                                            ' ROW  D4 D3 D2 D1 D0
+zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
+                                            '  1   G  F  D  S  A
+                                            '  2   T  R  E  W  Q
+                                            '  3   5  4  3  2  1
+                                            '  4   6  7  8  9  0
+                                            '  5   Y  U  I  O  P
+                                            '  6   H  J  K  L  ENTER
+                                            '  7   B  N  M  SS SPACE
 
-' SN76489 registers
+DAT             ' PS/2 Keyboard driver
+                org     $000
 
-psg_registers
-                                ' Reg bits function
-                                ' -----------------------------------
-                long    $0000   ' 00  9..0 channel 1 freq
-                long    $0F     ' 01  3..0 channel 1 attunation
-                long    $0000   ' 02  9..0 channel 2 freq
-                long    $0F     ' 03  3..0 channel 2 attunation
-                long    $0000   ' 04  9..0 channel 3 freq
-                long    $0F     ' 05  3..0 channel 3 attunation
-                long    $00     ' 06  4..0 noise control
-                long    $0F     ' 07  7..0 noise attunation
+ps2_driver
+                fltl    #PS2_DATA_PIN
+                fltl    #PS2_CLOCK_PIN
 
-DAT             ' USB Host keyboard driver
+                mov     ps2_data, #$F3      ' auto-repeat
+                call    #ps2_transmit
+                and     ps2_data, #%011_11111 ' slow 1s / 2cps
+                call    #ps2_transmit
+
+                mov     ps2_state, #%0_000  ' turn off all leds
+                jmp     #ps2_locks
+
+ps2_reset
+                setq    #2-1
+                wrlong  zx_keys, #@zx_keys
+
+ps2_loop        and     ps2_state, #$07     ' keep locks state
+
+.l1             call    #ps2_receive
+                getbyte ps2_code, ps2_data, #0
+
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #.l1
+
+                cmp     ps2_data, #$E0  wz
+        if_z    bith    ps2_state, #28
+        if_z    jmp     #ps2_ext0
+                cmp     ps2_data, #$E1  wz
+        if_z    bith    ps2_state, #29
+        if_z    jmp     #ps2_ext1
+
+ps2_ext_ret     testbn  ps2_state, #29  wz
+        if_nz   jmp     #ps2_loop           ' E1 codes are ignored
+
+                testb   ps2_state, #7   wc  ' release
+
+                cmp     ps2_code, #$14  wz  ' left control
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_CTRLF
+
+                cmp     ps2_code, #$14  wz  ' right control
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_CTRLF
+
+                cmp     ps2_code, #$12  wz  ' left shift
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_SHIFTF
+                cmp     ps2_data, #$59  wz  ' right shift
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_SHIFTF
+
+                cmp     ps2_code, #$11  wz  ' left alt
+        if_z    testbn  ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_ALTF
+
+                cmp     ps2_code, #$11  wz  ' right alt
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_ALTF
+
+                cmp     ps2_code, #$1F  wz  ' left gui
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #LEFT_GUIF
+                cmp     ps2_code, #$27  wz  ' right gui
+        if_z    testb   ps2_state, #28  andz
+        if_z    muxnc   ps2_shift, #RIGHT_GUIF
+
+                cmp     ps2_code, #$77  wz  ' num. lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #0       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+                cmp     ps2_code, #$58  wz  ' caps lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #1       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+                cmp     ps2_code, #$7E  wz  ' scroll lock
+  if_z_and_c    jmp     #ps2_loop           ' | ignore if released
+        if_z    bitnot  ps2_state, #2       ' | toggle state
+        if_z    jmp     #ps2_locks          ' | update leds
+
+                test    ps2_shift, #LEFT_GUIF  wz ' check reset key combination
+        if_nz   test    ps2_shift, #RIGHT_GUIF wz ' |
+        if_nz   andn    ps2_shift, #LEFT_GUIF|RIGHT_GUIF
+        if_nz   call    #sys_reset               ' jump to system reset
+        if_nz   jmp     #ps2_loop
+
+                testb   ps2_state, #28  wc      ' extended code
+                rcl     ps2_code, #1            '   to bit 0
+                altgb   ps2_code, #ps2_table    ' get usb scancode
+                getbyte ps2_key, 0-0, #0        ' |
+
+                cmp     ps2_key, #$00   wz      ' no key associated
+        if_z    jmp     #ps2_loop
+
+                mov     ptra, #@zx_keys
+                testb   ps2_state, #7   wc      ' release
+
+                cmp     ps2_code, #($66<<1)|0   wz ' BS
+        if_nz   cmp     ps2_code, #($6B<<1)|1   wz ' LEFT
+        if_nz   cmp     ps2_code, #($74<<1)|1   wz ' RIGHT
+        if_nz   cmp     ps2_code, #($75<<1)|1   wz ' UP
+        if_nz   cmp     ps2_code, #($72<<1)|1   wz ' DOWN
+        if_z    call    #c_shift
+
+                cmp     ps2_code, #($41<<1)|0   wz ' ,
+        if_nz   cmp     ps2_code, #($49<<1)|0   wz ' .
+        if_z    call    #s_shift
+
+                mov     ps2_data, ps2_key
+                shr     ps2_data, #5
+                add     ptra, ps2_data
+                rdbyte  ps2_temp, ptra
+                and     ps2_key, #%11111
+                muxc    ps2_temp, ps2_key
+                wrbyte  ps2_temp, ptra
+                jmp     #ps2_loop
+
+c_shift         rdbyte  ps2_temp, ptra[%000]
+                muxc    ps2_temp, #%00001
+        _ret_   wrbyte  ps2_temp, ptra[%000]
+
+s_shift         rdbyte  ps2_temp, ptra[%111]
+                muxc    ps2_temp, #%00010
+        _ret_   wrbyte  ps2_temp, ptra[%111]
+
+ps2_locks       mov     ps2_data, #$ED
+                call    #ps2_transmit
+                mov     ps2_data, #0
+                testb   ps2_state, #0   wz  ' num. lock
+                bitz    ps2_data, #1
+                testb   ps2_state, #1   wz  ' caps lock
+                bitz    ps2_data, #2
+                testb   ps2_state, #2   wz  ' scroll lock
+                bitz    ps2_data, #0
+                call    #ps2_transmit
+                jmp     #ps2_loop
+
+ps2_ext1        call    #ps2_receive
+                setbyte ps2_code, ps2_data, #1
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #ps2_ext1
+
+                ' fall through
+
+ps2_ext0        call    #ps2_receive
+                setbyte ps2_code, ps2_data, #0
+                cmp     ps2_data, #$F0  wz  ' release
+        if_z    bith    ps2_state, #7
+        if_z    jmp     #ps2_ext0
+
+                jmp     #ps2_ext_ret
+
+ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
+                getct   ps2_tout            ' hold clock for 128us (must be > 100us)
+                addct1  ps2_tout, ps2_us128 ' |
+                jnct1   #$
+                drvl    #PS2_DATA_PIN       ' pull data low
+                getct   ps2_tout            ' hold data for 4us
+                addct1  ps2_tout, ps2_us4   ' |
+                jnct1   #$
+
+                fltl    #PS2_CLOCK_PIN      ' release clock
+                getct   ps2_tout            ' allow pin to float
+                addct1  ps2_tout, ps2_us1   ' |
+                jnct1   #$
+
+                test    ps2_data, #$FF  wc  ' append parity
+                muxnc   ps2_data, #$100     ' |
+                bith    ps2_data, #9        ' append stop bit
+
+                getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us2000
+
+                mov     ps2_bits, #10
+.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l1                ' |
+                shr     ps2_data, #1    wc  ' output data bit
+                drvc    #PS2_DATA_PIN       ' |
+.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    ps2_bits, #.l1      ' another bit ?
+
+                fltl    #PS2_DATA_PIN
+
+.l3             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data low
+        if_z    testpn  #PS2_DATA_PIN   wz  ' |
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l3                ' |
+
+.l4             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data high
+        if_nz   testpn  #PS2_DATA_PIN   wz  ' |
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l4                ' |
+
+                ' Fall through to receive ack
+
+ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
+        if_nz   jmp     #ps2_receive        ' |
+
+                getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us2000
+
+                mov     ps2_bits, #11
+.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_nz   jct1    #ps2_reset          ' | check timeout
+        if_nz   jmp     #.l1                ' |
+                testp   #PS2_DATA_PIN   wc  ' sample data
+                rcr     ps2_data, #1        ' |
+.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_z    jct1    #ps2_reset          ' | check timeout
+        if_z    jmp     #.l2                ' |
+                djnz    ps2_bits, #.l1      ' another bit?
+
+                shr     ps2_data, #22       ' align byte
+                test    ps2_data, #$1FF wc  ' test parity
+        if_nc   jmp     #ps2_reset          ' |
+        _ret_   and     ps2_data, #$FF      ' ok
+
+ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
+ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
+ps2_us128       long    _CLKFREQ / 1000_000 * 128   ' 128 usec.
+ps2_us2000      long    _CLKFREQ / 1000_000 * 4000  ' 2000 usec.
+
+ps2_bits        long    0
+ps2_code        long    0
+ps2_state       long    0
+ps2_shift       long    0
+ps2_key         long    0
+
+ps2_data        long    0
+ps2_tout        long    0
+ps2_temp        long    0
+
+ps2_table       byte                    0,                 0  '00
+                byte                    0,                 0  '01    F9
+                byte                    0,                 0  '02
+                byte                    0,                 0  '03    F5
+                byte                    0,                 0  '04    F3
+                byte                    0,                 0  '05    F1
+                byte                    0,                 0  '06    F2
+                byte                    0,                 0  '07    F12
+                byte                    0,                 0  '08
+                byte                    0,                 0  '09    F10
+                byte                    0,                 0  '0A    F8
+                byte                    0,                 0  '0B    F6
+                byte                    0,                 0  '0C    F4
+                byte                    0,                 0  '0D    Tab
+                byte                    0,                 0  '0E    `
+                byte                    0,                 0  '0F
+                byte                    0,                 0  '10
+                byte                    0,                 0  '11    Alt-L     Alt-R
+                byte    (0 << 5) | %00001,                 0  '12    Shift-L
+                byte                    0,                 0  '13
+                byte    (7 << 5) | %00010, (7 << 5) | %00010  '14    Ctrl-L    Ctrl-R
+                byte    (2 << 5) | %00001,                 0  '15    q
+                byte    (3 << 5) | %00001,                 0  '16    1
+                byte                    0,                 0  '17
+                byte                    0,                 0  '18
+                byte                    0,                 0  '19
+                byte    (0 << 5) | %00010,                 0  '1A    z
+                byte    (1 << 5) | %00010,                 0  '1B    s
+                byte    (1 << 5) | %00001,                 0  '1C    a
+                byte    (2 << 5) | %00010,                 0  '1D    w
+                byte    (3 << 5) | %00010,                 0  '1E    2
+                byte                    0,                 0  '1F              Win-L
+                byte                    0,                 0  '20
+                byte    (0 << 5) | %01000,                 0  '21    c
+                byte    (0 << 5) | %00100,                 0  '22    x
+                byte    (1 << 5) | %00100,                 0  '23    d
+                byte    (2 << 5) | %00100,                 0  '24    e
+                byte    (3 << 5) | %01000,                 0  '25    4
+                byte    (3 << 5) | %00100,                 0  '26    3
+                byte                    0,                 0  '27              Win-R
+                byte                    0,                 0  '28
+                byte    (7 << 5) | %00001,                 0  '29    Space
+                byte    (0 << 5) | %10000,                 0  '2A    v
+                byte    (1 << 5) | %01000,                 0  '2B    f
+                byte    (2 << 5) | %10000,                 0  '2C    t
+                byte    (2 << 5) | %01000,                 0  '2D    r
+                byte    (3 << 5) | %10000,                 0  '2E    5
+                byte                    0,                 0  '2F              Apps
+                byte                    0,                 0  '30
+                byte    (7 << 5) | %01000,                 0  '31    n
+                byte    (7 << 5) | %10000,                 0  '32    b
+                byte    (6 << 5) | %10000,                 0  '33    h
+                byte    (1 << 5) | %10000,                 0  '34    g
+                byte    (5 << 5) | %10000,                 0  '35    y
+                byte    (4 << 5) | %10000,                 0  '36    6
+                byte                    0,                 0  '37              Power
+                byte                    0,                 0  '38
+                byte                    0,                 0  '39
+                byte    (7 << 5) | %00100,                 0  '3A    m
+                byte    (6 << 5) | %01000,                 0  '3B    j
+                byte    (5 << 5) | %01000,                 0  '3C    u
+                byte    (4 << 5) | %01000,                 0  '3D    7
+                byte    (4 << 5) | %00100,                 0  '3E    8
+                byte                    0,                 0  '3F              Sleep
+                byte                    0,                 0  '40
+                byte    (7 << 5) | %01000,                 0  '41    ,
+                byte    (6 << 5) | %00100,                 0  '42    k
+                byte    (5 << 5) | %00100,                 0  '43    i
+                byte    (5 << 5) | %00010,                 0  '44    o
+                byte    (4 << 5) | %00001,                 0  '45    0
+                byte    (4 << 5) | %00010,                 0  '46    9
+                byte                    0,                 0  '47
+                byte                    0,                 0  '48
+                byte    (7 << 5) | %00100,                 0  '49    .
+                byte                    0,                 0  '4A    /         (/)
+                byte    (6 << 5) | %00010,                 0  '4B    l
+                byte                    0,                 0  '4C    ;
+                byte    (5 << 5) | %00001,                 0  '4D    p
+                byte                    0,                 0  '4E    -
+                byte                    0,                 0  '4F
+                byte                    0,                 0  '50
+                byte                    0,                 0  '51
+                byte                    0,                 0  '52    '
+                byte                    0,                 0  '53
+                byte                    0,                 0  '54    [
+                byte                    0,                 0  '55    =
+                byte                    0,                 0  '56
+                byte                    0,                 0  '57
+                byte                    0,                 0  '58    CapsLock
+                byte    (0 << 5) | %00001,                 0  '59    Shift-R
+                byte    (6 << 5) | %00001, (6 << 5) | %00001  '5A    Enter     (Enter)
+                byte                    0,                 0  '5B    ]
+                byte                    0,                 0  '5C
+                byte                    0,                 0  '5D    \
+                byte                    0,                 0  '5E              WakeUp
+                byte                    0,                 0  '5F
+                byte                    0,                 0  '60
+                byte                    0,                 0  '61
+                byte                    0,                 0  '62
+                byte                    0,                 0  '63
+                byte                    0,                 0  '64
+                byte                    0,                 0  '65
+                byte    (4 << 5) | %00001,                 0  '66    BackSpace
+                byte                    0,                 0  '67
+                byte                    0,                 0  '68
+                byte                    0,                 0  '69    (1)       End
+                byte                    0,                 0  '6A
+                byte                    0, (3 << 5) | %10000  '6B    (4)       Left
+                byte                    0,                 0  '6C    (7)       Home
+                byte                    0,                 0  '6D
+                byte                    0,                 0  '6E
+                byte                    0,                 0  '6F
+                byte                    0,                 0  '70    (0)       Insert
+                byte                    0,                 0  '71    (.)       Delete
+                byte                    0, (4 << 5) | %10000  '72    (2)       Down
+                byte                    0,                 0  '73    (5)
+                byte                    0, (4 << 5) | %00100  '74    (6)       Right
+                byte                    0, (4 << 5) | %01000  '75    (8)       Up
+                byte                    0,                 0  '76    Esc
+                byte                    0,                 0  '77    NumLock
+                byte                    0,                 0  '78    F11
+                byte                    0,                 0  '79    (+)
+                byte                    0,                 0  '7A    (3)       PageDn
+                byte                    0,                 0  '7B    (-)
+                byte                    0,                 0  '7C    (*)       PrScr
+                byte                    0,                 0  '7D    (9)       PageUp
+                byte                    0,                 0  '7E    ScrLock
+                byte                    0,                 0  '7F
+                byte                    0,                 0  '80
+                byte                    0,                 0  '81
+                byte                    0,                 0  '82
+                byte                    0,                 0  '83    F7
+
+                fit     $1F0
+
+DAT             ' USB Host driver
                 org     $000
 
 usb_host_start
-                asmclk
-                drvl    #56
-                drvl    #57
-
                 mov     hcog_base_addr, ptrb
 
                 add     ptrb, ##@hlut_start - @usb_host_start
@@ -88,70 +450,6 @@ usb_host_start
                 rdlong  0, ptrb
 
                 jmp     #\usb_host_init
-
-'------------------------------------------------------------------------------
-' Post interrupt IN transactions at configured intervals.
-'------------------------------------------------------------------------------
-poll_kbd
-                getct   hct3
-                addct3  hct3, _8ms_                     ' Set the timer for next poll interval
-                call    #\hget_kbd_in_report
-
-                setword ps2_ctrl, ##$7F7F, #0
-
-                mov     ptra, ##@kbReport+2
-
-                rdbyte  ps2_key, ptra[-2]
-                testbn  ps2_key, #0         wz  ' LCTRL (LEFT BUTTON)
-                bitz    ps2_ctrl, #8+6
-                testbn  ps2_key, #1         wz  ' LSHIFT (RIGHT BUTTON)
-                bitz    ps2_ctrl, #6
-
-                mov     pa, #6
-.l1             rdbyte  ps2_key, ptra++
-
-                cmp     ps2_key, #$1E       wz  ' 1
-        if_z    setnib  ps2_ctrl, #$D,  #0
-                cmp     ps2_key, #$1F       wz  ' 2
-        if_z    setnib  ps2_ctrl, #$7,  #0
-                cmp     ps2_key, #$20       wz  ' 3
-        if_z    setnib  ps2_ctrl, #$C,  #0
-                cmp     ps2_key, #$21       wz  ' 4
-        if_z    setnib  ps2_ctrl, #$2,  #0
-                cmp     ps2_key, #$22       wz  ' 5
-        if_z    setnib  ps2_ctrl, #$3,  #0
-                cmp     ps2_key, #$23       wz  ' 6
-        if_z    setnib  ps2_ctrl, #$E,  #0
-                cmp     ps2_key, #$24       wz  ' 7
-        if_z    setnib  ps2_ctrl, #$5,  #0
-                cmp     ps2_key, #$25       wz  ' 8
-        if_z    setnib  ps2_ctrl, #$1,  #0
-                cmp     ps2_key, #$26       wz  ' 9
-        if_z    setnib  ps2_ctrl, #$B,  #0
-                cmp     ps2_key, #$27       wz  ' 0
-        if_z    setnib  ps2_ctrl, #$A,  #0
-                cmp     ps2_key, #$2D       wz  ' *
-        if_z    setnib  ps2_ctrl, #$9,  #0
-                cmp     ps2_key, #$2E       wz  ' #
-        if_z    setnib  ps2_ctrl, #$6,  #0
-
-                cmp     ps2_key, #$4F       wz  ' RIGHT
-        if_z    bitl    ps2_ctrl, #8+1
-                cmp     ps2_key, #$50       wz  ' LEFT
-        if_z    bitl    ps2_ctrl, #8+3
-                cmp     ps2_key, #$51       wz  ' DOWN
-        if_z    bitl    ps2_ctrl, #8+2
-                cmp     ps2_key, #$52       wz  ' UP
-        if_z    bitl    ps2_ctrl, #8+0
-
-                djnz    pa, #.l1
-
-                wrlong  ps2_ctrl, #@coleco_ctrls
-
-                ret
-
-ps2_key         long    0
-ps2_ctrl        long    $7F7F7F7F
 
 '------------------------------------------------------------------------------
 ' SETUP transaction. The mechanics of SETUP are identical to OUT, but it's
@@ -653,6 +951,15 @@ host_error
                 mov     hrep, #5
                 jmp     #.spin
 
+'------------------------------------------------------------------------------
+' Post interrupt IN transactions at configured intervals.
+'------------------------------------------------------------------------------
+poll_kbd
+                getct   hct3
+                addct3  hct3, _8ms_                     ' Set the timer for next poll interval
+                call    #\hget_kbd_in_report
+                jmp     #\zx_encode_key
+
 ' Pointers to this spin object's VAR block data (assigned at cog startup)
 cmd_data_p      long    @usbCmdData
 kb_intf_num_p   long    @kbIntfNum
@@ -661,7 +968,7 @@ kb_in_max_pkt_p long    @kbInMaxPkt
 kb_next_datax_p long    @kbNextDatax
 kb_max_index_p  long    @kbMaxIndex
 kb_led_states_p long    @kbLedStates
-kb_report_p     long    @kbReport
+kb_report_p     long    @kbCurReport
 usb_err_code_p  long    @usbErrCode ' Contains "Protocol error codes" constant enumeration value.
 
 
@@ -1823,7 +2130,220 @@ kbInMaxPkt      byte    0
 kbNextDatax     byte    0
 kbMaxIndex      byte    0
 kbLedStates     byte    0
-kbReport        byte    0[KBD_IN_RPT_LEN]
+kbCurReport     byte    0[KBD_IN_RPT_LEN]
+kbPreReport     byte    0[KBD_IN_RPT_LEN]
+
+
+'------------------------------------------------------------------------------
+' ZX Spectrum Key encoder
+'------------------------------------------------------------------------------
+
+zx_encode_key
+                mov     ptra, ##@kbCurReport
+                mov     ptrb, ##@kbPreReport
+                rdlong  htmp1, ptra++
+                rdlong  htmp2, ptrb++
+                cmp     htmp1, htmp2    wz
+                rdlong  htmp1, ptra++
+                rdlong  htmp2, ptrb++
+        if_z    cmp     htmp1, htmp2    wz
+        if_z    ret
+
+                mov     hpar1, #0
+                rdbyte  hpar2, ##@kbCurReport
+                call    #zx_set_key
+
+_release        modc    _set    wc
+                mov     ptra, ##@kbPreReport+2
+                mov     pa, #6
+.l1             rdbyte  hpar1, ptra++   wz
+        if_z    jmp     #.l3
+                mov     ptrb, ##@kbCurReport+2
+                mov     pb, #6
+.l2             rdbyte  htmp, ptrb++
+                cmp     hpar1, htmp     wz
+        if_z    jmp     #.l3
+                djnz    pb, #.l2
+                call    #zx_set_key
+.l3             djnz    pa, #.l1
+
+_press          modc    _clr    wc
+                mov     ptra, ##@kbCurReport+2
+                mov     pa, #6
+.l1             rdbyte  hpar1, ptra++   wz
+        if_z    jmp     #.l3
+                mov     ptrb, ##@kbPreReport+2
+                mov     pb, #6
+.l2             rdbyte  htmp, ptrb++
+                cmp     hpar1, htmp     wz
+        if_z    jmp     #.l3
+                djnz    pb, #.l2
+                call    #zx_set_key
+.l3             djnz    pa, #.l1
+
+_copy           mov     ptra, ##@kbCurReport
+                mov     ptrb, ##@kbPreReport
+                rdlong  htmp, ptra++
+                wrlong  htmp, ptrb++
+                rdlong  htmp, ptra++
+                wrlong  htmp, ptrb++
+
+                test    hpar2, #LEFT_GUIF   wz  ' check reset key combination
+        if_nz   test    hpar2, #RIGHT_GUIF  wz  ' |
+        if_nz   jmp     #\sys_reset             ' jump to system reset
+
+                ret
+
+sys_reset
+                cogstop #0                  ' stop Z80
+
+                mov     pa, ##48*1024/4
+                mov     ptra, ##@z80_4000   ' initialize memory
+.l1             wrlong  #0, ptra++          '   0 if user reset
+                djnz    pa, #.l1
+
+                coginit #0, ##@zk_cogbase   ' start Z80 on cog #0
+                ret     wcz
+
+' On entry:
+'   hpar1 - USB key code
+'   hpar2 - Shift state
+zx_set_key
+                cmp     hpar1, #$2A     wz  ' BS
+        if_nz   cmp     hpar1, #$50     wz  ' LEFT
+        if_nz   cmp     hpar1, #$4F     wz  ' RIGHT
+        if_nz   cmp     hpar1, #$52     wz  ' UP
+        if_nz   cmp     hpar1, #$51     wz  ' DOWN
+        if_z    mov     hpar2, #KEYS_SHIFT
+
+                cmp     hpar1, #$36     wz  ' ,
+        if_nz   cmp     hpar1, #$37     wz  ' .
+        if_z    mov     hpar2, #KEYS_CTRL
+
+                test    hpar2, #KEYS_SHIFT  wz  ' SHIFT
+                rdbyte  htmp, #@zx_keys+0
+                muxz    htmp, #%00001       ' CAPS SHIFT
+                wrbyte  htmp, #@zx_keys+0
+
+                test    hpar2, #KEYS_CTRL   wz  ' CTRL
+                rdbyte  htmp, #@zx_keys+7
+                muxz    htmp, #%00010       ' SYMBOL SHIFT
+                wrbyte  htmp, #@zx_keys+7
+
+                add     hpar1, ##@usb_table
+                rdbyte  hpar1, hpar1
+                mov     ptrb, hpar1
+                shr     ptrb, #5
+                add     ptrb, #@zx_keys
+                rdbyte  htmp, ptrb
+                and     hpar1, #%11111
+                muxc    htmp, hpar1
+        _ret_   wrbyte  htmp, ptrb
+
+' Translation table from USB key code to ZX Spectrum keyboard matrix
+usb_table
+                byte                    0  '00
+                byte                    0  '01
+                byte                    0  '02
+                byte                    0  '03
+                byte    (1 << 5) | %00001  '04    a
+                byte    (7 << 5) | %10000  '05    b
+                byte    (0 << 5) | %01000  '06    c
+                byte    (1 << 5) | %00100  '07    d
+                byte    (2 << 5) | %00100  '08    e
+                byte    (1 << 5) | %01000  '09    f
+                byte    (1 << 5) | %10000  '0A    g
+                byte    (6 << 5) | %10000  '0B    h
+                byte    (5 << 5) | %00100  '0C    i
+                byte    (6 << 5) | %01000  '0D    j
+                byte    (6 << 5) | %00100  '0E    k
+                byte    (6 << 5) | %00010  '0F    l
+                byte    (7 << 5) | %00100  '10    m
+                byte    (7 << 5) | %01000  '11    n
+                byte    (5 << 5) | %00010  '12    o
+                byte    (5 << 5) | %00001  '13    p
+                byte    (2 << 5) | %00001  '14    q
+                byte    (2 << 5) | %01000  '15    r
+                byte    (1 << 5) | %00010  '16    s
+                byte    (2 << 5) | %10000  '17    t
+                byte    (5 << 5) | %01000  '18    u
+                byte    (0 << 5) | %10000  '19    v
+                byte    (2 << 5) | %00010  '1A    w
+                byte    (0 << 5) | %00100  '1B    x
+                byte    (5 << 5) | %10000  '1C    y
+                byte    (0 << 5) | %00010  '1D    z
+                byte    (3 << 5) | %00001  '1E    1
+                byte    (3 << 5) | %00010  '1F    2
+                byte    (3 << 5) | %00100  '20    3
+                byte    (3 << 5) | %01000  '21    4
+                byte    (3 << 5) | %10000  '22    5
+                byte    (4 << 5) | %10000  '23    6
+                byte    (4 << 5) | %01000  '24    7
+                byte    (4 << 5) | %00100  '25    8
+                byte    (4 << 5) | %00010  '26    9
+                byte    (4 << 5) | %00001  '27    0
+                byte    (6 << 5) | %00001  '28    Enter
+                byte                    0  '29    Esc
+                byte    (4 << 5) | %00001  '2A    BS
+                byte                    0  '2B    Tab
+                byte    (7 << 5) | %00001  '2C    Space
+                byte                    0  '2D    - and _
+                byte                    0  '2E    = and +
+                byte                    0  '2F    [ and {
+                byte                    0  '30    ] and }
+                byte                    0  '31    \ and |
+                byte                    0  '32    None-US # and ~
+                byte                    0  '33    ; and :
+                byte                    0  '34    ' and "
+                byte                    0  '35    ` and ~
+                byte    (7 << 5) | %01000  '36    , and <
+                byte    (7 << 5) | %00100  '37    . and >
+                byte                    0  '38    / and ?
+                byte                    0  '39    CapsLock
+                byte                    0  '3A    F1
+                byte                    0  '3B    F2
+                byte                    0  '3C    F3
+                byte                    0  '3D    F4
+                byte                    0  '3E    F5
+                byte                    0  '3F    F6
+                byte                    0  '40    F7
+                byte                    0  '41    F8
+                byte                    0  '42    F9
+                byte                    0  '43    F10
+                byte                    0  '44    F11
+                byte                    0  '45    F12
+                byte                    0  '46    PrScr
+                byte                    0  '47    ScrLock
+                byte                    0  '48    Pause
+                byte                    0  '49    Insert
+                byte                    0  '4A    Home
+                byte                    0  '4B    PageUp
+                byte                    0  '4C    Delete
+                byte                    0  '4D    End
+                byte                    0  '4E    PageDown
+                byte    (4 << 5) | %00100  '4F    Right
+                byte    (3 << 5) | %10000  '50    Left
+                byte    (4 << 5) | %10000  '51    Down
+                byte    (4 << 5) | %01000  '52    Up
+                byte                    0  '53    NumLock
+                byte                    0  '54    (/)
+                byte                    0  '55    (*)
+                byte                    0  '56    (-)
+                byte                    0  '57    (+)
+                byte                    0  '58    (Enter)
+                byte                    0  '59    (1)
+                byte                    0  '5A    (2)
+                byte                    0  '5B    (3)
+                byte                    0  '5C    (4)
+                byte                    0  '5D    (5)
+                byte                    0  '5E    (6)
+                byte                    0  '5F    (7)
+                byte                    0  '60    (8)
+                byte                    0  '61    (9)
+                byte                    0  '62    (0)
+                byte                    0  '63    (.)
+                byte                    0  '64    Non-US \ and |
+                byte                    0  '65    App
 
 CON ' USB Host Shared constants
 '------------------------------------------------------------------------------
@@ -1850,6 +2370,32 @@ CON ' USB Host Shared constants
 ' Protocol error codes:
     #0, ERR_NONE, ERR_CMD, ERR_URX, ERR_SE1, ERR_PACKET, ERR_TAT, ERR_TXN_RETRY
     ERR_XFER_RETRY, ERR_NAK, ERR_DATAX_SYNC, ERR_CONFIG_FAIL, ERR_TIMEOUT
+'------------------------------------------------------------------------------
+' Keyboard modifier key bit positions:
+    #0, LEFT_CTRLB, LEFT_SHIFTB, LEFT_ALTB, LEFT_GUIB
+    RIGHT_CTRLB, RIGHT_SHIFTB, RIGHT_ALTB, RIGHT_GUIB
+' Keyboard modifier bitflags
+    LEFT_CTRLF   = decod(LEFT_CTRLB)
+    LEFT_SHIFTF  = decod(LEFT_SHIFTB)
+    LEFT_ALTF    = decod(LEFT_ALTB)
+    LEFT_GUIF    = decod(LEFT_GUIB)
+    RIGHT_CTRLF  = decod(RIGHT_CTRLB)
+    RIGHT_SHIFTF = decod(RIGHT_SHIFTB)
+    RIGHT_ALTF   = decod(RIGHT_ALTB)
+    RIGHT_GUIF   = decod(RIGHT_GUIB)
+' Consolidated left/right modkeys. Add the modifier keys you want to trap
+' together, then add the key scan code e.g. CTRL+ALT+"X" would be: $600 + KEY_X_x.
+' The key() Spin2 method does this and the rawKey() method returns the key data
+' as packed by the USB keyboard driver.
+'   SHIFT = $100
+'   CTRL  = $200
+'   ALT   = $400
+'   APP   = $800
+' L|R key modifier flag combinations:
+    KEYS_APP   = LEFT_GUIF + RIGHT_GUIF
+    KEYS_ALT   = LEFT_ALTF + RIGHT_ALTF
+    KEYS_CTRL  = LEFT_CTRLF + RIGHT_CTRLF
+    KEYS_SHIFT = LEFT_SHIFTF + RIGHT_SHIFTF
 
 CON ' USB Host constants
 '------------------------------------------------------------------------------
@@ -2195,24 +2741,37 @@ zk_cogbase
                 setq2   #511
                 rdlong  0, ptrb
 
+                waitatn ' sync with video
+                waitatn ' |
                 getct   zk_lastwait
 
 zk_nextop
-                lockrel #0                      ' Release lock
+                call    #\zx_ula_advance
+                mov     ula_state_done, #0
+                subs    ula_cnt, zk_cycles
 
                 mul     zk_cycles, zk_cycletime
                 addct1  zk_lastwait, zk_cycles
                 waitct1
 
-                locktry #0              wc      ' Acquire lock for instruction processing
-    if_nc       jmp     #$-1
+                mov     zk_cycles, #0
 
-                mov     zk_cycles, #1
-
-                testb   zk_ctl, #8          wc  ' C = old NMI
-                rdlong  zk_ctl, #@tms_status
-                testb   zk_ctl, #8          wz  ' Z = current NMI
+                testb   zk_nmi_ctl, #8      wc  ' C = old NMI
+                rdlong  zk_nmi_ctl, #@zk_nmi_mem
+                testb   zk_nmi_ctl, #8      wz  ' Z = current NMI
         if_01   jmp     #\zk_donmi              ' jump if 0 -> 1 transition
+
+                cmps    ula_cnt, #0         wcz ' simulated interrupt
+        if_a    jmp     #.skip
+                add     ula_cnt, ##(VIDEO == PAL ? (224*312) : (224*264))
+                waitatn                         ' we are slightly faster than video, wait
+                getct   zk_lastwait             ' update clock reference
+
+                testb   zk_irqenable,#ZK_IFF1_BIT wz   ' Z = EI
+        if_x1   mov     ptra, ##@z80_4000
+        if_x1   mov     ptrb, ##@z80_4000+32*192
+        if_x1   jmp     #\zk_doirq                     ' jump if Z=1
+.skip
 
                 mov     zk_temphl, zk_hl
                 mov     zk_hlptr, #zk_hl
@@ -2221,9 +2780,12 @@ zk_nextop
                 incmod  zk_refresh, #127
 
                 call    #zk_readcode
+                add     zk_cycles, #1
                 mov     zk_opcode, zk_tmp8
                 'debug(uhex_byte(zk_opcode))
-                rdlut   zk_opimpl, zk_opcode
+                shl     zk_tmp8, #2
+                add     zk_tmp8, ##@zk_optable
+                rdlong  zk_opimpl, zk_tmp8
                 'debug(uhex_long(zk_opimpl))
                 bitl    zk_opimpl, #10 wcz ' first instruction can't be skipped, use as flag for (HL) ops
                 push    #zk_nextop
@@ -2238,10 +2800,11 @@ zk_ixprefix
                 incmod  zk_refresh, #127
                 add     zk_cycles, #1
 
-
                 call    #zk_readcode
                 mov     zk_opcode, zk_tmp8
-                rdlut   zk_opimpl, zk_opcode
+                shl     zk_tmp8, #2
+                add     zk_tmp8, ##@zk_optable
+                rdlong  zk_opimpl, zk_tmp8
                 bitl    zk_opimpl, #10 wcz ' first instruction can't be skipped, use as flag for (HL) ops
         if_nc   jmp     #.nodisplace
                 ' handle index displacement
@@ -2352,7 +2915,7 @@ zk_extprefix
         if_10   skipf   ##%00001111_10101_11101_01_1100011_0011_100_11     ' IN
         if_11   skipf   ##%00111111_10101_11101_01_1111101_0011_011        ' OUT
 
-                getbyte zk_ea,zk_debc,#0 ' IN
+                getword zk_ea,zk_debc,#0 ' IN
                 call    #\zk_portin ' IN
                 call    #\zk_read8hl ' everything else
 
@@ -2403,7 +2966,7 @@ zk_extprefix
                 mov     zk_ea,zk_hl  ' IN
                 getword zk_ea,zk_debc,#1 ' LD
                 call    #\zk_write8 ' LD,IN
-                getbyte zk_ea,zk_debc,#0 ' OUT
+                getword zk_ea,zk_debc,#0 ' OUT
                 call    #\zk_portout ' OUT
 
                 getword zk_optmp1,zk_debc,#0 ' LD,CP
@@ -2432,8 +2995,8 @@ zk_extprefix
                 ret
 
 zk_ext_impl_tbl
-                long    zk_cio + (%10_11_11_000000<<10) ' IN [BCDEHL0A],(C)
-                long    zk_cio + (%00_01_11_000000<<10) ' OUT (C),[BCDEHL0A]
+                long    zk_cio + (%10_11_111_000000<<10) ' IN [BCDEHL0A],(C)
+                long    zk_cio + (%00_01_111_000000<<10) ' OUT (C),[BCDEHL0A]
                 long    zk_ext_differentiate + (%0_110_000<<10) ' ADC/SBC with HL
                 long    zk_ext_differentiate + (%0_101_000<<10) ' 16 bit LD from to (imm16)
                 long    zk_neg
@@ -2534,7 +3097,10 @@ zk_irqret       '' RETI/RETN
         _ret_   mov     zk_pc,zk_tmp16
 
 
-zk_imode        ' Don't care, always assume IM1
+zk_imode
+                cmp     zk_opcode,#$5E  wz
+        if_nz   cmp     zk_opcode,#$7E  wz
+                bitz    zk_irqenable,#ZK_IM2_BIT
                 ret
 
 zk_irqoff
@@ -2543,13 +3109,29 @@ zk_irqoff
 zk_irqon
         _ret_   or      zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)
 
+zk_doirq
+                add     zk_cycles,#1
+                test    zk_irqenable,#(1<<ZK_IM2_BIT)  wz
+        if_z    skipf   ##%0_1_1111_0_0001000_1111
+        if_nz   skipf   ##%0_1_0000_1_0001000_11
+
 zk_donmi
+                skipf   ##%0_0_1111_1_0010000
+
                 add     zk_cycles,#5
                 test    zk_irqenable,#(1<<ZK_HALT_BIT)  wz
         if_nz   incmod  zk_pc,zk_ffffh
-                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT)
+                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_HALT_BIT) ' NMI
+                andn    zk_irqenable,#(1<<ZK_IFF1_BIT)|(1<<ZK_IFF2_BIT)|(1<<ZK_HALT_BIT) ' IRQ
                 mov     zk_tmp16,zk_pc
                 call    #\zk_push16
+
+                mov     zk_pc,#$38 ' IM1/IM0
+
+                getbyte zk_ea, zk_irq_ctl, #0 ' IM2
+                setbyte zk_ea, zk_ivector, #1 ' IM2
+                call    #\zk_read16 ' IM2
+                mov     zk_pc, zk_tmp16 ' IM2
 
                 mov     zk_pc,#$66 ' NMI
 
@@ -2666,11 +3248,8 @@ zk_readcode
                 'setword zk_pc,#0,#1
                 ' fall through
 zk_read8
-                add     zk_cycles,#3
+                call    #\ula_contend_ram
                 getword pa, zk_ea, #0
-                cmp     pa, ram_base    wcz
-         if_ae  cmp     ram_top, pa     wcz
-         if_ae  and     pa, ram_mask
                 add     pa, zk_ram
                 rdbyte  zk_tmp8, pa
                 ret     wcz
@@ -2694,57 +3273,29 @@ zk_write16
 zk_write8hl
                 getword zk_ea,zk_tempidx,#0
 zk_write8
-                add     zk_cycles, #3
                 getword pa, zk_ea, #0
-                cmp     pa, ram_base    wcz
-         if_ae  cmp     ram_top, pa     wcz
-         if_ae  and     pa, ram_mask
-         if_ae  add     pa, zk_ram
-         if_ae  wrbyte  zk_tmp8, pa
+                cmp     pa, ##$4000     wcz
+        if_ae   add     pa, zk_ram
+        if_ae   wrbyte  zk_tmp8, pa
+                call    #\ula_contend_ram
                 ret     wcz
-
-ram_base        long    $6000
-ram_top         long    $7FFF
-ram_mask        long    %1110_0011_1111_1111
 
 zk_portout
                 ' zk_ea   = port
                 ' zk_tmp8 = data
-                add     zk_cycles, #4
-                testb   zk_ea, #7       wc
-        if_0x   ret     wcz                     ' 00-7F = nothing
-                testb   zk_ea, #6       wc
-                testb   zk_ea, #5       wz
-        if_00   bitl    io_flags, #1            ' 80-9F = set keypad mode
-        if_01   jmp     #\tms_wr                ' A0-BF = video
-        if_10   bith    io_flags, #1            ' C0-DF = set joystick mode
-        if_11   jmp     #\psg_wr                ' E0-FF = psg
+                testb   zk_ea, #0       wz  ' Z=A0
+        if_x0   call    #\zx_ula_write
+                call    #\ula_contend_port
                 ret     wcz
 
 zk_portin
                 ' zk_ea   = port
                 ' zk_tmp8 = data
-                add     zk_cycles, #4
                 mov     zk_tmp8, #$FF
-                testb   zk_ea, #7       wc
-        if_0x   ret     wcz                     ' 00-7F = nothing
-                testb   zk_ea, #6       wc
-                testb   zk_ea, #5       wz
-        {if_00   ret     wcz}                   ' 80-9F = nothing
-        if_01   jmp     #\tms_rd                ' A0-BF = video
-        {if_10   ret     wcz}                   ' C0-DF = nothing
-        if_11   jmp     #\ctrl_rd               ' E0-FF = controller read
+                call    #\ula_contend_port
+                testb   zk_ea, #0       wz  ' Z=A0
+        if_x0   jmp     #\zx_ula_read
                 ret     wcz
-
-io_flags        long    0                   ' bit 0 = tms reg/data
-                                            '     1 = joystick/pad mode
-
-tms_ramptr      long    0
-tms_tmp0        long    0
-tms_tmp1        long    0
-
-psg_data        long    0
-psg_latch       long    0
 
 zk_ffffh        long    $FFFF
 zk_18000h       long    $18000
@@ -2769,9 +3320,21 @@ zk_refreshhi    long    0
 zk_ivector      long    0
 zk_irqenable    long    0
 
-zk_ram          long    @z80_ram
+zk_ram          long    @z80_0000
 
-zk_cycletime    long    round(float(_CLKFREQ) / float(ZK_CLOCK))
+ula_cnt         long    (VIDEO == PAL ? (224*312) : (224*264))
+ula_state       long    -(VIDEO == PAL ? (224*64) : (224*40))+1
+ula_state_done  long    0
+
+ula_blocks      long    3
+ula_rows        long    8
+ula_scans       long    8
+ula_col         long    0
+
+ula_cycles      long    0
+
+zk_cycletime    long    _CLKFREQ / ZK_CLOCK ' round(float(_CLKFREQ) / float(ZK_CLOCK) * 256.0)
+
 zk_lastwait     res     1
 
 zk_opcode       res     1
@@ -2785,236 +3348,17 @@ zk_tmp16        res     1
 zk_optmp0       res     1
 zk_optmp1       res     1
 
-zk_memtmp0      res     1
-'zk_memtmp1      res     1
-'zk_memtmp2      res     1
-'zk_memtmp3      res     1
+zk_tmp0         res     1
 zk_tmp8         res     1 ' memory read/write value
 zk_ea           res     1 ' remapped EA
-zk_ctl          res     1
+zk_irq_ctl      res     1
+zk_nmi_ctl      res     1
 
                 fit     $1F0
 
 DAT             ' ZiKore Z80 LUT resident code
                 org     $200
-
-zk_lutbase      '' Opcode table
-                long    zk_nextop                                           ' $00: NOP
-                long    zk_loadimm16 + (%0000_1_111_0<<10)                  ' $01: LD BC,imm16
-                long    zk_a_and_ptr + (%001110<<10)                        ' $02: LD (BC),A
-                long    zk_incdec16+(%0000_1_1111_10_1_11100<<10)           ' $03: INC BC
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $04: INC B
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $05: DEC B
-                long    zk_loadimm8                                         ' $06: LD B,imm8
-                long    zk_rolla+(%0_010_110_01_11110_00<<10)               ' $07: RLCA
-                long    zk_ex_af                                            ' $08: EX AF,AF'
-                long    zk_math16+(%0010_111_00_1100_00_1110_1_0<<10)       ' $09: ADD HL,BC
-                long    zk_a_and_ptr + (%000010<<10)                        ' $0A: LD A,(BC)
-                long    zk_incdec16+(%0000_1_1111_01_1_11100<<10)           ' $0B: DEC BC
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $0C: INC C
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $0D: DEC C
-                long    zk_loadimm8                                         ' $0E: LD C,imm8
-                long    zk_rolla+(%0_010_001_01_11011_00<<10)               ' $0F: RRCA
-                long    zk_jr + (%01_11_0000_0<<10)                         ' $10: DJNZ
-                long    zk_loadimm16 + (%0001_1_111_0<<10)                  ' $11: LD DE,imm16
-                long    zk_a_and_ptr + (%00110 <<10)+1                      ' $12: LD (DE),A
-                long    zk_incdec16+(%0001_1_1111_10_1_11010<<10)           ' $13: INC DE
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $14: INC D
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $15: DEC D
-                long    zk_loadimm8                                         ' $16: LD D,imm8
-                long    zk_rolla+(%0_010_110_00_11110_00<<10)               ' $17: RLA
-                long    zk_jr + (%11_11_1111_0<<10)                         ' $18: JR
-                long    zk_math16+(%0010_111_00_1100_00_1101_1_0<<10)       ' $19: ADD HL,DE
-                long    zk_a_and_ptr + (%00000 <<10)+1                      ' $1A: LD A,(DE)
-                long    zk_incdec16+(%0001_1_1111_01_1_11010<<10)           ' $1B: DEC DE
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $1C: INC E
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $1D: DEC E
-                long    zk_loadimm8                                         ' $1E: LD E,imm8
-                long    zk_rolla+(%0_010_001_00_11011_00<<10)               ' $1F: RRA
-                long    zk_jr + (%01_10_1111_0<<10)                         ' $20: JR NZ
-                long    zk_loadimm16 + (%0011_1_111_0<<10)                  ' $21: LD HL,imm16
-                long    zk_ld_abs16 + (%01011_00<<10)                       ' $22: LD (imm16),HL
-                long    zk_incdec16+(%0011_1_1111_10_1_10110<<10)           ' $23: INC HL
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $24: INC H
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $25: DEC H
-                long    zk_loadimm8                                         ' $26: LD H,imm8
-                long    zk_daa                                              ' $27: DAA
-                long    zk_jr + (%00_10_1111_0<<10)                         ' $28: JR Z
-                long    zk_math16+(%0010_111_00_1100_00_1011_1_0<<10)       ' $29: ADD HL,HL
-                long    zk_ld_abs16 + (%00110_11111_00<<10)                 ' $2A: LD HL,(imm16)
-                long    zk_incdec16+(%0011_1_1111_01_1_10110<<10)           ' $2B: DEC HL
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $2C: INC L
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $2D: DEC L
-                long    zk_loadimm8                                         ' $2E: LD L,imm8
-                long    zk_cpl                                              ' $2F: CPL
-                long    zk_jr + (%01_01_1111_0<<10)                         ' $30: JR NC
-                long    zk_loadimm16 + (%0111_1_111_0<<10)                              ' $31: LD SP,imm16
-                long    zk_ld_abs + (%001111_00<<10)                                    ' $32: LD (imm16),A
-                long    zk_incdec16+(%0111_1_1111_10_1_01110<<10)                       ' $33: INC SP
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)+ZK_HLOP       ' $34: INC (HL)
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)+ZK_HLOP       ' $35: DEC (HL)
-                long    zk_loadimm8 + ZK_HLOP                ' $36: LD (HL),imm8
-                long    zk_scf + (%10 << 10)                 ' $37: SCF
-                long    zk_jr + (%00_01_1111_0<<10)          ' $38: JR C
-                long    zk_math16+(%0010_111_00_1100_00_0111_1_0<<10) ' $39: ADD HL,SP
-                long    zk_ld_abs + (  %0011_00<<10)         ' $3A: LD A,(imm16)
-                long    zk_incdec16+(%0111_1_1111_01_1_01110<<10)' $3B: DEC SP
-                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10) ' $3C: INC A
-                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10) ' $3D: DEC A
-                long    zk_loadimm8                          ' $3E: LD A,imm8
-                long    zk_ccf                               ' $3F: CCF
-                long    zk_nextop                            ' $40: LD B,B (NOP)
-                long    zk_regmove                           ' $41: LD B,C
-                long    zk_regmove                           ' $42: LD B,D
-                long    zk_regmove                           ' $43: LD B,E
-                long    zk_regmove                           ' $44: LD B,H
-                long    zk_regmove                           ' $45: LD B,L
-                long    zk_regmove + ZK_HLOP                 ' $46: LD B,(HL)
-                long    zk_regmove                           ' $47: LD B,A
-                long    zk_regmove                           ' $48: LD C,B
-                long    zk_nextop                            ' $49: LD C,C (NOP)
-                long    zk_regmove                           ' $4A: LD C,D
-                long    zk_regmove                           ' $4B: LD C,E
-                long    zk_regmove                           ' $4C: LD C,H
-                long    zk_regmove                           ' $4D: LD C,L
-                long    zk_regmove + ZK_HLOP                 ' $4E: LD C,(HL)
-                long    zk_regmove                           ' $4F: LD C,A
-                long    zk_regmove                           ' $50: LD D,B
-                long    zk_regmove                           ' $51: LD D,C
-                long    zk_nextop                            ' $52: LD D,D (NOP)
-                long    zk_regmove                           ' $53: LD D,E
-                long    zk_regmove                           ' $54: LD D,H
-                long    zk_regmove                           ' $55: LD D,L
-                long    zk_regmove + ZK_HLOP                 ' $56: LD D,(HL)
-                long    zk_regmove                           ' $57: LD D,A
-                long    zk_regmove                           ' $58: LD E,B
-                long    zk_regmove                           ' $59: LD E,C
-                long    zk_regmove                           ' $5A: LD E,D
-                long    zk_nextop                            ' $5B: LD E,E (NOP)
-                long    zk_regmove                           ' $5C: LD E,H
-                long    zk_regmove                           ' $5D: LD E,L
-                long    zk_regmove + ZK_HLOP                 ' $5E: LD E,(HL)
-                long    zk_regmove                           ' $5F: LD E,A
-                long    zk_regmove                           ' $60: LD H,B
-                long    zk_regmove                           ' $61: LD H,C
-                long    zk_regmove                           ' $62: LD H,D
-                long    zk_regmove                           ' $63: LD H,E
-                long    zk_nextop                            ' $64: LD H,H (NOP)
-                long    zk_regmove                           ' $65: LD H,L
-                long    zk_regmove + ZK_HLOP                 ' $66: LD H,(HL)
-                long    zk_regmove                           ' $67: LD H,A
-                long    zk_regmove                           ' $68: LD L,B
-                long    zk_regmove                           ' $69: LD L,C
-                long    zk_regmove                           ' $6A: LD L,D
-                long    zk_regmove                           ' $6B: LD L,E
-                long    zk_regmove                           ' $6C: LD L,H
-                long    zk_nextop                            ' $6D: LD L,L (NOP)
-                long    zk_regmove + ZK_HLOP                 ' $6E: LD L,(HL)
-                long    zk_regmove                           ' $6F: LD L,A
-                long    zk_regmove + ZK_HLOP                 ' $70: LD (HL),B
-                long    zk_regmove + ZK_HLOP                 ' $71: LD (HL),C
-                long    zk_regmove + ZK_HLOP                 ' $72: LD (HL),D
-                long    zk_regmove + ZK_HLOP                 ' $73: LD (HL),E
-                long    zk_regmove + ZK_HLOP                 ' $74: LD (HL),H
-                long    zk_regmove + ZK_HLOP                 ' $75: LD (HL),L
-                long    zk_halt                              ' $76: HALT
-                long    zk_regmove + ZK_HLOP                 ' $77: LD (HL),A
-                long    zk_regmove                           ' $78: LD A,B
-                long    zk_regmove                           ' $79: LD A,C
-                long    zk_regmove                           ' $7A: LD A,D
-                long    zk_regmove                           ' $7B: LD A,E
-                long    zk_regmove                           ' $7C: LD A,H
-                long    zk_regmove                           ' $7D: LD A,L
-                long    zk_regmove + ZK_HLOP                 ' $7E: LD A,(HL)
-                long    zk_nextop                            ' $7F: LD A,A (NOP)
-                long   (zk_math8 + (%10_11_00_0000_1100_0_10_001_0<<10) )[6]' $80..$85: ADD A,[BCDEHL]
-                long    zk_math8 + (%10_11_00_0000_1100_0_10_001_0<<10) + ZK_HLOP ' $86: ADD A,(HL)
-                long    zk_math8 + (%10_11_00_0000_1100_0_10_001_0<<10) ' $87: ADD A,A
-                long   (zk_math8 + (%10_11_00_0000_1100_0_01_001_0<<10) )[6]' $88..$8D: ADC A,[BCDEHL]
-                long    zk_math8 + (%10_11_00_0000_1100_0_01_001_0<<10) + ZK_HLOP ' $8E: ADC A,(HL)
-                long    zk_math8 + (%10_11_00_0000_1100_0_01_001_0<<10) ' $8F: ADC A,A
-                long   (zk_math8 + (%10_11_00_0000_0011_0_10_001_0<<10) )[6]' $90..$95: SUB [BCDEHL]
-                long    zk_math8 + (%10_11_00_0000_0011_0_10_001_0<<10) + ZK_HLOP ' $96: SUB (HL)
-                long    zk_math8 + (%10_11_00_0000_0011_0_10_001_0<<10) ' $97: SUB A
-                long   (zk_math8 + (%10_11_00_0000_0011_0_01_001_0<<10) )[6]' $98..$9D: SBC A,[BCDEHL]
-                long    zk_math8 + (%10_11_00_0000_0011_0_01_001_0<<10) + ZK_HLOP ' $9E: SBC A,(HL)
-                long    zk_math8 + (%10_11_00_0000_0011_0_01_001_0<<10) ' $9F: SBC A,A
-                long   (zk_logic + (%000000_110_0<<10))[6]   ' $A0..$A5: AND [BCDEHL]
-                long    zk_logic + (%000000_110_0<<10) + ZK_HLOP ' $A6: AND (HL)
-                long    zk_logic + (%000000_110_0<<10)       ' $A7: AND A
-                long   (zk_logic + (%001000_011_0<<10))[6]   ' $A8..$AD: XOR [BCDEHL]
-                long    zk_logic + (%001000_011_0<<10) + ZK_HLOP ' $AE: XOR (HL)
-                long    zk_logic + (%001000_011_0<<10)       ' $AF: XOR A
-                long   (zk_logic + (%001000_101_0<<10))[6]   ' $B0..$B5: OR [BCDEHL]
-                long    zk_logic + (%001000_101_0<<10) + ZK_HLOP ' $B6: OR (HL)
-                long    zk_logic + (%001000_101_0<<10)       ' $B7: OR A
-                long   (zk_math8 + (%11_00_00_0000_0011_0_10_001_0<<10) )[6]' $B8..$BD: CP [BCDEHL]
-                long    zk_math8 + (%11_00_00_0000_0011_0_10_001_0<<10) + ZK_HLOP ' $BE: CP (HL)
-                long    zk_math8 + (%11_00_00_0000_0011_0_10_001_0<<10) ' $BF: CP A
-                long    zk_condret+(%0101_11_00_01_1110_0<<10) ' $C0: RET NZ
-                long    zk_poppair+(%0_0<<10)                  ' $C1: POP BC
-                long    zk_jump  + (%0101_11_01_01_1110_10<<10) ' $C2: JP NZ,imm16
-                long    zk_jump  + (%0101_11_01_11_1111_10<<10) ' $C3: JP imm16
-                long    zk_jump  + (%0000_11_01_01_1110_10<<10) ' $C4: CALL NZ,imm16
-                long    zk_pushbc+(%0_1110<<10)              ' $C5: PUSH BC
-                long    zk_immmath + (%10_11_00_0000_1100_0_10_00_0<<10) ' $C6: ADD A,imm8
-                long    zk_rst                               ' $C7: RST 00h
-                long    zk_condret+(%0101_11_00_00_1110_0<<10) ' $C8: RET Z
-                long    zk_ret + (%0101_11_00<<10)           ' $C9: RET
-                long    zk_jump  + (%0101_11_01_00_1110_10<<10)' $CA: JP Z,imm16
-                long    zk_bitprefix + ZK_HLOP               ' $CB: bit op prefix
-                long    zk_jump  + (%0000_11_01_00_1110_10<<10)' $CC: CALL Z,imm16
-                long    zk_jump  + (%0000_11_01_11_1111_10<<10)' $CD: CALL imm16
-                long    zk_immmath + (%10_11_00_0000_1100_0_01_00_0<<10) ' $CE: ADC A,imm8
-                long    zk_rst                               ' $CF: RST 08h
-                long    zk_condret+(%0101_11_00_01_1101_0<<10) ' $D0: RET NC
-                long    zk_poppair+(%01_0<<10)                 ' $D1: POP DE
-                long    zk_jump  + (%0101_11_01_01_1101_10<<10)' $D2: JP NC,imm16
-                long    zk_immio + (%00_00<<10)                ' $D3: OUT (imm8),A
-                long    zk_jump  + (%0000_11_01_01_1101_10<<10)' $D4: CALL NC,imm16
-                long    zk_pushde+(%0_110<<10)               ' $D5: PUSH DE
-                long    zk_immmath + (%10_11_00_0000_0011_0_10_00_0<<10) ' $D6: SUB imm8
-                long    zk_rst                               ' $D7: RST 10h
-                long    zk_condret+(%0101_11_00_00_1101_0<<10) ' $D8: RET C
-                long    zk_exx                               ' $D9: EXX
-                long    zk_jump  + (%0101_11_01_00_1101_10<<10)' $DA: JP C,imm16
-                long    zk_immio + (%00_11_00<<10)             ' $DB: IN A,(imm8)
-                long    zk_jump  + (%0000_11_01_00_1101_10<<10)' $DC: CALL C,imm16
-                long    zk_ixprefix                          ' $DD: IX prefix
-                long    zk_immmath + (%10_11_00_0000_0011_0_01_00_0<<10) ' $DE: SBC A,imm8
-                long    zk_rst                               ' $DF: RST 18h
-                long    zk_condret+(%0101_11_00_01_1011_0<<10) ' $E0: RET PO
-                long    zk_poppair+(%0011_0<<10)               ' $E1: POP HL
-                long    zk_jump  + (%0101_11_01_01_1011_10<<10)' $E2: JP PO,imm16
-                long    zk_ex_hlstk                          ' $E3: EX (SP),HL
-                long    zk_jump  + (%0000_11_01_01_1011_10<<10)' $E4: CALL PO,imm16
-                long    zk_pushhl+(%0_10<<10)                  ' E5: PUSH HL
-                long    zk_immlogic + (%000000_110_1_0<<10)  ' $E6: AND imm8
-                long    zk_rst                               ' $E7: RST 20h
-                long    zk_condret+(%0101_11_00_00_1011_0<<10) ' $E8: RET PE
-                long    zk_jump_indir                          ' $E9: JP (HL)
-                long    zk_jump  + (%0101_11_01_00_1011_10<<10)' $EA: JP PE,imm16
-                long    zk_ex_dehl                           ' $EB: EX DE,HL
-                long    zk_jump  + (%0000_11_01_00_1011_10<<10)' $EC: CALL PE,imm16
-                long    zk_extprefix + ZK_HLOP               ' $ED: extension prefix
-                long    zk_immlogic + (%001000_011_1_0<<10)  ' $EE: XOR imm8
-                long    zk_rst                               ' $EF: RST 28h
-                long    zk_condret+(%0101_11_00_01_0111_0<<10) ' $F0: RET P
-                long    zk_poppair+(%00_1111_0<<10)            ' $F1: POP AF
-                long    zk_jump  + (%0101_11_01_01_0111_10<<10)' $F2: JP P,imm16
-                long    zk_irqoff                              ' $F3: DI
-                long    zk_jump  + (%0000_11_01_01_0111_10<<10)' $F4: CALL P,imm16
-                long    zk_pushaf+(%0_11111_00<<10)            ' $F5: PUSH AF
-                long    zk_immlogic + (%001000_101_1_0<<10)  ' $F6: OR imm8
-                long    zk_rst                               ' $F7: RST 30h
-                long    zk_condret+(%0101_11_00_00_0111_0<<10) ' $F8: RET M
-                long    zk_hl_to_sp                            ' $F9: LD SP,(HL)
-                long    zk_jump  + (%0101_11_01_00_0111_10<<10)' $FA: JP M,imm16
-                long    zk_irqon                               ' $FB: EI
-                long    zk_jump  + (%0000_11_01_00_0111_10<<10)' $FC: CALL M,imm16
-                long    zk_iyprefix + (%10<<10)              ' $FD: IY prefix
-                long    zk_immmath + (%11_00_00_0000_0011_0_10_00_0<<10) ' $FE: CP imm8
-                long    zk_rst                               ' $FF: RST 38h
+zk_lutbase
 
 zk_rolla        mov     zk_tmp8,zk_accu
 zk_shiftop
@@ -3049,10 +3393,11 @@ zk_cio
                 cmp     zk_optmp1,#6<<3 wz
                 mov     zk_tmp8,#0
         if_nz   call    #\zk_getry
-                getbyte zk_ea,zk_debc,#0
+                getword zk_ea,zk_debc,#0
 zk_immio
                 call    #\zk_readcode
                 mov     zk_ea,zk_tmp8
+                setbyte zk_ea,zk_accu,#1
 
                 mov     zk_tmp8,zk_accu
                 jmp     #\zk_portout
@@ -3278,14 +3623,6 @@ zk_ex_dehl      '' EX DE,HL
         _ret_   mov     zk_hl,zk_optmp0
 
 
-zk_ex_af        '' EX AF,AF'
-                xor     zk_accu,zk_altaccu
-                xor     zk_altaccu,zk_accu
-                xor     zk_accu,zk_altaccu
-                xor     zk_flags,zk_altflags
-                xor     zk_altflags,zk_flags
-        _ret_   xor     zk_flags,zk_altflags
-
 zk_ex_hlstk     '' EX (SP),HL
                 add     zk_cycles,#3 ' Should be 19. 19 - 4 - 4*3 = 3
                 mov     zk_ea,zk_sp
@@ -3340,120 +3677,324 @@ zk_loadimm8
                 push    #zk_setry
                 jmp     #\zk_readcode
 
+zk_ex_af        '' EX AF,AF'
+                xor     zk_accu,zk_altaccu
+                xor     zk_altaccu,zk_accu
+                xor     zk_accu,zk_altaccu
+                xor     zk_flags,zk_altflags
+                xor     zk_altflags,zk_flags
+        _ret_   xor     zk_flags,zk_altflags
+
 zk_halt
                 or      zk_irqenable,#(1<<ZK_HALT_BIT)
         _ret_   decmod  zk_pc,zk_ffffh
 
+ula_contend_ram
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #14      wz  ' Z=A14
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+        _ret_   add     zk_cycles, #3
+
+ula_contend_port
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #14      wz  ' Z=A14
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+
+                testb   zk_ea, #0       wz
+                call    #\zx_ula_advance
+        if_x0   add     zk_cycles, ula_cycles
+        if_x0   add     zk_cycles, #3
+        if_x0   ret
+
+                testb   zk_ea, #15      wc  ' C=A15
+                testb   zk_ea, #14      wz  ' Z=A14
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+                add     zk_cycles, #1
+        if_01   call    #\zx_ula_advance
+        if_01   add     zk_cycles, ula_cycles
+        _ret_   add     zk_cycles, #1
+
+zx_ula_advance
+                sub     ula_state, ula_state_done
+                add     ula_state, zk_cycles
+                mov     ula_state_done, zk_cycles
+
+.l1             cmps    ula_state, #8   wcz
+        if_ae   sub     ula_state, #8
+        if_ae   add     ula_col, #2
+        if_ae   add     ptra, #2
+        if_ae   add     ptrb, #2
+        if_ae   jmp     #.l1
+
+                cmpsub  ula_col, #32    wc
+        if_1x   sub     ula_state, #224-128
+        if_1x   sub     ptra, #32
+        if_1x   sub     ptrb, #32
+        if_1x   sub     ula_scans, #1   wz
+        if_10   add     ptra, #256
+        if_11   sub     ptra, ##$700-32
+        if_11   add     ptrb, #32
+        if_11   mov     ula_scans, #8
+
+        if_11   sub     ula_rows, #1    wz
+        if_11   add     ptra, ##2048-256
+        if_11   mov     ula_rows, #8
+
+        if_11   sub     ula_blocks, #1  wz
+        if_11   sub     ptra, ##32*192
+        if_11   sub     ptrb, ##32*24
+        if_11   mov     ula_blocks, #3
+        if_11   sub     ula_state, ##(VIDEO == PAL ? (224*120) : (224*72))
+
+                mov     ula_cycles, #6
+                sub     ula_cycles, ula_state   wc
+        if_c    mov     ula_cycles, #0
+
+                cmp     ula_state, #1   wz
+        if_z    rdbyte  zk_tmp8, ptra[0]
+                cmp     ula_state, #2   wz
+        if_z    rdbyte  zk_tmp8, ptrb[0]
+                cmp     ula_state, #3   wz
+        if_z    rdbyte  zk_tmp8, ptra[1]
+                cmp     ula_state, #4   wz
+        if_z    rdbyte  zk_tmp8, ptrb[1]
+
+                ret     wcz
+
                 fit     $400
 
-DAT             ' I/O Hub-exec code
+DAT             ' ZiKore Z80 opcode table
                 orgh
 
-'
-' Controllers
-'
-ctrl_rd
-                testb   zk_ea, #1       wc          ' A1 = select controller
-                testb   io_flags, #1    wz          ' Controller mode flip/flop
-         if_00  rdbyte  zk_tmp8, #@coleco_ctrls+0   ' Joystick 0
-         if_01  rdbyte  zk_tmp8, #@coleco_ctrls+1   ' Keypad 0
-         if_10  rdbyte  zk_tmp8, #@coleco_ctrls+2   ' Joystick 1
-         if_11  rdbyte  zk_tmp8, #@coleco_ctrls+3   ' Keypad 1
-                ret     wcz
+zk_optable      '' Opcode table
+                long    zk_nextop                                           ' $00: NOP
+                long    zk_loadimm16 + (%0000_1_111_0<<10)                  ' $01: LD BC,imm16
+                long    zk_a_and_ptr + (%001110<<10)                        ' $02: LD (BC),A
+                long    zk_incdec16+(%0000_1_1111_10_1_11100<<10)           ' $03: INC BC
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $04: INC B
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $05: DEC B
+                long    zk_loadimm8                                         ' $06: LD B,imm8
+                long    zk_rolla+(%0_010_110_01_11110_00<<10)               ' $07: RLCA
+                long    zk_ex_af                                            ' $08: EX AF,AF'
+                long    zk_math16+(%0010_111_00_1100_00_1110_1_0<<10)       ' $09: ADD HL,BC
+                long    zk_a_and_ptr + (%000010<<10)                        ' $0A: LD A,(BC)
+                long    zk_incdec16+(%0000_1_1111_01_1_11100<<10)           ' $0B: DEC BC
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $0C: INC C
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $0D: DEC C
+                long    zk_loadimm8                                         ' $0E: LD C,imm8
+                long    zk_rolla+(%0_010_001_01_11011_00<<10)               ' $0F: RRCA
+                long    zk_jr + (%01_11_0000_0<<10)                         ' $10: DJNZ
+                long    zk_loadimm16 + (%0001_1_111_0<<10)                  ' $11: LD DE,imm16
+                long    zk_a_and_ptr + (%00110 <<10)+1                      ' $12: LD (DE),A
+                long    zk_incdec16+(%0001_1_1111_10_1_11010<<10)           ' $13: INC DE
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $14: INC D
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $15: DEC D
+                long    zk_loadimm8                                         ' $16: LD D,imm8
+                long    zk_rolla+(%0_010_110_00_11110_00<<10)               ' $17: RLA
+                long    zk_jr + (%11_11_1111_0<<10)                         ' $18: JR
+                long    zk_math16+(%0010_111_00_1100_00_1101_1_0<<10)       ' $19: ADD HL,DE
+                long    zk_a_and_ptr + (%00000 <<10)+1                      ' $1A: LD A,(DE)
+                long    zk_incdec16+(%0001_1_1111_01_1_11010<<10)           ' $1B: DEC DE
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $1C: INC E
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $1D: DEC E
+                long    zk_loadimm8                                         ' $1E: LD E,imm8
+                long    zk_rolla+(%0_010_001_00_11011_00<<10)               ' $1F: RRA
+                long    zk_jr + (%01_10_1111_0<<10)                         ' $20: JR NZ
+                long    zk_loadimm16 + (%0011_1_111_0<<10)                  ' $21: LD HL,imm16
+                long    zk_ld_abs16 + (%01011_00<<10)                       ' $22: LD (imm16),HL
+                long    zk_incdec16+(%0011_1_1111_10_1_10110<<10)           ' $23: INC HL
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $24: INC H
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $25: DEC H
+                long    zk_loadimm8                                         ' $26: LD H,imm8
+                long    zk_daa                                              ' $27: DAA
+                long    zk_jr + (%00_10_1111_0<<10)                         ' $28: JR Z
+                long    zk_math16+(%0010_111_00_1100_00_1011_1_0<<10)       ' $29: ADD HL,HL
+                long    zk_ld_abs16 + (%00110_11111_00<<10)                 ' $2A: LD HL,(imm16)
+                long    zk_incdec16+(%0011_1_1111_01_1_10110<<10)           ' $2B: DEC HL
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)   ' $2C: INC L
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)   ' $2D: DEC L
+                long    zk_loadimm8                                         ' $2E: LD L,imm8
+                long    zk_cpl                                              ' $2F: CPL
+                long    zk_jr + (%01_01_1111_0<<10)                         ' $30: JR NC
+                long    zk_loadimm16 + (%0111_1_111_0<<10)                              ' $31: LD SP,imm16
+                long    zk_ld_abs + (%001111_00<<10)                                    ' $32: LD (imm16),A
+                long    zk_incdec16+(%0111_1_1111_10_1_01110<<10)                       ' $33: INC SP
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10)+ZK_HLOP       ' $34: INC (HL)
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10)+ZK_HLOP       ' $35: DEC (HL)
+                long    zk_loadimm8 + ZK_HLOP                ' $36: LD (HL),imm8
+                long    zk_scf + (%10 << 10)                 ' $37: SCF
+                long    zk_jr + (%00_01_1111_0<<10)          ' $38: JR C
+                long    zk_math16+(%0010_111_00_1100_00_0111_1_0<<10) ' $39: ADD HL,SP
+                long    zk_ld_abs + (  %0011_00<<10)         ' $3A: LD A,(imm16)
+                long    zk_incdec16+(%0111_1_1111_01_1_01110<<10)' $3B: DEC SP
+                long    zk_incdec8+(%01_11_00_0110_1100_0_10_1111_00<<10) ' $3C: INC A
+                long    zk_incdec8+(%01_11_00_0110_0011_0_10_1111_00<<10) ' $3D: DEC A
+                long    zk_loadimm8                          ' $3E: LD A,imm8
+                long    zk_ccf                               ' $3F: CCF
+                long    zk_nextop                            ' $40: LD B,B (NOP)
+                long    zk_regmove                           ' $41: LD B,C
+                long    zk_regmove                           ' $42: LD B,D
+                long    zk_regmove                           ' $43: LD B,E
+                long    zk_regmove                           ' $44: LD B,H
+                long    zk_regmove                           ' $45: LD B,L
+                long    zk_regmove + ZK_HLOP                 ' $46: LD B,(HL)
+                long    zk_regmove                           ' $47: LD B,A
+                long    zk_regmove                           ' $48: LD C,B
+                long    zk_nextop                            ' $49: LD C,C (NOP)
+                long    zk_regmove                           ' $4A: LD C,D
+                long    zk_regmove                           ' $4B: LD C,E
+                long    zk_regmove                           ' $4C: LD C,H
+                long    zk_regmove                           ' $4D: LD C,L
+                long    zk_regmove + ZK_HLOP                 ' $4E: LD C,(HL)
+                long    zk_regmove                           ' $4F: LD C,A
+                long    zk_regmove                           ' $50: LD D,B
+                long    zk_regmove                           ' $51: LD D,C
+                long    zk_nextop                            ' $52: LD D,D (NOP)
+                long    zk_regmove                           ' $53: LD D,E
+                long    zk_regmove                           ' $54: LD D,H
+                long    zk_regmove                           ' $55: LD D,L
+                long    zk_regmove + ZK_HLOP                 ' $56: LD D,(HL)
+                long    zk_regmove                           ' $57: LD D,A
+                long    zk_regmove                           ' $58: LD E,B
+                long    zk_regmove                           ' $59: LD E,C
+                long    zk_regmove                           ' $5A: LD E,D
+                long    zk_nextop                            ' $5B: LD E,E (NOP)
+                long    zk_regmove                           ' $5C: LD E,H
+                long    zk_regmove                           ' $5D: LD E,L
+                long    zk_regmove + ZK_HLOP                 ' $5E: LD E,(HL)
+                long    zk_regmove                           ' $5F: LD E,A
+                long    zk_regmove                           ' $60: LD H,B
+                long    zk_regmove                           ' $61: LD H,C
+                long    zk_regmove                           ' $62: LD H,D
+                long    zk_regmove                           ' $63: LD H,E
+                long    zk_nextop                            ' $64: LD H,H (NOP)
+                long    zk_regmove                           ' $65: LD H,L
+                long    zk_regmove + ZK_HLOP                 ' $66: LD H,(HL)
+                long    zk_regmove                           ' $67: LD H,A
+                long    zk_regmove                           ' $68: LD L,B
+                long    zk_regmove                           ' $69: LD L,C
+                long    zk_regmove                           ' $6A: LD L,D
+                long    zk_regmove                           ' $6B: LD L,E
+                long    zk_regmove                           ' $6C: LD L,H
+                long    zk_nextop                            ' $6D: LD L,L (NOP)
+                long    zk_regmove + ZK_HLOP                 ' $6E: LD L,(HL)
+                long    zk_regmove                           ' $6F: LD L,A
+                long    zk_regmove + ZK_HLOP                 ' $70: LD (HL),B
+                long    zk_regmove + ZK_HLOP                 ' $71: LD (HL),C
+                long    zk_regmove + ZK_HLOP                 ' $72: LD (HL),D
+                long    zk_regmove + ZK_HLOP                 ' $73: LD (HL),E
+                long    zk_regmove + ZK_HLOP                 ' $74: LD (HL),H
+                long    zk_regmove + ZK_HLOP                 ' $75: LD (HL),L
+                long    zk_halt                              ' $76: HALT
+                long    zk_regmove + ZK_HLOP                 ' $77: LD (HL),A
+                long    zk_regmove                           ' $78: LD A,B
+                long    zk_regmove                           ' $79: LD A,C
+                long    zk_regmove                           ' $7A: LD A,D
+                long    zk_regmove                           ' $7B: LD A,E
+                long    zk_regmove                           ' $7C: LD A,H
+                long    zk_regmove                           ' $7D: LD A,L
+                long    zk_regmove + ZK_HLOP                 ' $7E: LD A,(HL)
+                long    zk_nextop                            ' $7F: LD A,A (NOP)
+                long   (zk_math8 + (%10_11_00_0000_1100_0_10_001_0<<10) )[6]' $80..$85: ADD A,[BCDEHL]
+                long    zk_math8 + (%10_11_00_0000_1100_0_10_001_0<<10) + ZK_HLOP ' $86: ADD A,(HL)
+                long    zk_math8 + (%10_11_00_0000_1100_0_10_001_0<<10) ' $87: ADD A,A
+                long   (zk_math8 + (%10_11_00_0000_1100_0_01_001_0<<10) )[6]' $88..$8D: ADC A,[BCDEHL]
+                long    zk_math8 + (%10_11_00_0000_1100_0_01_001_0<<10) + ZK_HLOP ' $8E: ADC A,(HL)
+                long    zk_math8 + (%10_11_00_0000_1100_0_01_001_0<<10) ' $8F: ADC A,A
+                long   (zk_math8 + (%10_11_00_0000_0011_0_10_001_0<<10) )[6]' $90..$95: SUB [BCDEHL]
+                long    zk_math8 + (%10_11_00_0000_0011_0_10_001_0<<10) + ZK_HLOP ' $96: SUB (HL)
+                long    zk_math8 + (%10_11_00_0000_0011_0_10_001_0<<10) ' $97: SUB A
+                long   (zk_math8 + (%10_11_00_0000_0011_0_01_001_0<<10) )[6]' $98..$9D: SBC A,[BCDEHL]
+                long    zk_math8 + (%10_11_00_0000_0011_0_01_001_0<<10) + ZK_HLOP ' $9E: SBC A,(HL)
+                long    zk_math8 + (%10_11_00_0000_0011_0_01_001_0<<10) ' $9F: SBC A,A
+                long   (zk_logic + (%000000_110_0<<10))[6]   ' $A0..$A5: AND [BCDEHL]
+                long    zk_logic + (%000000_110_0<<10) + ZK_HLOP ' $A6: AND (HL)
+                long    zk_logic + (%000000_110_0<<10)       ' $A7: AND A
+                long   (zk_logic + (%001000_011_0<<10))[6]   ' $A8..$AD: XOR [BCDEHL]
+                long    zk_logic + (%001000_011_0<<10) + ZK_HLOP ' $AE: XOR (HL)
+                long    zk_logic + (%001000_011_0<<10)       ' $AF: XOR A
+                long   (zk_logic + (%001000_101_0<<10))[6]   ' $B0..$B5: OR [BCDEHL]
+                long    zk_logic + (%001000_101_0<<10) + ZK_HLOP ' $B6: OR (HL)
+                long    zk_logic + (%001000_101_0<<10)       ' $B7: OR A
+                long   (zk_math8 + (%11_00_00_0000_0011_0_10_001_0<<10) )[6]' $B8..$BD: CP [BCDEHL]
+                long    zk_math8 + (%11_00_00_0000_0011_0_10_001_0<<10) + ZK_HLOP ' $BE: CP (HL)
+                long    zk_math8 + (%11_00_00_0000_0011_0_10_001_0<<10) ' $BF: CP A
+                long    zk_condret+(%0101_11_00_01_1110_0<<10) ' $C0: RET NZ
+                long    zk_poppair+(%0_0<<10)                  ' $C1: POP BC
+                long    zk_jump  + (%0101_11_01_01_1110_10<<10) ' $C2: JP NZ,imm16
+                long    zk_jump  + (%0101_11_01_11_1111_10<<10) ' $C3: JP imm16
+                long    zk_jump  + (%0000_11_01_01_1110_10<<10) ' $C4: CALL NZ,imm16
+                long    zk_pushbc+(%0_1110<<10)              ' $C5: PUSH BC
+                long    zk_immmath + (%10_11_00_0000_1100_0_10_00_0<<10) ' $C6: ADD A,imm8
+                long    zk_rst                               ' $C7: RST 00h
+                long    zk_condret+(%0101_11_00_00_1110_0<<10) ' $C8: RET Z
+                long    zk_ret + (%0101_11_00<<10)           ' $C9: RET
+                long    zk_jump  + (%0101_11_01_00_1110_10<<10)' $CA: JP Z,imm16
+                long    zk_bitprefix + ZK_HLOP               ' $CB: bit op prefix
+                long    zk_jump  + (%0000_11_01_00_1110_10<<10)' $CC: CALL Z,imm16
+                long    zk_jump  + (%0000_11_01_11_1111_10<<10)' $CD: CALL imm16
+                long    zk_immmath + (%10_11_00_0000_1100_0_01_00_0<<10) ' $CE: ADC A,imm8
+                long    zk_rst                               ' $CF: RST 08h
+                long    zk_condret+(%0101_11_00_01_1101_0<<10) ' $D0: RET NC
+                long    zk_poppair+(%01_0<<10)                 ' $D1: POP DE
+                long    zk_jump  + (%0101_11_01_01_1101_10<<10)' $D2: JP NC,imm16
+                long    zk_immio + (%00_000<<10)               ' $D3: OUT (imm8),A
+                long    zk_jump  + (%0000_11_01_01_1101_10<<10)' $D4: CALL NC,imm16
+                long    zk_pushde+(%0_110<<10)               ' $D5: PUSH DE
+                long    zk_immmath + (%10_11_00_0000_0011_0_10_00_0<<10) ' $D6: SUB imm8
+                long    zk_rst                               ' $D7: RST 10h
+                long    zk_condret+(%0101_11_00_00_1101_0<<10) ' $D8: RET C
+                long    zk_exx                               ' $D9: EXX
+                long    zk_jump  + (%0101_11_01_00_1101_10<<10)' $DA: JP C,imm16
+                long    zk_immio + (%00_11_000<<10)            ' $DB: IN A,(imm8)
+                long    zk_jump  + (%0000_11_01_00_1101_10<<10)' $DC: CALL C,imm16
+                long    zk_ixprefix                          ' $DD: IX prefix
+                long    zk_immmath + (%10_11_00_0000_0011_0_01_00_0<<10) ' $DE: SBC A,imm8
+                long    zk_rst                               ' $DF: RST 18h
+                long    zk_condret+(%0101_11_00_01_1011_0<<10) ' $E0: RET PO
+                long    zk_poppair+(%0011_0<<10)               ' $E1: POP HL
+                long    zk_jump  + (%0101_11_01_01_1011_10<<10)' $E2: JP PO,imm16
+                long    zk_ex_hlstk                          ' $E3: EX (SP),HL
+                long    zk_jump  + (%0000_11_01_01_1011_10<<10)' $E4: CALL PO,imm16
+                long    zk_pushhl+(%0_10<<10)                  ' E5: PUSH HL
+                long    zk_immlogic + (%000000_110_1_0<<10)  ' $E6: AND imm8
+                long    zk_rst                               ' $E7: RST 20h
+                long    zk_condret+(%0101_11_00_00_1011_0<<10) ' $E8: RET PE
+                long    zk_jump_indir                          ' $E9: JP (HL)
+                long    zk_jump  + (%0101_11_01_00_1011_10<<10)' $EA: JP PE,imm16
+                long    zk_ex_dehl                           ' $EB: EX DE,HL
+                long    zk_jump  + (%0000_11_01_00_1011_10<<10)' $EC: CALL PE,imm16
+                long    zk_extprefix + ZK_HLOP               ' $ED: extension prefix
+                long    zk_immlogic + (%001000_011_1_0<<10)  ' $EE: XOR imm8
+                long    zk_rst                               ' $EF: RST 28h
+                long    zk_condret+(%0101_11_00_01_0111_0<<10) ' $F0: RET P
+                long    zk_poppair+(%00_1111_0<<10)            ' $F1: POP AF
+                long    zk_jump  + (%0101_11_01_01_0111_10<<10)' $F2: JP P,imm16
+                long    zk_irqoff                              ' $F3: DI
+                long    zk_jump  + (%0000_11_01_01_0111_10<<10)' $F4: CALL P,imm16
+                long    zk_pushaf+(%0_11111_00<<10)            ' $F5: PUSH AF
+                long    zk_immlogic + (%001000_101_1_0<<10)  ' $F6: OR imm8
+                long    zk_rst                               ' $F7: RST 30h
+                long    zk_condret+(%0101_11_00_00_0111_0<<10) ' $F8: RET M
+                long    zk_hl_to_sp                            ' $F9: LD SP,(HL)
+                long    zk_jump  + (%0101_11_01_00_0111_10<<10)' $FA: JP M,imm16
+                long    zk_irqon                               ' $FB: EI
+                long    zk_jump  + (%0000_11_01_00_0111_10<<10)' $FC: CALL M,imm16
+                long    zk_iyprefix + (%10<<10)              ' $FD: IY prefix
+                long    zk_immmath + (%11_00_00_0000_0011_0_10_00_0<<10) ' $FE: CP imm8
+                long    zk_rst                               ' $FF: RST 38h
 
-'
-' TMS9918
-'
-tms_wr
-                testb   io_flags, #0    wc
-                testb   zk_ea, #0       wz          ' A0 = register / ram
-         if_x0  jmp     #\tms_ram_wr
-         if_01  jmp     #\tms_data_wr
-         if_11  jmp     #\tms_reg_wr
 
-tms_data_wr     bith    io_flags, #0
-                getbyte tms_tmp0, zk_tmp8, #0
-                ret     wcz
+CON ' ZiKore Z80 constants
 
-tms_reg_wr      bitl    io_flags, #0
-                testb   zk_tmp8, #7     wz
-        if_x0   jmp     #tms_addr_wr
-                mov     tms_tmp1, zk_tmp8
-                and     tms_tmp1, #$07
-                cmp     tms_tmp1, #1    wz      ' Z = Reg1 (may be INT enable)
-                add     tms_tmp1, #@tms_regs
-                wrbyte  tms_tmp0, tms_tmp1
-        if_nz   ret     wcz
-                rdlong  tms_tmp1, #@tms_status
-                testb   zk_tmp8, #5     wc      ' C = INT ENABLE
-                testb   tms_tmp1, #5    andc    ' FSync
-                bitc    tms_tmp1, #8            ' Generate NMI if INT enable and FSync
-                wrlong  tms_tmp1, #@tms_status
-                ret     wcz
-
-tms_addr_wr     mov     tms_ramptr, zk_tmp8
-                and     tms_ramptr, #$3F
-                shl     tms_ramptr, #8
-                or      tms_ramptr, tms_tmp0
-                ret     wcz
-
-tms_rd
-                testb   zk_ea, #0       wz
-        if_x0   jmp     #\tms_ram_rd
-        if_x1   jmp     #\tms_status_rd
-
-tms_ram_wr      mov     tms_tmp1, tms_ramptr
-                add     tms_tmp1, ##@tms_vram
-                wrbyte  zk_tmp8, tms_tmp1
-                incmod  tms_ramptr, ##16384-1
-                ret     wcz
-
-tms_ram_rd      mov     tms_tmp1, tms_ramptr
-                add     tms_tmp1, ##@tms_vram
-                rdbyte  zk_tmp8, tms_tmp1
-                incmod  tms_ramptr, ##16384-1
-                ret     wcz
-
-tms_status_rd   rdlong  tms_tmp1, #@tms_status
-                getbyte zk_tmp8, tms_tmp1, #0
-                and     tms_tmp1, #%000_11111
-                wrlong  tms_tmp1, #@tms_status
-                ret     wcz
-
-'
-' SN76489
-'
-psg_wr
-                test    zk_tmp8, #%1_000_0000   wz  ' latch or data ?
-        if_z    jmp     #psg_data_wr
-
-                mov     psg_latch, zk_tmp8
-                and     psg_latch, #%0_111_0000     ' channel number
-                shr     psg_latch, #2               ' point to channel registers
-
-                mov     zk_memtmp0, #@psg_registers
-                add     zk_memtmp0, psg_latch
-                rdlong  psg_data, zk_memtmp0
-                setnib  psg_data, zk_tmp8, #0
-                wrlong  psg_data, zk_memtmp0
-
-                ret     wcz
-
-psg_data_wr     and     zk_tmp8, #%00_111111
-                shl     zk_tmp8, #4
-
-                mov     zk_memtmp0, #@psg_registers
-                add     zk_memtmp0, psg_latch
-                rdlong  psg_data, zk_memtmp0
-                and     psg_data, #$0F              ' keep existing lower 4 bits
-                or      psg_data, zk_tmp8           ' add upper 6 bits
-                wrlong  psg_data, zk_memtmp0
-
-                ret     wcz
-
-CON ' ZiKore constants
-
-    ZK_CLOCK      = VIDEO == PAL ? 3_546_893 : 3_579_545
+    ZK_CLOCK      = VIDEO == PAL ? 3_500_000 : 3_527_500
     ZK_HLOP       = 1 << 10
 
     ZK_CARRY_BIT  = 0
@@ -3469,396 +4010,283 @@ CON ' ZiKore constants
     ZK_IFF1_BIT   = 0
     ZK_IFF2_BIT   = 1
     ZK_HALT_BIT   = 2
+    ZK_IM2_BIT    = 3
 
-DAT             ' TMS9918
+DAT             ' Video COG resident code
                 org     $000
 
-tms_driver
-                add     ptrb, ##@tms_palette - @tms_driver
-                setq2   #511                    ' load video drivers into lut
+video_driver
+                add     ptrb, ##@video_driver_lut - @video_driver
+                setq2   #16-1   ' load palette into LUT
                 rdlong  0, ptrb
 
-                call    #\(VIDEO == VGA ? vga_init : cvbs_init) ' start video driver
+                jmp     #\(VIDEO == VGA ? vga_init : cvbs_init) ' start video driver
 
-                mov     scol, #0
-                xcont   #10,#0                  ' do streamer instruction to start interrupt sequence
 '
+' VGA Driver
 '
-' Main program
+vga_init
+                setcmod #%01_0_000_1          ' enable colorspace conversion
+                setcy   ##VGA_INTENSITY << 24 ' r      set colorspace for rgb
+                setci   ##VGA_INTENSITY << 16 ' g
+                setcq   ##VGA_INTENSITY << 08 ' b
+                setxfrq vga_xf                ' set transfer frequency
+
+                cogid   _vx                 ' insert cogid into dac modes
+                setnib  dacmode_s,_vx,#2
+                setnib  dacmode_c,_vx,#2
+
+                wrpin   dacmode_s,vga_pn    ' enable 123-ohm 3.3V dac mode in pin +0
+
+                xor     vga_pn,#2<<6|1      ' enable 75-ohm 2.0V dac mode in pins +1..3
+                wrpin   dacmode_c,vga_pn
+
+                xor     vga_pn,#3<<6 ^(2<<6|1) ' make pins +0..3 outputs
+                drvl    vga_pn
+
+                xor     vga_pn,#4|(3<<6)    ' leave av_base pointing to pin +4 (vertical sync)
+                drvh    vga_pn
+
+vga_field       mov     ptra, zx_screen
+                mov     ptrb, zx_attribute
+
+                incmod  _fc, #32            ' blink frequency
+                cmp     _fc, #16        wc
+
+                mov     pa, #3
+.block          mov     _rc, #8
+.row            mov     _sc, #8             ' visible lines 8*8*3=192
+.scanline
+                call    #.line
+                call    #.line1
+
+                add     ptra, #256
+                djnz    _sc, #.scanline
+
+                sub     ptra, ##2048-32
+                add     ptrb, #32
+                djnz    _rc, #.row
+
+                add     ptra, ##2048-256
+                djnz    pa, #.block
+
+                callpa  #24, #.border       ' bottom border
+
+                callpa  #10, #.blank        ' back porch
+
+                drvnot  vga_pn              ' vertical sync on
+                callpa  #2, #.blank
+                drvnot  vga_pn              ' vertical sync off
+
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
+
+                callpa  #33, #.blank        ' front porch
+
+                callpa  #24, #.border       ' top border
+
+                jmp     #vga_field          ' frame loop
+
+.line1          skipf   #%0_111_000
+.line           xcont   vga_bs, #0          ' do before-sync part of scan line
+                xzero   vga_ds, #1          ' do sync part of scan line
+                xcont   vga_as, #0          ' do before-visible part of scan line
+
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   vga_bv, _bc         ' do left border
+
+                rep     @.loop, #32
+                rdbyte  t0, ptrb++
+                testb   t0, #7      wz      ' blink
+                rdbyte  _ch, ptra++
+        if_11   xor     _ch, #$FF           ' invert bitmap if blinking
+
+                rev     _ch                 ' revert lsb<>msb
+                shr     _ch, #24            ' shift into position
+                mergew  _ch                 ' merge to 8 bitpairs
+
+                testb   t0, #6      wz      ' bright
+                mov     t1, t0
+                and     t1, #%0_0_111_000   ' mask background
+                shr     t1, #3              ' shift into byte 0
+                bitz    t1, #3              ' set brightness
+                and     t0, #%0_0_000_111   ' mask foreground
+                shl     t0, #8              ' shift into byte 1
+                bitz    t1, #8+3            ' set brightness
+                or      t0, t1
+                or      t1, t0
+
+                movbyts t0, _ch
+                xcont   vga_dv, t0
+                shr     _ch, #8
+                movbyts t1, _ch
+                xcont   vga_dv, t1
+.loop
+
+                xcont   vga_av, _bc         ' do right border
+
+                sub     ptra, #32
+                sub     ptrb, #32
+                ret
+
+.border         xcont   vga_bs, #0          ' do before-sync part of scan line
+                xzero   vga_ds, #1          ' do sync part of scan line
+                xcont   vga_as, #0          ' do after-sync part of scan line
+
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   vga_vi, _bc         ' do visible part of scan line
+
+                xcont   vga_bs, #0          ' do before-sync part of scan line
+                xzero   vga_ds, #1          ' do sync part of scan line
+                xcont   vga_as, #0          ' do after-sync part of scan line
+                xcont   vga_vi, _bc         ' do visible part of scan line
+        _ret_   djnz    pa, #.border
+
+.blank          xcont   vga_bs, #0          ' do before-sync part of scan line
+                xzero   vga_ds, #1          ' do sync part of scan line
+                xcont   vga_as, #0          ' do before-visible part of scan line
+                xcont   vga_db, #0          ' do visible part of scan line
+        _ret_   djnz    pa, #.blank         ' loop if more blanks needed
+
 '
-loop
-                cmp     _cl, scnt           wcz
-    if_z        jmp     #loop
-
-                mov     scol, scol+1
-                mov     scnt, _cl
-
-                cmp     _cl, #(VIDEO == PAL ? 48 : 24) + 192      wz
-    if_ne       jmp     #.skip
-
-                locktry #0              wc
-    if_nc       jmp     #$-1
-                rdlong  a, #@tms_status         ' update status byte
-                or      a, #TMSVSYNC            ' vsync flag
-                test    regs+1, #TMSINTEN   wz  ' interrupt enable
-                bitnz   a, #8                   ' NMI
-                wrlong  a, #@tms_status
-                lockrel #0
-
-.skip           setq    #1                      ' read registers into temp buffer
-                rdlong  sbuf, #@tms_regs        ' |
-
-                getnib  scol+1, sbuf+1, #6      ' border color for next line
-                movbyts scol+1, #0
-
-                getbyte regs+0, sbuf, #0
-                test    regs+0, #TMSMODE3   wz  ' graphics mode II
-                getbyte regs+1, sbuf, #1
-                getbyte regs+2, sbuf, #2
-                shl     regs+2, #10             ' name table base address * $400
-                add     regs+2, _tms_vram
-                getbyte regs+3, sbuf, #3
-                shl     regs+3, #6              ' color table base address * $40
-    if_nz       andn    regs+3, vdp_8k_mask     ' limit color table to 8k boundaries
-                add     regs+3, _tms_vram
-                getbyte regs+4, sbuf+1, #0
-                shl     regs+4, #11             ' pattern generator base address * $800
-    if_nz       andn    regs+4, vdp_8k_mask     ' limit pattern table to 8k boundaries
-                add     regs+4, _tms_vram
-                getbyte r4_mask, sbuf+1, #0
-                and     r4_mask, #%00000011
-                shl     r4_mask, #8
-                getbyte regs+5, sbuf+1, #1
-                shl     regs+5, #7              ' sprite attribute table base address * $80
-                add     regs+5, _tms_vram
-                getbyte regs+6, sbuf+1, #2
-                shl     regs+6, #11             ' sprite pattern generator base address * $800
-                add     regs+6, _tms_vram
-                getbyte regs+7, sbuf+1, #3
-
-                cmp     _cl, #(VIDEO == PAL ? 48 : 24)  wcz ' check if first visible line
-    if_c        jmp     #loop
-                cmp     _cl, #(VIDEO == PAL ? 48 : 24) + 192    wc  ' check if last visible line
-    if_nc       jmp     #loop
-
-    if_z        mov     loff, #0                ' if first line reset counters...
-    if_z        mov     lcnt, #0
-    if_z        mov     ptrv, _tms_bitmap       ' ...and pointers
-
-                setq    #32-1                   ' read all sprite attribute table
-                rdlong  sbuf, regs+5
-
-scanline
-                mov     ptra, ptrv
-
-                test    regs+1, #TMSBLANK   wz  ' blank
-    if_z        jmp     #blank_line
-
-                test    regs+1, #TMSMODE1   wz  ' text mode
-                mov     a, lcnt
-                andn    a, #$07                 ' divide and multiply by 8
-                mov     b, a
-                shl     a, #2                   ' multiply by 32
-    if_nz       add     a, b                    ' multiply by 40
-                add     regs+2, a
-    if_nz       jmp     #text_mode
-
-                test    regs+1, #TMSMODE2   wz  ' multicolor mode
-    if_nz       jmp     #multicolor_mode
-
-                jmp     #graphics_mode
-
-text_mode
-                getnib  ctmp, regs+7, #1        ' foreground color
-                shl     ctmp, #8
-                setnib  ctmp, regs+7, #0        ' background color
-
-                mov     cbuf+0, ctmp
-                movbyts cbuf+0, #0
-                setq    #1
-                wrlong  cbuf+0, ptra++
-
-                mov     ptrb, regs+2
-
-                mov     ecnt, #40
-.loop           rdbyte  ptrc, ptrb++            ' read tile number to display
-                shl     ptrc, #3                ' 8 bytes per tile
-                add     ptrc, regs+4
-                add     ptrc, loff
-                rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
-
-                rev     a
-                shr     a, #24
-                mergew  a
-                mov     cbuf+0, ctmp
-                movbyts cbuf+0, a
-                shr     a, #8
-                mov     cbuf+1, ctmp
-                movbyts cbuf+1, a
-
-                setq    #1
-                wrlong  cbuf+0, ptra++
-                sub     ptra, #2
-
-                djnz    ecnt, #.loop
+' PAL/NTSC driver COG resident code
+'
+cvbs_init
+                setcmod #%11_1_0000         ' set colorspace converter to YIQ mode (composite)
+                setcy   cvbs_cy             ' set colorspace converter y coefficients
+                setci   cvbs_ci             ' set colorspace converter i coefficients
+                setcq   cvbs_cq             ' set colorspace converter q coefficients
+                setcfrq cvbs_cf             ' set colorspace converter frequency
+                setxfrq cvbs_xf             ' set transfer frequency
+
+                cogid   _vx                 ' install cogid into dacmode
+                setnib  dacmode_c,_vx,#2
+                wrpin   dacmode_c,cvbs_pn   ' enable dac mode in pin(s)
+                drvl    cvbs_pn             ' enable dac output(s)
+
+cvbs_field
+                mov     ptra, zx_screen
+                mov     ptrb, zx_attribute
+
+                incmod  _fc, #32            ' blink frequency
+
+                mov     pa, #3
+.block          mov     _rc, #8
+.row            mov     _sc, #8             ' visible lines 8*8*3=192
+
+.scanline       xcont   cvbs_bs, #1         ' horizontal sync
+                xcont   cvbs_ds, #2         ' |
+                xcont   cvbs_bc, #1         ' |
+                xcont   cvbs_dc, cvbs_cb    ' |
+                bitnot  _md, #31        wcz ' for pal, alternate phase each line
+        if_nc   setcq   cvbs_cq             ' |
+        if_c    setcq   cvbs_ca             ' |
+                xcont   cvbs_ac, #1         ' |
+
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   cvbs_bv, _bc        ' do left border
+
+                cmp     _fc, #16    wc
+
+                rep     @.loop, #32
+                rdbyte  t0, ptrb++
+                testb   t0, #7      wz      ' blink
+                rdbyte  _ch, ptra++
+        if_11   xor     _ch, #$FF           ' invert bitmap if blinking
+
+                rev     _ch                 ' revert lsb<>msb
+                shr     _ch, #24            ' shift into position
+                mergew  _ch                 ' merge to 8 bitpairs
+
+                testb   t0, #6      wz      ' bright
+                mov     t1, t0
+                and     t1, #%0_0_111_000   ' mask background
+                shr     t1, #3              ' shift into byte 0
+                bitz    t1, #3              ' set brightness
+                and     t0, #%0_0_000_111   ' mask foreground
+                shl     t0, #8              ' shift into byte 1
+                bitz    t1, #8+3            ' set brightness
+                or      t0, t1
+                or      t1, t0
+
+                movbyts t0, _ch
+                xcont   cvbs_dv, t0
+                shr     _ch, #8
+                movbyts t1, _ch
+                xcont   cvbs_dv, t1
+.loop
+
+                xcont   cvbs_av, _bc        ' do right border
+
+                add     ptra, #256-32
+                sub     ptrb, #32
+                djnz    _sc, #.scanline
+
+                sub     ptra, ##2048-32
+                add     ptrb, #32
+                djnz    _rc, #.row
+
+                add     ptra, ##2048-256
+                djnz    pa, #.block
+
+                callpa  #(VIDEO == PAL ? 48 : 25), #.border ' bottom border
+
+                callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' after-visible blank lines
+
+                callpa  #6, #.vhigh                      ' initial high vertical syncs
+                callpa  #(VIDEO == PAL ? 5 : 6), #.vlow  ' low vertical syncs
+                callpa  #(VIDEO == PAL ? 5 : 6), #.vhigh ' final high vertical syncs
+
+                cogatn  #1 << 0             ' vsync atn to Z80 cog (#0)
+
+                callpa  #(VIDEO == PAL ? 8 : 7), #.blank ' before-visible blank lines
+
+                callpa  #(VIDEO == PAL ? 48 : 24), #.border ' top border
+
+                jmp     #cvbs_field         ' frame loop
+
+.border         xcont   cvbs_bs, #1         ' horizontal sync
+                xcont   cvbs_ds, #2         ' |
+                xcont   cvbs_bc, #1         ' |
+                xcont   cvbs_dc, cvbs_cb    ' |
+                bitnot  _md, #31        wcz ' for pal, alternate phase each line
+        if_nc   setcq   cvbs_cq             ' |
+        if_c    setcq   cvbs_ca             ' |
+                xcont   cvbs_ac, #1         ' |
+
+                rdbyte  _bc, #@zx_border
+                and     _bc, #%00000_111
+                movbyts _bc, #0
+                xcont   cvbs_vi, _bc        ' do visible part of scan line
+
+        _ret_   djnz    pa, #.border
+
+.blank          xcont   cvbs_bs, #1         ' horizontal sync
+                xcont   cvbs_ds, #2         ' |
+                xcont   cvbs_bc, #1         ' |
+                xcont   cvbs_dc, cvbs_cb    ' |
+                bitnot  _md, #31        wcz ' for pal, alternate phase each line
+        if_nc   setcq   cvbs_cq             ' |
+        if_c    setcq   cvbs_ca             ' |
+                xcont   cvbs_ac, #1         ' |
+                xcont   cvbs_db, #1         ' blank line
+        _ret_   djnz    pa, #.blank
+
+.vhigh          xcont   cvbs_bs,#1
+                xcont   cvbs_hl, #2
+                xcont   cvbs_hh, #1
+        _ret_   djnz    pa, #.vhigh
+
+.vlow           xcont   cvbs_bs,#1
+                xcont   cvbs_ll, #2
+                xcont   cvbs_lh, #1
+        _ret_   djnz    pa, #.vlow
 
-                mov     cbuf+0, ctmp
-                movbyts cbuf+0, #0
-                setq    #1
-                wrlong  cbuf+0, ptra++
-
-                jmp     #end_scanline
-
-blank_line
-                getnib  ctmp, regs+7, #0        ' background color
-                movbyts ctmp, #0
-
-                mov     ecnt, #256/4            ' fill line with background
-.l1             wrlong  ctmp, ptra++
-                djnz    ecnt, #.l1
-
-                jmp     #end_scanline
-
-multicolor_mode
-                mov     a, lcnt
-                shr     a, #2
-                and     a, #$07
-
-                mov     ptrb, regs+2
-
-                mov     ecnt, #32
-.loop           rdbyte  ptrc, ptrb++            ' read tile number to display
-                shl     ptrc, #3
-                add     ptrc, regs+4            ' points to color table
-                add     ptrc, a
-
-                rdbyte  cbuf+0, ptrc            ' colors
-
-                mov     cbuf+1, cbuf+0
-                and     cbuf+1, #$0F        wz
-    if_z        setnib  cbuf+1, regs+7, #0
-                shr     cbuf+0, #4          wz
-    if_z        setnib  cbuf+0, regs+7, #0
-
-                movbyts cbuf+0, #%%0000
-                movbyts cbuf+1, #%%0000
-
-                setq    #1
-                wrlong  cbuf+0, ptra++
-
-                djnz    ecnt, #.loop
-
-                jmp     #sprites
-
-graphics_mode
-                test    regs+0, #TMSMODE3   wz  ' graphics mode II
-    if_nz       mov     a, lcnt
-    if_nz       shr     a, #6                   ' divide by 64 (8 rows by 8 pixels)
-    if_nz       shl     a, #8                   ' multiply by 2048
-    if_nz       and     a, r4_mask
-    if_nz       shl     a, #3                   ' multiply by 2048 (cont.)
-                mov     b, loff                 ' offset into pattern table
-    if_nz       add     b, a                    ' add mode II pattern table offset
-
-                bitnz   .shlr, #21              ' patch shl(0)/shr(1)
-
-                mov     ptrb, regs+2
-
-                mov     ecnt, #32
-.loop           rdbyte  ptrc, ptrb++            ' read tile number to display
-
-                mov     ptrd, ptrc
-.shlr           shl     ptrd, #3
-                add     ptrd, regs+3            ' points to color table
-                test    regs+0, #TMSMODE3   wz  ' graphics mode II
-    if_nz       add     ptrd, b
-                rdbyte  a, ptrd                 ' colors
-
-                getnib  cbuf+0, a, #0
-                and     cbuf+0, #$0F        wz
-    if_z        setnib  cbuf+0, regs+7, #0
-                getnib  cbuf+1, a, #1
-                and     cbuf+1, #$0F        wz
-    if_z        setnib  cbuf+1, regs+7, #0
-
-                setbyte cbuf+0, cbuf+1, #1
-                mov     cbuf+1, cbuf+0
-
-                shl     ptrc, #3                ' 8 bytes per tile
-                add     ptrc, regs+4
-                add     ptrc, b
-                rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
-
-                rev     a
-                shr     a, #24
-                mergew  a
-                movbyts cbuf+0, a
-                shr     a, #8
-                movbyts cbuf+1, a
-
-                setq    #1
-                wrlong  cbuf+0, ptra++
-
-                djnz    ecnt, #.loop
-
-                ' fall through
-
-sprites
-                mov     ecnt, #9                ' clear collision buffer
-.l1             altd    ecnt, #line-1           ' |
-                mov     0-0, #0                 ' |
-                djnz    ecnt, #.l1              ' |
-
-                mov     b, #8                   ' calculate sprite size
-                test    regs+1, #TMSSPRSIZE wz  ' |
-    if_nz       shl     b, #1                   ' |
-                test    regs+1, #TMSSPRMAG  wz  ' |
-    if_nz       shl     b, #1                   ' b = 8/16/32
-
-                mov     stat, #0
-                mov     vcnt, #0
-                mov     ccnt, #0
-
-                mov     ecnt, #TMSSPRITES
-.l2             alts    ccnt, #sbuf             ' find last sprite
-                getbyte y, 0-0, #0              ' |
-                cmp     y, #$D0             wz  ' |
-    if_e        jmp     #.loop                  ' |
-                add     y, #1                   ' |
-                cmp     y, #$D0             wcz ' |
-    if_a        sub     y, #$100                ' |
-                                                ' |
-                mov     a, lcnt                 ' | check sprite scanline visibility
-                subs    a, y                wc  ' | |
-    if_b        jmp     #.l3                    ' | |
-                cmp     a, b                wc  ' | |
-    if_ae       jmp     #.l3                    ' | |
-                add     vcnt, #1                ' | vcnt = number of sprites on scanline
-                                                ' |
-.l3             add     ccnt, #1                ' |
-                djnz    ecnt, #.l2              ' |
-
-.loop           decmod  ccnt, #0            wc  ' loop backward to draw visible sprites
-    if_c        jmp     #.end                   ' |
-
-                alts    ccnt, #sbuf
-                mov     sprt, 0-0
-
-                getbyte y, sprt, #0
-                add     y, #1
-                cmp     y, #$D0             wcz
-    if_a        sub     y, #$100
-
-                mov     a, lcnt                 ' check sprite scanline visibility
-                subs    a, y                wc
-    if_b        jmp     #.loop
-                cmp     a, b                wc
-    if_ae       jmp     #.loop
-
-                cmps    vcnt, #5            wcz
-    if_e        mov     stat, ccnt              ' set 5th sprite
-    if_e        or      stat, #TMS5SPRITE       ' |
-                sub     vcnt, #1
-'    if_ae       jmp     #.loop                  ' comment to remove sprite limit
-
-                getbyte ptrc, sprt, #2
-                test    regs+1, #TMSSPRSIZE wz
-    if_nz       and     ptrc, #$FC
-                shl     ptrc, #3
-                add     ptrc, regs+6
-                test    regs+1, #TMSSPRMAG  wz
-    if_nz       shr     a, #1
-                add     ptrc, a
-
-                getnib  ctmp, sprt, #6          'set sprite color
-                shl     ctmp, #8
-
-                getbyte x, sprt, #1
-                testb   sprt, #31           wz  'TMSEARLYCLK
-    if_x1       sub     x, #32
-                mov     ptra, ptrv
-                add     ptra, x
-
-                test    regs+1, #TMSSPRSIZE wz
-    if_z        mov     ecnt, #4
-    if_nz       mov     ecnt, #8
-
-                rdbyte  sprt, ptrc
-                shl     sprt, #8
-    if_nz       add     ptrc, #16
-    if_nz       rdbyte  a, ptrc
-    if_nz       or      sprt, a
-
-                test    regs+1, #TMSSPRMAG  wz
-    if_nz       setword sprt, sprt, #1
-    if_nz       mergew  sprt
-    if_z        shl     sprt, #16
-
-                cmps    x, #0       wc          ' skip left offscreen pixels
-    if_c        abs     x                       ' |
-    if_c        add     ptra, x                 ' |
-    if_c        sub     ecnt, x                 ' |
-    if_c        cmps    x, #32      wz          ' |
-    if_c_and_z  mov     sprt, #0                ' |
-    if_c_and_nz shl     sprt, x                 ' |
-    if_c        mov     x, #0                   ' |
-
-                mov     cbuf, sprt
-                mov     cbuf+1, cbuf
-
-                mov     y, x                    ' check sprite collision
-                sar     y, #5                   ' |
-                add     y, #line                ' |
-                setd    .c0, y                  ' |
-                setd    .c0+1, y                ' |
-                add     y, #1                   ' |
-                setd    .c1, y                  ' |
-                setd    .c1+1, y                ' |
-                mov     a, x                    ' |
-                and     a, #$1F     wz          ' |
-    if_z        mov     cbuf+1, #0              ' |
-                shr     cbuf, a                 ' |
-.c0             test    0-0, cbuf   wz          ' |
-                or      0-0, cbuf               ' |
-                mov     y, #32                  ' |
-                sub     y, a                    ' |
-                shl     cbuf+1,y                ' |
-.c1 if_z        test    0-0, cbuf+1 wz          ' |
-                or      0-0, cbuf+1             ' |
-    if_nz       or      stat, #%0010_0000       ' update collision flag
-                mov     line+8, #0              ' clear right offscreen pixels
-
-                rev     sprt
-
-.draw           getnib  a, sprt, #0
-                mergew  a
-                mov     cbuf+0, ctmp
-                movbyts cbuf+0, a
-                wmlong  cbuf+0, ptra++
-                add     x, #4
-                cmp     x, #256     wc
-                shr     sprt, #4    wz
-    if_c_and_nz djnz    ecnt, #.draw
-
-                jmp     #.loop
-.end
-
-                locktry #0              wc
-    if_nc       jmp     #$-1
-                rdbyte  a, #@tms_status         ' update status byte
-                test    stat, #TMSCOLL      wz
-    if_nz       or      a, #TMSCOLL
-                test    a, #TMS5SPRITE      wz
-    if_z        or      a, stat
-                wrbyte  a, #@tms_status
-                lockrel #0
-
-end_scanline
-                add     ptrv, #256
-                incmod  loff, #7
-                incmod  lcnt, #192-1
-
-                jmp     #loop
 '
 '
 ' Data
@@ -3866,17 +4294,15 @@ end_scanline
 dacmode_s       long    P_DAC_124R_3V + P_CHANNEL ' %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
 dacmode_c       long    P_DAC_75R_2V + P_CHANNEL  ' %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
 
-cx              long    0
-cy              long    0
-
 vga_xf          long   (VGA_FPIX frac _CLKFREQ) >> 1             ' streamer frequency setting
 vga_bs          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +   8    ' streamer command: before-sync
 vga_ds          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  48    ' streamer command: during-sync
 vga_as          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +  24    ' streamer command: after sync
 vga_vi          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + 320    ' streamer command: visible
 vga_bv          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +  32    ' streamer command: before visible
-vga_dv          long    X_RFLONG_4X8_LUT|X_DACS_3_2_1_0 + 256    ' streamer command: during visible
+vga_dv          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +   4    ' streamer command: during visible
 vga_av          long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +  32    ' streamer command: after visible
+vga_db          long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + 320    ' streamer command: during-blank
 vga_pn          long    VGA_PIN & $38       ' base pin
 
 cvbs_cb         long    VIDEO == PAL ? PAL_CB : NTSC_CB             ' colorburst reference color
@@ -3887,354 +4313,66 @@ cvbs_ca         long    VIDEO == PAL ? PAL_CA : NTSC_CQ             ' colorspace
 cvbs_cf         long   (VIDEO == PAL ? PAL_CF : NTSC_CF) frac _CLKFREQ ' colorspace frequency setting
 cvbs_xf         long    VIDEO == PAL ? PAL_XF : NTSC_XF             ' streamer frequency setting
 
-cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  10 :  10)    ' streamer command: before-sync
-cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :  27)    ' streamer command: during-sync
-cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   6 :   4)    ' streamer command: before-colorburst
-cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  15)    ' streamer command: during-colorburst
-cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  17 :   9)    ' streamer command: after-colorburst
-cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: during-blank
+cvbs_bs         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  11 :  11)    ' streamer command: before-sync
+cvbs_ds         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  32 :  33)    ' streamer command: during-sync
+cvbs_bc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?   7 :   5)    ' streamer command: before-colorburst
+cvbs_dc         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  17)    ' streamer command: during-colorburst
+cvbs_ac         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  30 :  30)    ' streamer command: after-colorburst
+cvbs_db         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 +                   352         ' streamer command: during-blank
 
-cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  28)    ' streamer command: before-visible
-cvbs_dv         long    X_RFLONG_4X8_LUT|X_DACS_3_2_1_0 +                    256        ' streamer command: during-visible
-cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ?  41 :  29)    ' streamer command: after-visible
-cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 + (VIDEO == PAL ? 338 : 313)    ' streamer command: during-blank
+cvbs_bv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                    48         ' streamer command: before-visible
+cvbs_dv         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                     4         ' streamer command: during-visible
+cvbs_av         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                    48         ' streamer command: after-visible
+cvbs_vi         long    X_IMM_4X8_LUT   |X_DACS_3_2_1_0 +                   352         ' streamer command: visible
 
-cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  15 :  14)    ' streamer command: high-vsync-low
-cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 183 : 165)    ' streamer command: high-vsync-high
+cvbs_hl         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  16 :  16)    ' streamer command: high-vsync-low
+cvbs_hh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 197 : 197)    ' streamer command: high-vsync-high
 
-cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 177 : 161)    ' streamer command: low-vsync-low
-cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  21 :  18)    ' streamer command: low-vsync-high
+cvbs_ll         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ? 191 : 191)    ' streamer command: low-vsync-low
+cvbs_lh         long    X_IMM_1X32_4DAC8|X_DACS_3_2_1_0 + (VIDEO == PAL ?  22 :  22)    ' streamer command: low-vsync-high
 
 cvbs_pn         long    CVBS_PIN            ' pin(s)
 
+zx_screen       long    @z80_4000
+zx_attribute    long    @z80_4000 + 32*192
+
+_vx             long    0
+_sc             long    0
+_rc             long    0
 _md             long    0
-_lb             long    0                   ' line buffer pointer
-_cl             long    0                   ' current line
-_tms_vram       long    @tms_vram
-_tms_bitmap     long    @tms_bitmap
 
-vdp_8k_mask     long    $1FFF
-r4_mask         long    0
+_ch             long    0
+_fc             long    0
 
-a               res     1
-b               res     1
-x               res     1
-y               res     1
+_bc             long    0
 
-scnt            res     1
-scol            res     2                       'backdrop/border color
+t0              res     1
+t1              res     1
+t2              res     1
 
-lcnt            res     1
-loff            res     1
-ccnt            res     1
-vcnt            res     1
-ecnt            res     1
+                fit     $1F0
 
-ctmp            res     1
-cbuf            res     2
-sprt            res     1
-
-ptrc            res     1
-ptrd            res     1
-ptrv            res     1
-
-stat            res     1
-regs            res     8
-sbuf            res     32
-
-line            res     8+1
-
-DAT             ' VGA / CVBS drivers
+DAT             ' Video LUT resident code
                 org     $200
 
-tms_palette
+video_driver_lut
+                long    $00_00_00_00    ' Palette
+                long    $00_00_B8_00
+                long    $B8_00_00_00
+                long    $B8_00_B8_00
+                long    $00_B8_00_00
+                long    $00_B8_B8_00
+                long    $B8_B8_00_00
+                long    $B8_B8_B8_00
+
                 long    $00_00_00_00
-                long    $00_00_00_00
-                long    $66_CC_66_00
-                long    $88_EE_88_00
-                long    $44_44_DD_00
-                long    $77_77_FF_00
-                long    $BB_55_55_00
-                long    $77_DD_DD_00
-                long    $DD_66_66_00
-                long    $FF_77_77_00
-                long    $CC_CC_55_00
-                long    $EE_EE_88_00
-                long    $55_AA_55_00
-                long    $BB_55_BB_00
-                long    $CC_CC_CC_00
-                long    $EE_EE_EE_00
-'
-'
-' VGA Driver
-'
-vga_init
-                setcmod #%01_0_000_1            ' enable colorspace conversion
-                setcy   ##VGA_INTENSITY << 24   ' r      set colorspace for rgb
-                setci   ##VGA_INTENSITY << 16   ' g
-                setcq   ##VGA_INTENSITY << 08   ' b
-                setxfrq vga_xf                  ' set transfer frequency
-
-                cogid   cx                      ' insert cogid into dac modes
-                setnib  dacmode_s,cx,#2
-                setnib  dacmode_c,cx,#2
-
-                wrpin   dacmode_s,vga_pn        ' enable 123-ohm 3.3V dac mode in pin +0
-
-                xor     vga_pn,#2<<6|1          ' enable 75-ohm 2.0V dac mode in pins +1..3
-                wrpin   dacmode_c,vga_pn
-
-                xor     vga_pn,#3<<6 ^(2<<6|1)  ' make pins +0..3 outputs
-                drvl    vga_pn
-
-                xor     vga_pn,#4|(3<<6)        ' leave av_base pointing to pin +4 (vertical sync)
-                drvh    vga_pn
-
-                mov     ijmp1,##vga_field       ' set up streamer-empty interrupt
-        _ret_   setint1 #10
-'
-'
-' Field loop
-'
-vga_field
-                mov     cy,#24                  ' before-visible blank lines
-                calld   pa, #.border
-
-                mov     _lb, _tms_bitmap
-
-                mov     cy,#192                 ' visible lines
-.line           xcont   vga_as,#0               ' do before-visible part of scan line
-                add     _cl, #1
-
-                rdfast  #4, _lb                 ' start reading pixels into fifo
-                resi1
-                xcont   vga_bv, scol
-                resi1
-                xcont   vga_dv, #0
-                resi1
-                xcont   vga_av, scol
-                resi1
-                xcont   vga_bs,#0               ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds,#1               ' do sync part of scan line
-                resi1
-
-                ' duplicate line
-                xcont   vga_as,#0               ' do before-visible part of scan line
-                resi1
-                xcont   vga_bv, scol
-                resi1
-                xcont   vga_dv, #0
-                resi1
-                xcont   vga_av, scol
-                resi1
-                xcont   vga_bs,#0               ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds,#1               ' do sync part of scan line
-
-                add     _lb, #256
-                resi1
-                djnz    cy,#.line
-
-                mov     cy,#24                  ' after-visible blank lines
-                calld   pa, #.border
-
-                mov     cy, #10
-                calld   pa, #.blank
-
-                drvnot  vga_pn                  ' vertical sync on
-                mov     cy, #2
-                calld   pa, #.blank
-                drvnot  vga_pn                  ' vertical sync off
-
-                mov     _cl, #0
-
-                mov     cy, #33
-                calld   pa, #.blank
-
-                jmp     #vga_field              ' loop
-'
-'
-' Subroutines
-'
-.border         xcont   vga_as,#0               ' do before-visible part of scan line
-                add     _cl, #1
-                resi1
-                xcont   vga_vi,scol             ' do visible part of scan line (blank)
-                resi1
-                xcont   vga_bs,#0               ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds,#1               ' do sync part of scan line
-                resi1
-
-                xcont   vga_as,#0               ' do before-visible part of scan line
-                resi1
-                xcont   vga_vi,scol             ' do visible part of scan line (blank)
-                resi1
-                xcont   vga_bs,#0               ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds,#1               ' do sync part of scan line
-                resi1
-                djnz    cy,#.border
-                jmp     pa
-
-.blank          xcont   vga_as,#0               ' do before-visible part of scan line
-                resi1
-                xcont   vga_vi,#0               ' do visible part of scan line (blank)
-                resi1
-                xcont   vga_bs,#0               ' do before-sync part of scan line
-                resi1
-                xzero   vga_ds,#1               ' do sync part of scan line
-                resi1
-                djnz    cy,#.blank              ' loop if more blanks needed
-                jmp     pa
-'
-'
-' CVBS Driver
-'
-cvbs_init
-                setcmod #%11_1_0000             ' set colorspace converter to YIQ mode (composite)
-                setcy   cvbs_cy                 ' set colorspace converter y coefficients
-                setci   cvbs_ci                 ' set colorspace converter i coefficients
-                setcq   cvbs_cq                 ' set colorspace converter q coefficients
-                setcfrq cvbs_cf                 ' set colorspace converter frequency
-                setxfrq cvbs_xf                 ' set transfer frequency
-
-                cogid   cx                      ' install cogid into dacmode
-                setnib  dacmode_c,cx,#2
-                wrpin   dacmode_c,cvbs_pn       ' enable dac mode in pin(s)
-                drvl    cvbs_pn                 ' enable dac output(s)
-
-                mov     ijmp1,##cvbs_field      ' set up streamer-empty interrupt
-        _ret_   setint1 #10
-
-cvbs_field
-                mov     cy, #(VIDEO == PAL ? 48 : 24)                 ' before-visible blank lines
-                calld   pa, #.border            ' |
-
-                rdfast  #0, _tms_bitmap         ' start reading pixels into fifo
-                mov     cy, #192                ' visible lines
-
-.line           xcont   cvbs_bs, #1             ' horizontal sync
-                add     _cl, #1
-                resi1                           ' |
-                xcont   cvbs_ds, #2             ' |
-                resi1                           ' |
-                xcont   cvbs_bc, #1             ' |
-                resi1                           ' |
-                xcont   cvbs_dc, cvbs_cb        ' |
-                bitnot  _md, #31            wcz ' for pal, alternate phase each line
-        if_nc   setcq   cvbs_cq                 ' |
-        if_c    setcq   cvbs_ca                 ' |
-                resi1                           ' |
-                xcont   cvbs_ac, #1             ' |
-                resi1                           ' |
-
-                xcont   cvbs_bv, scol           ' left border
-                resi1
-                xcont   cvbs_dv, #0             ' visible part (from streamer)
-                resi1
-                xcont   cvbs_av, scol           ' right border
-                resi1
-
-                djnz    cy, #.line
-
-                mov     cy, #(VIDEO == PAL ? 48 : 24)                 ' after-visible blank lines
-                calld   pa, #.border            ' |
-
-                mov     cy, #(VIDEO == PAL ? 8 : 2)                  ' before-visible blank lines
-                calld   pa, #.blank             ' |
-
-                mov     _cl, #0
-
-                mov     cy, #6
-                calld   pa, #.vhigh             ' initial high vertical syncs
-                mov     cy, #(VIDEO == PAL ? 5 : 6)
-                calld   pa, #.vlow              ' low vertical syncs
-                mov     cy, #(VIDEO == PAL ? 5 : 6)
-                calld   pa, #.vhigh             ' final high vertical syncs
-
-                mov     cy, #(VIDEO == PAL ? 8 : 10)                 ' before-visible blank lines
-                calld   pa, #.blank             ' |
-
-                jmp     #cvbs_field             ' loop
-
-.border         xcont   cvbs_bs, #1             ' horizontal sync
-                add     _cl, #1
-                resi1                           ' |
-                xcont   cvbs_ds, #2             ' |
-                resi1                           ' |
-                xcont   cvbs_bc, #1             ' |
-                resi1                           ' |
-                xcont   cvbs_dc, cvbs_cb        ' |
-                bitnot  _md, #31            wcz ' for pal, alternate phase each line
-        if_nc   setcq   cvbs_cq                 ' |
-        if_c    setcq   cvbs_ca                 ' |
-                resi1                           ' |
-                xcont   cvbs_ac, #1             ' |
-                resi1                           ' |
-                xcont   cvbs_vi, scol           ' border line
-                resi1                           ' |
-                djnz    cy, #.border
-                jmp     pa
-
-.blank          xcont   cvbs_bs, #1             ' horizontal sync
-                resi1                           ' |
-                xcont   cvbs_ds, #2             ' |
-                resi1                           ' |
-                xcont   cvbs_bc, #1             ' |
-                resi1                           ' |
-                xcont   cvbs_dc, cvbs_cb        ' |
-                bitnot  _md, #31            wcz ' for pal, alternate phase each line
-        if_nc   setcq   cvbs_cq                 ' |
-        if_c    setcq   cvbs_ca                 ' |
-                resi1                           ' |
-                xcont   cvbs_ac, #1             ' |
-                resi1                           ' |
-                xcont   cvbs_db, #1             ' blank line
-                resi1                           ' |
-                djnz    cy, #.blank
-                jmp     pa
-
-.vhigh          xcont   cvbs_bs, #1             ' |
-                resi1                           ' |
-                xcont   cvbs_hl, #2             ' |
-                resi1                           ' |
-                xcont   cvbs_hh, #1             ' |
-                resi1                           ' |
-                djnz    cy, #.vhigh
-                jmp     pa
-
-.vlow           xcont   cvbs_bs, #1             ' |
-                resi1                           ' |
-                xcont   cvbs_ll, #2             ' |
-                resi1                           ' |
-                xcont   cvbs_lh, #1             ' |
-                resi1                           ' |
-                djnz    cy, #.vlow
-                jmp     pa
-
-                fit     $3F0
-
-CON ' TMS9918 constants
-
-    TMSMODE3   = %00000010      ' mode bit 3
-    TMSEXTVID  = %00000001      ' external video
-
-    ' register 1 control bits
-    TMS4K16K   = %10000000      ' 4/16K RAM
-    TMSBLANK   = %01000000      ' screen blank
-    TMSINTEN   = %00100000      ' interrupt enable
-    TMSMODE1   = %00010000      ' mode bit 1
-    TMSMODE2   = %00001000      ' mode bit 2
-    TMSSPRSIZE = %00000010      ' sprite size
-    TMSSPRMAG  = %00000001      ' sprite magnification
-
-    TMSVSYNC   = %10000000      ' frame sync
-    TMS5SPRITE = %01000000      ' 5th sprite
-    TMSCOLL    = %00100000      ' coincidence flag
-
-    TMSSPRITES = 32
+                long    $00_00_F8_00
+                long    $F8_00_00_00
+                long    $F8_00_F8_00
+                long    $00_F8_00_00
+                long    $00_F8_F8_00
+                long    $F8_F8_00_00
+                long    $F8_F8_F8_00
 
 CON ' VGA constants
 
@@ -4244,25 +4382,27 @@ CON ' VGA constants
 
 CON ' CVBS constants
 
+    CLK_I           = 31 - encod _CLKFREQ
+
     NTSC            = 1
-    NTSC_BLANK_LEV  = 40.0                                  'levels
+    NTSC_BLANK_LEV  = 40.0                                  ' levels
     NTSC_BLACK_LEV  = NTSC_BLANK_LEV + 7.5
     NTSC_PEAK_LEV   = NTSC_BLANK_LEV + 140.0
     NTSC_SCALE      = 127.0 / NTSC_PEAK_LEV * 128.0
-    NTSC_SCALE_COR  = NTSC_SCALE / 1.646                    'CORDIC prescale for IQ modulator
+    NTSC_SCALE_COR  = NTSC_SCALE / 1.646                    ' CORDIC prescale for IQ modulator
 
     NTSC_BLANK      = round(NTSC_SCALE * 2.0 * NTSC_BLANK_LEV / NTSC_PEAK_LEV)
     NTSC_BLACK      = round(NTSC_SCALE * 2.0 * NTSC_BLACK_LEV / NTSC_PEAK_LEV)
 
-    NTSC_YR         = round(NTSC_SCALE     *  0.299)        'Y sums to 1
+    NTSC_YR         = round(NTSC_SCALE     *  0.299)        ' Y sums to 1
     NTSC_YG         = round(NTSC_SCALE     *  0.587)
     NTSC_YB         = round(NTSC_SCALE     *  0.114)
 
-    NTSC_IR         = round(NTSC_SCALE_COR *  0.596)        'I sums to 0
+    NTSC_IR         = round(NTSC_SCALE_COR *  0.596)        ' I sums to 0
     NTSC_IG         = round(NTSC_SCALE_COR * -0.274)
     NTSC_IB         = round(NTSC_SCALE_COR * -0.322)
 
-    NTSC_QR         = round(NTSC_SCALE_COR *  0.212)        'Q sums to 0
+    NTSC_QR         = round(NTSC_SCALE_COR *  0.212)        ' Q sums to 0
     NTSC_QG         = round(NTSC_SCALE_COR * -0.523)
     NTSC_QB         = round(NTSC_SCALE_COR *  0.311)
 
@@ -4270,34 +4410,33 @@ CON ' CVBS constants
     NTSC_CI         = (NTSC_IR & $FF) << 24 + (NTSC_IG & $FF) << 16 + (NTSC_IB & $FF) << 8 + NTSC_BLANK
     NTSC_CQ         = (NTSC_QR & $FF) << 24 + (NTSC_QG & $FF) << 16 + (NTSC_QB & $FF) << 8 + 128
 
-    NTSC_CB         = $809000_01                            'colorburst reference color
-    NTSC_CF         = 3_579_545                             'colorburst frequency
-    NTSC_CC         = round(227.5 * 4.0)                    'color cycles per line * 4 to preserve fraction
-    NTSC_X_TOTAL    = 378
+    NTSC_CB         = $809000_01                            ' colorburst reference color
+    NTSC_CF         = 3_579_545                             ' colorburst frequency
+    'NTSC_CC         = 227.5                                 ' color cycles per line * 4 to preserve fraction
+    'NTSC_X_TOTAL    = 448
 
-    'NTSC_DOTF       = (NTSC_X_TOTAL * (NTSC_CF * 4 * 128)) / NTSC_CC
-    'NTSC_I          = 31 - encod _CLKFREQ
-    NTSC_XF         = $030B8EB8 ' ((NTSC_DOTF >> (7 - NTSC_I)) frac (_CLKFREQ << NTSC_I) + 1) >> 1
+    NTSC_DOTF       = 7_055_000 * 128 ' (NTSC_X_TOTAL * NTSC_CF * 128) / NTSC_CC
+    NTSC_XF         = ((NTSC_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
 
     PAL             = 2
-    PAL_BLANK_LEV   = 43.0                                  'levels
+    PAL_BLANK_LEV   = 43.0                                  ' levels
     PAL_BLACK_LEV   = PAL_BLANK_LEV + 0.0
     PAL_PEAK_LEV    = PAL_BLANK_LEV + 140.0
     PAL_SCALE       = 127.0 / PAL_PEAK_LEV * 128.0
-    PAL_SCALE_COR   = PAL_SCALE / 1.646                     'CORDIC prescale for IQ modulator
+    PAL_SCALE_COR   = PAL_SCALE / 1.646                     ' CORDIC prescale for IQ modulator
 
     PAL_BLANK       = round(PAL_SCALE * 2.0 * PAL_BLANK_LEV / PAL_PEAK_LEV)
     PAL_BLACK       = round(PAL_SCALE * 2.0 * PAL_BLACK_LEV / PAL_PEAK_LEV)
 
-    PAL_YR          = round(PAL_SCALE     *  0.299)         'Y sums to 1
+    PAL_YR          = round(PAL_SCALE     *  0.299)         ' Y sums to 1
     PAL_YG          = round(PAL_SCALE     *  0.587)
     PAL_YB          = round(PAL_SCALE     *  0.114)
 
-    PAL_UR          = round(PAL_SCALE_COR * -0.147)         'I sums to 0
+    PAL_UR          = round(PAL_SCALE_COR * -0.147)         ' I sums to 0
     PAL_UG          = round(PAL_SCALE_COR * -0.289)
     PAL_UB          = round(PAL_SCALE_COR *  0.436)
 
-    PAL_VR          = round(PAL_SCALE_COR *  0.615)         'Q sums to 0
+    PAL_VR          = round(PAL_SCALE_COR *  0.615)         ' Q sums to 0
     PAL_VG          = round(PAL_SCALE_COR * -0.515)
     PAL_VB          = round(PAL_SCALE_COR * -0.100)
 
@@ -4306,255 +4445,38 @@ CON ' CVBS constants
     PAL_CQ          = ( PAL_VR & $FF) << 24 + ( PAL_VG & $FF) << 16 + ( PAL_VB & $FF) << 8 + 128
     PAL_CA          = (-PAL_VR & $FF) << 24 + (-PAL_VG & $FF) << 16 + (-PAL_VB & $FF) << 8 + 128
 
-    PAL_CB          = $FFC060_01                            'colorburst reference color
-    PAL_CF          = 4_433_618                             'colorburst frequency
-    PAL_CC          = round(283.75 * 4.0)                   'color cycles per line * 4 to preserve fraction
-    PAL_X_TOTAL     = 416
+    PAL_CB          = $FFC060_01                            ' colorburst reference color
+    PAL_CF          = 4_433_618                             ' colorburst frequency
+    'PAL_CC          = 283.75                                ' color cycles per line
+    'PAL_X_TOTAL     = 448
 
-    'PAL_DOTF        = (PAL_X_TOTAL * (PAL_CF * 4 * 128)) / PAL_CC
-    'PAL_I           = 31 - encod _CLKFREQ
-    PAL_XF          = $0353F900 ' ((PAL_DOTF >> (7 - PAL_I)) frac (_CLKFREQ << PAL_I) + 1) >> 1
+    PAL_DOTF        = 7_000_000 * 128 ' (PAL_X_TOTAL * PAL_CF * 128) / PAL_CC                     ' ZX dot frequency
+    PAL_XF          = ((PAL_DOTF >> (7 - CLK_I)) frac (_CLKFREQ << CLK_I) + 1) >> 1
 
-DAT             ' SN76489
-                org     $000
-
-psg_driver                                           ' Init
-                fltl    leftp
-                fltl    rightp
-                wrpin   res1,leftp
-                wrpin   res1,rightp
-                wxpin   sampleRate,leftp
-                wxpin   sampleRate,rightp
-                wypin   dac_center,leftp
-                wypin   dac_center,rightp
-                drvh    leftp
-                drvh    rightp
-
-.loop           call    #sn_getRegisters            ' Main loop
-                call    #sn_calcSamples
-                call    #sn_mixer
-                jmp     #.loop
-
-' Read all SN registers from hub memory and convert
-' them to more convenient representations.
-sn_getRegisters
-                setq    #7
-                rdlong  frequency1,#@psg_registers
-                shl     frequency1,#22
-                shl     frequency2,#22
-                shl     frequency3,#22
-                wrbyte  #1, #@psg_registers+(6*4+1)
-                mov     arg1,noiseFeedback
-                and     arg1,#3
-                cmp     arg1, #3                    wz      '|
-        if_ne   decod   noiseFreq, #26                      '|
-        if_ne   shl     noiseFreq, arg1                     '| These 4 lines handles selection of "external" noise frequency on/off
-        if_e    mov     noiseFreq, frequency3               '|
-                fge     noiseFreq,noiseSubValue   ' fix case where noise freq is zero
-
-                ret
-
-sn_calcSamples                                      ' Calculate SN samples
-
-.AmpN
-                test    noiseFeedback, #256     wz ' If bit 8 is zero; Reset noise register
-        if_z    mov     noiseValue, #1
-.Noise1         sub     oscCounterN, noiseSubValue wc ' Noise generator
-        if_nc   waitx   #(7-1)*2 ' wait equivalent time for timing stability
-        if_nc   jmp     #.Amp1
-                add     oscCounterN, noiseFreq
-
-                test    noiseFeedback, #4       wz ' Is it periodic or white noise ?
-        if_nz   test    noiseValue, #NOISE_TAP  wc ' C = White noise !
-        if_z    test    noiseValue, #1          wc ' C = Periodic noise !
-                bitc    noiseValue, #NOISE_MSB + 1
-                shr     noiseValue, #1          wc
-                alts    amplitudeN,#psg_amplitudeTable
-                negnc   outN, 0-0
-
-.Amp1
-.Square1        sub     oscCounter1, oscSubValue          wc ' Square wave generator 1
-        if_c    add     oscCounter1, frequency1
-        if_c    xor     oscState1, #1                     wz
-        if_c    alts    amplitude1,#psg_amplitudeTable
-        if_c    negz    out1, 0-0
-
-.Amp2
-.Square2        sub     oscCounter2, oscSubValue          wc ' Square wave generator 2
-        if_c    add     oscCounter2, frequency2
-        if_c    xor     oscState2, #1                     wz
-        if_c    alts    amplitude2,#psg_amplitudeTable
-        if_c    negz    out2, 0-0
-
-.Amp3
-.Square3        sub     oscCounter3, oscSubValue          wc ' Square wave generator 3
-        if_c    add     oscCounter3, frequency3
-        if_c    xor     oscState3, #1                     wz
-        if_c    alts    amplitude3,#psg_amplitudeTable
-        if_c    negz    out3, 0-0
-                ret
-
-' Mix channels and update FRQA/FRQB PWM-values
-sn_mixer
-                mov     psgOut, dac_center
-                add     psgOut, out1
-                add     psgOut, out2
-                add     psgOut, out3
-                add     psgOut, outN
-
-                testp   rightp   wc
-        'if_c    drvh #24  ' light LED if too slow
-                testp   rightp   wc
-        if_nc   jmp     #$-1
-              'waitcnt  waitCounter, sampleRate         ' Wait until the right time to update
-                wypin   psgOut, leftp                    ' the PWM values in FRQA/FRQB
-                wypin   psgOut, rightp
-mixer_ret       ret
-
-' Variables, tables, masks and reference values
-psg_amplitudeTable
-                long    trunc(AMPLITUDE_LEVEL_0)
-                long    trunc(AMPLITUDE_LEVEL_1)
-                long    trunc(AMPLITUDE_LEVEL_2)
-                long    trunc(AMPLITUDE_LEVEL_3)
-                long    trunc(AMPLITUDE_LEVEL_4)
-                long    trunc(AMPLITUDE_LEVEL_5)
-                long    trunc(AMPLITUDE_LEVEL_6)
-                long    trunc(AMPLITUDE_LEVEL_7)
-                long    trunc(AMPLITUDE_LEVEL_8)
-                long    trunc(AMPLITUDE_LEVEL_9)
-                long    trunc(AMPLITUDE_LEVEL_A)
-                long    trunc(AMPLITUDE_LEVEL_B)
-                long    trunc(AMPLITUDE_LEVEL_C)
-                long    trunc(AMPLITUDE_LEVEL_D)
-                long    trunc(AMPLITUDE_LEVEL_E)
-                long    trunc(AMPLITUDE_LEVEL_F)
-
-leftp           long    AUDIO_LEFT_PIN
-rightp          long    AUDIO_RIGHT_PIN
-res1            long    P_DAC_75R_2V|P_OE|P_DAC_DITHER_PWM
-mask10bit       long    $3ff
-val31bit        long    $80000000
-val22bit        long    1<<22
-val26bit        long    1<<26
-sampleRate      long    _CLKFREQ/SAMPLE_RATE
-
-dac_center      long    $7F80
-dac_center_hi   long    $7F80<<16
-
-noiseValue      long    1 << NOISE_MSB
-oscSubValue     long    OSC_FREQ_CALIBRATION
-noiseSubValue   long    OSC_FREQ_CALIBRATION >> 1
-oscState1       long    1
-oscState2       long    1
-oscState3       long    1
-oscStateN       long    1
-
-out1            long    0
-out2            long    0
-out3            long    0
-outN            long    0
-
-arg1            res     1
-arg2            res     1
-oscCounter1     res     1
-oscCounter2     res     1
-oscCounter3     res     1
-oscCounterN     res     1
-
-frequency1      res     1
-amplitude1      res     1
-frequency2      res     1
-amplitude2      res     1
-frequency3      res     1
-amplitude3      res     1
-noiseFeedback   res     1
-amplitudeN      res     1
-
-
-noiseFreq       res     1
-
-psgOut          res     1
-
-
-waitCounter     res     1
-tempValue       res     1
-
-                fit     $1F0
-
-CON ' SN76489 constants
-
-    PSG_FREQUENCY     = float(ZK_CLOCK)    ' Clock frequency input on the emulated SN chip
-    VOLUME_CORRECTION = 0.9         ' Volume correction value (0.0 - 1.0)
-
-'SMS, Genesis and Game Gear
-'    NOISE_TAP = %1001
-'    NOISE_MSB = 15
-
-'SG-1000, OMV, SC-3000H, BBC Micro and Colecovision
-    NOISE_TAP = %11
-    NOISE_MSB = 14
-
-'Tandy 1000
-'    NOISE_TAP = %10001
-'    NOISE_MSB = 14
-
-    ' WARNING !!  Don't alter the constants below unless you know what you are doing
-
-    SAMPLE_RATE           = 1_411_200 ' (32 x CD quality) ' Sample rate of SNEcog (176 kHz is maximum for an 80 Mhz propeller)
-    OSC_FREQ_CALIBRATION  = trunc((PSG_FREQUENCY/16.0)/float(SAMPLE_RATE)*(float(1<<22)))          ' Calibration of the oscillator frequency
-    MAX_AMPLITUDE         = float($7F7F / 4)                      ' maxDACvalue / numberOfChannels (this makes room for maximum "swing" on all channels)
-    AMPLITUDE_DAMP_FACTOR = 0.7941                                ' This gives a 2db drop per amplitude level (like the real thing)
-
-    AMPLITUDE_LEVEL_0 = MAX_AMPLITUDE     * VOLUME_CORRECTION
-    AMPLITUDE_LEVEL_1 = AMPLITUDE_LEVEL_0 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_2 = AMPLITUDE_LEVEL_1 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_3 = AMPLITUDE_LEVEL_2 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_4 = AMPLITUDE_LEVEL_3 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_5 = AMPLITUDE_LEVEL_4 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_6 = AMPLITUDE_LEVEL_5 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_7 = AMPLITUDE_LEVEL_6 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_8 = AMPLITUDE_LEVEL_7 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_9 = AMPLITUDE_LEVEL_8 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_A = AMPLITUDE_LEVEL_9 * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_B = AMPLITUDE_LEVEL_A * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_C = AMPLITUDE_LEVEL_B * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_D = AMPLITUDE_LEVEL_C * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_E = AMPLITUDE_LEVEL_D * AMPLITUDE_DAMP_FACTOR
-    AMPLITUDE_LEVEL_F = 0.0
-
-' Runtime data area
-
-DAT             ' Work area
+DAT             ' I/O Hub-exec code
                 orgh
 
-tms_vram        byte    0[16384]                    ' TMS9918 video ram
+zx_ula_write
+                wrbyte  zk_tmp8, #@zx_border
+                testb   zk_tmp8, #4     wc  ' speaker
+                testb   zk_tmp8, #3     orc ' mic
+                drvc    #ZX_MIC             ' |
+                ret     wcz
 
-z80_ram         file    "COLECO.ROM"                ' BIOS rom
-                byte    $FF[z80_ram + $4000 - $]    ' Expansion slot
-                byte    $FF[z80_ram + $6000 - $]    ' Expansion slot
-                byte    $00[z80_ram + $8000 - $]    ' RAM
-                                                    ' Cartridge
-                'file    "Final Test Cartridge (19xx).col"
-                'file    "BC's Quest for Tires (1983) (Sierravision).col"
-                'file    "Choplifter (USA, Europe).col"
-                'file    "Congo Bongo (USA, Europe).col"
-                'file    "Bump 'N' Jump (USA, Europe).col"
-                'file    "BurgerTime (USA, Europe).col"
-                'file    "Lady Bug (USA, Europe).col"
-                'file    "Defender (USA).col"
-                'file    "Donkey Kong (USA, Europe).col"
-                'file    "Donkey Kong Jr (USA, Europe).col"
-                'file    "Galaxian (USA).col"
-                'file    "H.E.R.O (USA).col"
-                'file    "Frogger (USA).col"
-                'file    "Pitfall! (USA).col"
-                'file    "Pitfall II - Lost Caverns (USA).col"
-                'file    "Popeye (USA).col"
-                'file    "River Raid (USA).col"
-                'file    "Super Cobra (USA).col"
-                'file    "Time Pilot (USA, Europe).col"
-                'file    "Zaxxon (USA, Europe).col"
-                byte    $FF[z80_ram + $10000 - $]
+zx_ula_read
+                getbyte zk_tmp0, zk_ea, #1
+                xor     zk_tmp0, #$FF
+                encod   zk_tmp0, zk_tmp0
+                add     zk_tmp0, #@zx_keys
+                rdbyte  zk_tmp8, zk_tmp0
+                testp   #ZX_EAR         wc  ' ear
+                bitc    zk_tmp8, #6         ' |
+                ret     wcz
 
-tms_bitmap      ' Memory used as rendered bitmap
+DAT             ' Z80 Memory Space
+                orgh
+
+z80_0000        file    "48.rom"
+                orgh    z80_0000 + $4000
+z80_4000
+                ' Locations below used as Z80 RAM
