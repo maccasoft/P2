@@ -2950,8 +2950,57 @@ hpad_normalize
 '                                ++++++------------------ valid axes
 '------------------------------------------------------------------------------
 hpad_translate
-                ' TODO
-                ret
+                mov     hr0, #$FF
+
+                testb   hidr_flags, #HID_AXIS_X wz
+                testb   hidr_flags, #HID_AXIS_Y andz
+        if_x0   jmp     #.noaxis
+
+                getword htmp, hidr_axis, #0     ' X axis
+                signx   htmp, #15
+                cmps    htmp, ##-16384  wcz     ' left threshold
+                muxnc   hr0, #%00_0100
+                cmps    htmp, ##16384   wcz     ' right threshold
+                muxc    hr0, #%00_1000
+
+                getword htmp, hidr_axis, #1     ' Y axis
+                signx   htmp, #15
+                cmps    htmp, ##-16384  wcz     ' up threshold
+                muxnc   hr0, #%00_0001
+                cmps    htmp, ##16384   wcz     ' down threshold
+                muxc    hr0, #%00_0010
+
+.noaxis
+                getnib  htmp, hidr_flags, #3    ' hats
+                cmp     htmp, #0        wz
+        if_z    jmp     #.nohat
+                mov     hr1, #$FF
+                getbyte htmp, hidr_hats, #0     ' hat 0
+                cmp     htmp, #$00      wz
+        if_ne   cmp     htmp, #$01      wz
+        if_ne   cmp     htmp, #$07      wz
+                muxnz   hr1, #%00_0001          ' UP
+                cmp     htmp, #$01      wz
+        if_ne   cmp     htmp, #$02      wz
+        if_ne   cmp     htmp, #$03      wz
+                muxnz   hr1, #%00_1000          ' RIGHT
+                cmp     htmp, #$03      wz
+        if_ne   cmp     htmp, #$04      wz
+        if_ne   cmp     htmp, #$05      wz
+                muxnz   hr1, #%00_0010          ' DOWN
+                cmp     htmp, #$05      wz
+        if_ne   cmp     htmp, #$06      wz
+        if_ne   cmp     htmp, #$07      wz
+                muxnz   hr1, #%00_0100          ' LEFT
+                and     hr0, hr1
+
+.nohat
+                testb   hidr_buttons, #1    wz  ' A
+                muxnz   hr0, #%01_0000
+                testb   hidr_buttons, #0    wz  ' B
+                muxnz   hr0, #%10_0000
+
+        _ret_   wrbyte  hr0, #@psg_regs+14
 
 '------------------------------------------------------------------------------
 ' Partially populated SETUP packets
@@ -5997,7 +6046,7 @@ psg_reg_write
                 ret     wcz
 
 psg_write
-                cmp     msx_psg_latch, #$0E wcz ' port A
+                cmp     msx_psg_latch, #$0E     wcz ' port A
         if_e    ret     wcz
                 mov     zk_tmp0, #@psg_regs
                 add     zk_tmp0, msx_psg_latch
@@ -6005,16 +6054,13 @@ psg_write
                 ret     wcz
 
 psg_read
-                cmp     msx_psg_latch, #$0E wcz ' port A
-        if_e    jmp     #.porta_rd
                 mov     zk_tmp0, #@psg_regs
                 add     zk_tmp0, msx_psg_latch
                 rdbyte  zk_tmp8, zk_tmp0
-                ret     wcz
-
-.porta_rd
-                testp   #TAPE_EAR       wc  ' tape read (EAR)
-                bitc    zk_tmp8, #7         ' |
+                cmp     msx_psg_latch, #$0E     wcz ' port A
+        if_ne   ret     wcz
+                testp   #TAPE_EAR               wc  ' tape read (EAR)
+                bitc    zk_tmp8, #7                 ' |
                 ret     wcz
 
 ' System reset
