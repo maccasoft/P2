@@ -166,45 +166,38 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
         '        shl     key, #8         wz
         'if_z    jmp     #loop
 
-                testb   ps2_state, #7   wc  ' release
+                mov     ps2_ctrl, ##$7F7F7F7F
 
-                'call    #translate
+                testb   ps2_shift, #LEFT_CTRLB  wz  ' LCTRL (LEFT BUTTON)
+                bitnz   ps2_ctrl, #8+6
+                testb   ps2_shift, #LEFT_SHIFTB wz  ' LSHIFT (RIGHT BUTTON)
+                bitnz   ps2_ctrl, #6
+
+                testb   ps2_state, #7       wc  ' release
                 cmp     ps2_key, #$1E       wz  ' 1
  if_z_and_nc    setnib  ps2_ctrl, #$D,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$1F       wz  ' 2
  if_z_and_nc    setnib  ps2_ctrl, #$7,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$20       wz  ' 3
  if_z_and_nc    setnib  ps2_ctrl, #$C,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$21       wz  ' 4
  if_z_and_nc    setnib  ps2_ctrl, #$2,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$22       wz  ' 5
  if_z_and_nc    setnib  ps2_ctrl, #$3,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$23       wz  ' 6
  if_z_and_nc    setnib  ps2_ctrl, #$E,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$24       wz  ' 7
  if_z_and_nc    setnib  ps2_ctrl, #$5,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$25       wz  ' 8
  if_z_and_nc    setnib  ps2_ctrl, #$1,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$26       wz  ' 9
  if_z_and_nc    setnib  ps2_ctrl, #$B,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$27       wz  ' 0
  if_z_and_nc    setnib  ps2_ctrl, #$A,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$2D       wz  ' *
  if_z_and_nc    setnib  ps2_ctrl, #$9,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
                 cmp     ps2_key, #$2E       wz  ' #
  if_z_and_nc    setnib  ps2_ctrl, #$6,  #0
-  if_z_and_c    setnib  ps2_ctrl, #$F,  #0
 
                 cmp     ps2_key, #$4F       wz  ' RIGHT
         if_z    bitc    ps2_ctrl, #8+1
@@ -214,11 +207,6 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
         if_z    bitc    ps2_ctrl, #8+2
                 cmp     ps2_key, #$52       wz  ' UP
         if_z    bitc    ps2_ctrl, #8+0
-
-                cmp     ps2_key, #$E0       wz  ' LCTRL (LEFT BUTTON)
-        if_z    bitc    ps2_ctrl, #8+6
-                cmp     ps2_key, #$E1       wz  ' LSHIFT (RIGHT BUTTON)
-        if_z    bitc    ps2_ctrl, #6
 
                 wrlong  ps2_ctrl, #@coleco_ctrls
 
@@ -511,8 +499,7 @@ txn_setup
         if_z    ret
                 mov     ptra, pa                        ' Restore SETUP's DATAx pointer
                 jmp     #.setup
-' */
-' /* txn_in
+
 '------------------------------------------------------------------------------
 ' IN/INTERRUPT transaction.
 ' Possible function response: STALL or NAK handshake, or DATAx packet.
@@ -704,8 +691,7 @@ utx_data
 '------------------------------------------------------------------------------
 urx_data
                 mov     htmp2, pb
-                loc     pb, #@urx_buff - @usb_host_start
-                add     pb, hcog_base_addr
+                mov     pb, urx_buff_p
                 wrfast  ##$80000000, pb                 ' Use hub RAM FIFO interface to buffer bytes received
                 mov     pb, htmp2
                 bmask   crc, #15                        ' Prime the CRC16 pump
@@ -963,14 +949,13 @@ hmemcpy
 ' On exit:
 '------------------------------------------------------------------------------
 host_error
-                wrbyte  retval, usb_err_code_p          ' Save the error code for the client interface
+                mov     usb_err_code, retval            ' Save the error code for the client interface
                 wxpin   #USB_ERROR, usb_event_pin       ' Signal the client an error has occurred
                 mov     hrep, #5
 .spin
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_RESET        wz
-        if_z    wrlong  #ERR_NONE, cmd_data_p           ' Acknowledge client reset cmd received
-        if_z    flth    host_error_led
+                cmp     cmd_data, #CMD_RESET    wz
+        if_z    mov     cmd_data, #ERR_NONE             ' Acknowledge client reset cmd received
+        if_z    drvl    host_error_led
         if_z    jmp     #host_reset                     ' See if it works...
                 drvnot  host_error_led
                 mov     hctwait, _100ms_                ' Blink the error LED
@@ -979,7 +964,7 @@ host_error
                 testb   urx, #SE0_RESETB        wc
         if_nc   jmp     #.spin
                 djnz    hrep, #.spin
-        if_c    flth    host_error_led                  ' Clear the error LED
+        if_c    drvl    host_error_led                  ' Clear the error LED
         if_c    ret                             wc      ' Handle disconnect?
                 mov     hrep, #5
                 jmp     #.spin
@@ -990,96 +975,68 @@ host_error
 poll_kbd
                 getct   hct3
                 addct3  hct3, _8ms_                     ' Set the timer for next poll interval
-                call    #\hget_kbd_in_report
+                jmp     #\hget_kbd_in_report
 
-                mov     ptra, ##@kbCurReport
-                mov     ptrb, ##@kbPreReport
-                rdlong  htmp1, ptra++
-                rdlong  htmp2, ptrb
-                wrlong  htmp1, ptrb++
-                cmp     htmp1, htmp2    wz
-                rdlong  htmp1, ptra++
-                rdlong  htmp2, ptrb
-                wrlong  htmp1, ptrb
-        if_z    cmp     htmp1, htmp2    wz
-        if_z    ret
+poll_gamepad
+                getct   hct3
+                addct3  hct3, _8ms_
+                jmp     #\hget_gp_in_report
 
-                setword usb_ctrl, ##$7F7F, #0
+' USB commands and error codes
+cmd_data        long    0
+usb_err_code    long    ERR_NONE
 
-                mov     ptra, ##@kbCurReport+2
+' Parameters block assigned at cog startup
+dm              long    USB_BASE_PIN + 2    ' Client defines the basepin for four consecutive USB port pins
+dp              long    USB_BASE_PIN + 3
+usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
+host_active_led long    57                  ' Client defines the LED pin# for host bus activity
+host_error_led  long    56                  ' Client defines the LED pin# to light on error
+kb_cur_report_p long    @kb_cur_report
+kb_pre_report_p long    @kb_pre_report
+gp_descr_p      long    @gp_descr
+gp_cur_report_p long    @gp_cur_report
+gp_pre_report_p long    @gp_pre_report
+urx_buff_p      long    @urx_buff
+dev_desc_buff_p long    @dev_desc_buff
+con_desc_buff_p long    @con_desc_buff
+cache_start_p   long    @usb_cache_start
+cache_end_p     long    @usb_cache_end
 
-                rdbyte  usb_key, ptra[-2]
-                testbn  usb_key, #0         wz  ' LCTRL (LEFT BUTTON)
-                bitz    usb_ctrl, #8+6
-                testbn  usb_key, #1         wz  ' LSHIFT (RIGHT BUTTON)
-                bitz    usb_ctrl, #6
+hdev_init_start
+kb_intf_num     long    0
+kb_interval     long    0
+kb_in_max_pkt   long    0
+kb_next_datax   long    0
+kb_max_index    long    0
+kb_led_states   long    0
+gp_intf_num     long    0
+gp_interval     long    0
+gp_in_max_pkt   long    0
+gp_next_datax   long    0
+gp_max_index    long    0
+gp_descr_len    long    0
+hdev_init_end
 
-                mov     pa, #6
-.l1             rdbyte  usb_key, ptra++
-
-                cmp     usb_key, #$1E       wz  ' 1
-        if_z    setnib  usb_ctrl, #$D,  #0
-                cmp     usb_key, #$1F       wz  ' 2
-        if_z    setnib  usb_ctrl, #$7,  #0
-                cmp     usb_key, #$20       wz  ' 3
-        if_z    setnib  usb_ctrl, #$C,  #0
-                cmp     usb_key, #$21       wz  ' 4
-        if_z    setnib  usb_ctrl, #$2,  #0
-                cmp     usb_key, #$22       wz  ' 5
-        if_z    setnib  usb_ctrl, #$3,  #0
-                cmp     usb_key, #$23       wz  ' 6
-        if_z    setnib  usb_ctrl, #$E,  #0
-                cmp     usb_key, #$24       wz  ' 7
-        if_z    setnib  usb_ctrl, #$5,  #0
-                cmp     usb_key, #$25       wz  ' 8
-        if_z    setnib  usb_ctrl, #$1,  #0
-                cmp     usb_key, #$26       wz  ' 9
-        if_z    setnib  usb_ctrl, #$B,  #0
-                cmp     usb_key, #$27       wz  ' 0
-        if_z    setnib  usb_ctrl, #$A,  #0
-                cmp     usb_key, #$2D       wz  ' *
-        if_z    setnib  usb_ctrl, #$9,  #0
-                cmp     usb_key, #$2E       wz  ' #
-        if_z    setnib  usb_ctrl, #$6,  #0
-
-                cmp     usb_key, #$4F       wz  ' RIGHT
-        if_z    bitl    usb_ctrl, #8+1
-                cmp     usb_key, #$50       wz  ' LEFT
-        if_z    bitl    usb_ctrl, #8+3
-                cmp     usb_key, #$51       wz  ' DOWN
-        if_z    bitl    usb_ctrl, #8+2
-                cmp     usb_key, #$52       wz  ' UP
-        if_z    bitl    usb_ctrl, #8+0
-
-                djnz    pa, #.l1
-
-                wrlong  usb_ctrl, #@coleco_ctrls
-
-                ret
-
-usb_key         long    0
-usb_ctrl        long    $7F7F7F7F
-
-' Pointers to this spin object's VAR block data (assigned at cog startup)
-cmd_data_p      long    @usbCmdData
-kb_intf_num_p   long    @kbIntfNum
-kb_interval_p   long    @kbInterval
-kb_in_max_pkt_p long    @kbInMaxPkt
-kb_next_datax_p long    @kbNextDatax
-kb_max_index_p  long    @kbMaxIndex
-kb_led_states_p long    @kbLedStates
-kb_report_p     long    @kbCurReport
-usb_err_code_p  long    @usbErrCode ' Contains "Protocol error codes" constant enumeration value.
-
+hidr_start
+hidr_id         long    0
+hidr_axis       long    0[3]
+hidr_buttons    long    0
+hidr_hats       long    0
+hidr_flags      long    0
+hidr_state      long    0
+hidr_size       long    0
+hidr_count      long    0
+hidr_offset     long    0
+hidr_usage      long    0
+hidr_usage_idx  long    0
+hidr_lminmax    long    0
+hidr_pminmax    long    0
+hidr_end
 
 ' Initialized at cog startup:
 save_sysclk     long    0         ' Save the current sysclock as the client may change it
 hcog_base_addr  long    0         ' This object's start address in hub, read from PTRB at cog creation
-dm              long    USB_BASE_PIN + 2 ' Client defines the basepin for four consecutive USB port pins
-dp              long    USB_BASE_PIN + 3
-usb_event_pin   long    USB_BASE_PIN ' Host event reporting uses a long repository smart pin
-host_active_led long    USB_BASE_PIN ' Client defines the LED pin# for host bus activity
-host_error_led  long    56        ' Client defines the LED pin# to light on error
 iframe_ct_new   long    0
 iframe_ct_base  long    0
 p2rev_val       long    P2RevB
@@ -1109,17 +1066,27 @@ crc             long    0         ' Used for CRC16 calculation
 ep_addr_pid     long    0         ' Endpoint and device addresses for connected device
 retval          long    0         ' Global success/fail return parameter
 context_retval  long    0         ' Operation contextual return parameter
+' Device stuff
+hdev_id         long    0
+hdev_bcd        long    0
+hdev_ready      long    0         ' Configured device indicator
 ' Keyboard/mouse stuff
 hctrl_ep_addr   long    0
 hctrl_max_pkt   long    0
 hconfig_base    long    0
 hcon_tot_len    long    0         ' Size of the complete config descriptor chain
-hhid_intf_idx   long    0         ' Used during verbose descriptor terminal output
+hdev_intf_idx   long    0         ' Used during verbose descriptor terminal output
+hdev_class      long    0
+hdev_subclass   long    0
+hdev_protocol   long    0
 hsearch_key     long    0         ' Descriptor type to search for in the config chain
 hnext_desc      long    0         ' Offset from the config descriptor start address to the next descriptor in the chain
 hkbd_ep_addr    long    0         ' Keyboard interface endpoint address
 hkbd_poll_cnt   long    0         ' Poll interval counter used for key auto-repeat
 hkbd_ledstates  long    0         ' Off/on state of keyboard LEDs
+hpad_ep_addr    long    0
+hpad_out_addr   long    0
+hpad_poll_cnt   long    0
 hreg_init_end
 ' Variables dependent on the system freqency
 _var_64_lower_  res     1
@@ -1161,6 +1128,7 @@ _usb_d_fs_nco_  res     1
 htmp            res     1         ' Scratch registers whose context remains within the same code block
 htmp1           res     1
 htmp2           res     1
+htmp3           res     1
 hrep            res     1         ' Repeat count
 hsave0          res     1         ' Subroutine parameter saves
 hsave1          res     1
@@ -1243,8 +1211,7 @@ on_connect
                 loc     ptra, #@get_dev_desc - @usb_host_start ' Hub start address of GetDeviceDescriptor SETUP struct
                 add     ptra, hcog_base_addr
                 wrword  #$40, ptra[wLength]             ' Request IN data stage max of 64 bytes will test actual < requested logic
-                loc     pb, #@dev_desc_buff - @usb_host_start ' Start address of DeviceDescriptor struct for IN data
-                add     pb, hcog_base_addr
+                mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct for IN data
                 call    #control_read                   ' Execute GetDeviceDescriptor()
                 cmp     retval, #PID_ACK        wz
         if_z    jmp     #.get_dev_desc
@@ -1255,8 +1222,7 @@ on_connect
                 call    #reset                          ' Try another reset to see if the device responds
                 jmp     #.retry
 .get_dev_desc
-                loc     pa, #@dev_desc_buff - @usb_host_start
-                add     pa, hcog_base_addr              ' Fetch the max packet size for control transactions from the
+                mov     pa, dev_desc_buff_p             ' Fetch the max packet size for control transactions from the
                 add     pa, #DEV_bMaxPktSize0           ' appropriate Device Descriptor struct member offset
                 rdbyte  max_pkt_size, pa
                 mov     hctwait, _1ms_
@@ -1274,29 +1240,25 @@ on_connect
                 call    #calc_crc5
                 loc     ptra, #@get_dev_desc - @usb_host_start ' Repeat SETUP for GetDeviceDescriptor()
                 add     ptra, hcog_base_addr
-                loc     pb, #@dev_desc_buff - @usb_host_start ' Start address of DeviceDescriptor struct has exact descriptor length
-                add     pb, hcog_base_addr
+                mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct has exact descriptor length
                 rdbyte  total_data, pb
                 wrword  total_data, ptra[wLength]       ' Assign it to the SETUP wLength struct member
                 call    #control_read                   ' Execute GetDeviceDescriptor() again, but with updated data length
                 cmp     retval, #PID_ACK        wz
         if_nz   ret                                     ' Back to idle if not ACK
                 mov     hctrl_ep_addr, ep_addr_pid      ' Make the device control address and endpoint official
-                loc     ptra, #@dev_desc_buff - @usb_host_start ' Do the same with the control max packet size
-                add     ptra, hcog_base_addr
+                mov     ptra, dev_desc_buff_p           ' Do the same with the control max packet size
                 rdbyte  hctrl_max_pkt, ptra[DEV_bMaxPktSize0]
                 mov     hctwait, _500us_
                 call    #poll_waitx
                 loc     ptra, #@get_config_desc - @usb_host_start ' Hub start address of GetConfigurationDescriptor SETUP struct
                 add     ptra, hcog_base_addr
                 wrword  #$ff, ptra[wLength]             ' Maximum DATAx bytes for receive to the SETUP struct
-                loc     pb, #@con_desc_buff - @usb_host_start ' Hub start address of ConfigurationDescriptor structure
-                add     pb, hcog_base_addr
+                mov     pb, con_desc_buff_p             ' Hub start address of ConfigurationDescriptor structure
                 call    #control_read                   ' Execute GetConfigurationDescriptor()
                 cmp     retval, #PID_ACK        wz
         if_nz   ret
-                loc     ptra, #@con_desc_buff - @usb_host_start ' Check the config descriptor struct for expected data
-                add     ptra, hcog_base_addr
+                mov     ptra, con_desc_buff_p           ' Check the config descriptor struct for expected data
                 mov     hconfig_base, ptra              ' Will need this for configuration
                 rdbyte  hr0, ptra++                     ' Config.bLength is at offset zero, expect >= CON_DESC_LEN
                 rdbyte  hr1, ptra++                     ' Config.bDescType is next member, expect = TYPE_CONFIG constant
@@ -1365,8 +1327,7 @@ control_read
 .commit
                 cmp     pkt_cnt, #0             wz      ' Empty pkt means previous pkt was max_pkt_len
         if_z    jmp     #.pre_status                    ' and also end-of-data
-                loc     ptra, #@urx_buff - @usb_host_start ' Copy DATAx in rx buffer to dest struct
-                add     ptra, hcog_base_addr
+                mov     ptra, urx_buff_p                ' Copy DATAx in rx buffer to dest struct
                 mov     hr0, pkt_cnt
                 call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
                 add     stage_data, pkt_cnt             ' Update bytes received on commit
@@ -1511,8 +1472,7 @@ do_int_in
 .commit
                 cmp     pkt_cnt, #0             wz
         if_z    jmp     #.post_ret                      ' Skip copy if it's an empty packet
-                loc     ptra, #@urx_buff - @usb_host_start ' Copy the rx buffer
-                add     ptra, hcog_base_addr
+                mov     ptra, urx_buff_p                ' Copy the rx buffer
                 mov     pb, hpar2                       ' to the destination buffer
                 mov     hr0, pkt_cnt
                 call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
@@ -1649,9 +1609,11 @@ connected
                 cmp     retval, #PID_ACK        wz      ' Anything other than ACK means the device is unusable
         if_nz   jmp     #discon_entry
 set_poll_target
+                mov     poll_target, #0                 ' If unknown device, no interrupt targets
                 cmp     hkbd_ep_addr, #0        wz
-        if_z    mov     poll_target, #0                 ' Unknown device, so no interrupt targets
         if_nz   mov     poll_target, #poll_kbd
+                cmp     hpad_ep_addr, #0        wz
+        if_nz   mov     poll_target, #poll_gamepad
 .set_pulse
                 getct   _pulse_time_
                 add     _pulse_time_, _500ms_           ' Set activity LED pulse to the bus idle toggle rate
@@ -1673,12 +1635,10 @@ hidle
                 pollct3                         wc
         if_c    call    poll_target                     ' Call the current poll/wait subroutine
 .nopoll
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_SUSPEND      wz
+                cmp     cmd_data, #CMD_SUSPEND  wz
         if_z    jmp     #hsuspend
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_RESET        wz
-        if_z    wrlong  #ERR_NONE, cmd_data_p           ' Acknowledge client reset cmd received
+                cmp     cmd_data, #CMD_RESET    wz
+        if_z    mov     cmd_data, #ERR_NONE             ' Acknowledge client reset cmd received
         if_z    jmp     #host_reset                     ' See if it works...
                 getct   hr0
                 cmp     hr0, _pulse_time_       wcz     ' Connected "heartbeat"
@@ -1703,7 +1663,7 @@ hsuspend
                 setint1 #0                              ' Stopping the 1ms frame packets signals suspend
                 waitx   _suspend_wait_                  ' The device enters suspend state when the bus is idle and
                 wypin   #OUT_IDLE, dm                   ' no frame SOPs are received for three consecutive frames
-                wrlong  #ERR_NONE, cmd_data_p           ' Clear the cmd from the event queue
+                mov     cmd_data, #ERR_NONE             ' Clear the cmd from the event queue
                 mov     mod_cnt, #0
 
                 ' Fall through to resume wait loop
@@ -1714,8 +1674,7 @@ hwait_resume
                 waitx   hr1                             ' Pulse the activity LED every two seconds but break
                 incmod  mod_cnt, #8             wc      ' it down to smaller wait chunks
         if_c    drvnot  host_active_led
-                rdlong  htmp, cmd_data_p
-                cmp     htmp, #CMD_RESUME       wz
+                cmp     cmd_data, #CMD_RESUME   wz
         if_nz   jmp     #hwait_resume
                 mov     htmp, ##_CLKFREQ                ' Check to see if the system frequency has changed
                 cmp     htmp, save_sysclk       wz
@@ -1743,7 +1702,7 @@ hwait_resume
                 setint1 #1                              ' Enable the 1ms frame ISR
                 mov     hctwait, _4ms_
                 call    #poll_waitx                     ' Delay until at least three 1ms frames transmitted
-                wrlong  #ERR_NONE, cmd_data_p           ' Acknowledge resume cmd complete
+                mov     cmd_data, #ERR_NONE             ' Acknowledge resume cmd complete
                 jmp     #set_poll_target                ' This addr configs a USB poll transaction and falls thru to hidle
 
 hlut_end
@@ -1761,7 +1720,7 @@ DAT             ' USB Host HUB execution
 ' USB host cog initialization.
 '------------------------------------------------------------------------------
 usb_host_init
-                flth    host_error_led                  ' Ensure fatal error LED is inactive
+                drvl    host_error_led                  ' Ensure fatal error LED is inactive
 '                mov     p2rev_val, ptrb                 ' Running on P2RevA or P2RevB+ silicon?
 '                setq    #1
 '                rdlong  $1e0, ptrb++
@@ -1916,91 +1875,118 @@ hinit_usb_timings
 ' On exit:
 '------------------------------------------------------------------------------
 hparse_con_desc
-                call    #init_kbdm_data                 ' Reset keyboard/mouse data area to start-up values
+                call    #init_kbdm_data                 ' Reset device data area to start-up values
+
+                mov     ptrb, dev_desc_buff_p
+                rdword  htmp, ptrb[4]       ' idVendor
+                rdword  hdev_id, ptrb[5]    ' idProduct
+                setword hdev_id, htmp, #1
+                rdword  hdev_bcd, ptrb[6]   ' bcdDevice
+                debug(uhex_long(hdev_id), uhex_word(hdev_bcd))
+
                 mov     pa, #CON_wTotalLen
                 add     pa, hconfig_base
                 rdword  hcon_tot_len, pa                ' Keep config chain size handy
+                'debug(uhex_byte_array(hconfig_base, hcon_tot_len))
 ' Search the configuration descriptor for the Class/Subclass/Protocol "triad"
 ' that defines a keyboard and/or mouse.
                 rdbyte  hnext_desc, hconfig_base        ' Config desc size is offset to first desc in chain
 .next_intf
-                mov     hsearch_key, #TYPE_INTERFACE
-                call    #hsearch_desc_type
-                cmp     ptrb, #0                wz
-        if_z    jmp     #hset_config                    ' No more interface descs
-                rdbyte  htmp, ptrb
-                add     hnext_desc, htmp                ' Get offset to next desc, if any
-                rdbyte  hhid_intf_idx, ptrb[INTF_bIntfNum]
-                rdbyte  htmp, ptrb[INTF_bIntfClass]
-                cmp     htmp, #CLASS_HID        wz      ' Only interested in the HID class interface descriptors
-        if_nz   jmp     #.next_intf                     ' Search next interface in chain, if any
-                rdbyte  htmp, ptrb[INTF_bSubClass]      ' Look for a boot interface sub-class
-                cmp     htmp, #SUBCLASS_INTF_BOOT wz
-        if_nz   jmp     #.next_intf
-                rdbyte  hr3, ptrb[INTF_bProtocol] wz    ' Protocol must be non-zero
-        if_z    jmp     #.next_intf
-.endp
-                mov     hsave1, ptrb
-                mov     hsave2, hnext_desc
-                mov     hsearch_key, #TYPE_ENDPOINT
-                call    #hsearch_desc_type              ' Endpoint descs always follow interface descs
-                cmp     ptrb, #0                wz
-        if_nz   jmp     #.get_ep
-.bad_ep
-                mov     hnext_desc, hsave2
-                mov     ptrb, hsave1
-                jmp     #.next_intf
-.get_ep
-                rdbyte  hr1, ptrb[ENDP_bAddress]
-                testb   hr1, #7                 wc      ' FIXME: define constant for endpoint IN/OUT bit
-        if_nc   jmp     #.bad_ep                        ' Not an IN endpoint
-                shl     hr1, #8 + 7
-                add     ptrb, #ENDP_wMaxPktSize
-                rdword  hr2, ptrb++
-                and     hr2, ##$7ff                     ' Bits 10..0 define the max packet size
-                rdbyte  hr0, ptrb                       ' Fetch the bInterval member (min poll interval, in milliseconds)
-                mov     hnext_desc, hsave2
-                mov     ptrb, hsave1
-                cmp     hr3, #INTF_PROTO_KBD    wz
-        if_nz   jmp     #.next_intf
-.keyboard
-                mov     ptra, kb_intf_num_p
-                wrbyte  hhid_intf_idx, ptra++           ' Save interface index and poll interval values
-                wrbyte  hr0, ptra++
-                mov     hkbd_ep_addr, hctrl_ep_addr
-                and     hkbd_ep_addr, ##ADDR_MASK
-                or      hkbd_ep_addr, hr1               ' IN endpoint address
-                wrbyte  hr2, ptra
-                jmp     #.next_intf                     ' See if there's a mouse subclass
-
-'------------------------------------------------------------------------------
-' Search the configuration descriptor chain for a specific descriptor type.
-'------------------------------------------------------------------------------
-' On entry:
-'   con_tot_len - total length of the config descriptor chain.
-'   next_desc - offset from the configuration descriptor to start the search.
-'     It is assumed that the offset will point to the start of a USB standard
-'     descriptor.
-'   search_key - descriptor type to match.
-' On exit:
-'   PTRB - if a match is found, the descriptor start address, otherwise zero.
-'   next_desc - descriptor offset if found, otherwise unchanged.
-'------------------------------------------------------------------------------
-hsearch_desc_type
-                mov     hsave0, hnext_desc
-.next
-                cmp     hnext_desc, hcon_tot_len  wcz
-        if_ae   mov     ptrb, #0
-        if_ae   mov     hnext_desc, hsave0
-        if_ae   ret
+                cmp     hnext_desc, hcon_tot_len wcz
+        if_ae   jmp     #hset_config
                 mov     ptrb, hconfig_base
                 add     ptrb, hnext_desc
                 rdbyte  htmp, ptrb[DESC_bDescType]
-                cmp     htmp, hsearch_key        wz
-        if_z    ret
+                cmp     htmp, #TYPE_INTERFACE   wz
+        if_z    jmp     #.intf
                 rdbyte  htmp, ptrb
                 add     hnext_desc, htmp                ' Get offset of next desc to check
-                jmp     #.next
+                jmp     #.next_intf
+.intf
+                mov     hpar2, #0                       ' Reset IN/OUT endpoint holders
+                mov     hpar3, #0
+                rdbyte  hdev_intf_idx, ptrb[INTF_bIntfNum]
+                rdbyte  hdev_class, ptrb[INTF_bIntfClass]
+                rdbyte  hdev_subclass, ptrb[INTF_bSubClass]
+                rdbyte  hdev_protocol, ptrb[INTF_bProtocol]
+                debug(udec(hdev_intf_idx),uhex_byte(hdev_class,hdev_subclass,hdev_protocol))
+
+.endp
+                rdbyte  htmp, ptrb
+                add     hnext_desc, htmp                ' Get offset of next desc to check
+                cmp     hnext_desc, hcon_tot_len wcz
+        if_ae   jmp     #.get_device
+                mov     ptrb, hconfig_base
+                add     ptrb, hnext_desc
+                rdbyte  htmp, ptrb[DESC_bDescType]
+                cmp     htmp, #TYPE_INTERFACE   wz
+        if_z    jmp     #.get_device
+                cmp     htmp, #TYPE_ENDPOINT    wz
+        if_z    jmp     #.get_ep
+                jmp     #.endp
+.get_ep
+                rdbyte  hr1, ptrb[ENDP_bAddress]
+                testb   hr1, #7                 wc      ' FIXME: define constant for endpoint IN/OUT bit
+                shl     hr1, #8 + 7
+                mov     htmp, hctrl_ep_addr
+                and     htmp, ##ADDR_MASK
+                or      htmp, hr1                       ' endpoint address
+                cmp     hpar2, #0               wz
+  if_z_and_c    jmp     #.in_ep
+                cmp     hpar3, #0               wz
+ if_z_and_nc    jmp     #.out_ep
+                jmp     #.endp
+.in_ep
+                mov     hpar2, htmp                     ' IN endpoint
+                rdbyte  hr2, ptrb[ENDP_wMaxPktSize]
+                'and     hr2, ##$7ff                     ' Bits 10..0 define the max packet size
+                rdbyte  hr0, ptrb[ENDP_bInterval]       ' Fetch the bInterval member (min poll interval, in milliseconds)
+                setbyte hr2, hr0, #3
+                jmp     #.endp
+.out_ep
+                mov     hpar3, htmp                     ' OUT endpoint
+                rdbyte  hr3, ptrb[ENDP_wMaxPktSize]
+                'and     hr2, ##$7ff                     ' Bits 10..0 define the max packet size
+                rdbyte  hr0, ptrb[ENDP_bInterval]       ' Fetch the bInterval member (min poll interval, in milliseconds)
+                setbyte hr3, hr0, #3
+                jmp     #.endp
+
+.get_device
+                cmp     hdev_class, #$FF        wz      ' XInput class/subclass/protocol
+        if_z    cmp     hdev_subclass, #$5D     wz
+        if_z    cmp     hdev_protocol, #$01     wz
+        if_z    jmp     #.gamepad
+                cmp     hdev_class, #CLASS_HID              wz
+        if_nz   jmp     #.next_intf                     ' No HID class, ignore
+                cmp     hdev_subclass, #SUBCLASS_INTF_NONE  wz
+        if_z    cmp     hdev_protocol, #INTF_PROTO_NONE     wz
+        if_z    jmp     #.gamepad
+                cmp     hdev_subclass, #SUBCLASS_INTF_BOOT  wz
+        if_nz   jmp     #.next_intf                     ' No BOOT subclass, ignore
+.keyboard
+                cmp     hdev_protocol, #INTF_PROTO_KBD      wz
+        if_nz   jmp     #.next_intf                     ' No Keyboard
+                cmp     hkbd_ep_addr, #0    wz
+        if_nz   jmp     #.next_intf
+                getbyte kb_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
+                getbyte kb_interval, hr2, #3
+                mov     hkbd_ep_addr, hpar2             ' IN endpoint address
+                getbyte kb_in_max_pkt, hr2, #0
+                'debug(udec(kb_intf_num))
+                debug(uhex_long(hkbd_ep_addr),udec(kb_in_max_pkt,kb_interval))
+                jmp     #.next_intf
+.gamepad
+                cmp     hkbd_ep_addr, #0    wz
+        if_z    cmp     hpad_ep_addr, #0    wz
+        if_nz   jmp     #.next_intf
+                getbyte gp_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
+                getbyte gp_interval, hr2, #3
+                mov     hpad_ep_addr, hpar2             ' IN endpoint address
+                mov     hpad_out_addr, hpar3            ' OUT endpoint address
+                getbyte gp_in_max_pkt, hr2, #0
+                'debug(udec(gp_intf_num))
+                debug(uhex_long(hpad_ep_addr),udec(gp_in_max_pkt,gp_interval),uhex_long(hpad_out_addr))
+                jmp     #.next_intf
 
 '------------------------------------------------------------------------------
 ' If a newly-connected device is recognized, do whatever is needed to configure
@@ -2019,6 +2005,7 @@ hset_config
 '                mov     hmouse_ep_addr, #0              ' DEBUG
                 mov     htmp2, #DEV_UNKNOWN
                 cmp     hkbd_ep_addr, #0        wz
+        if_z    cmp     hpad_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No boot keyboard or mouse interface
 .set_config
                 loc     ptra, #set_config
@@ -2033,8 +2020,8 @@ hset_config
         if_nz   ret
 .kbd_config
                 cmp     hkbd_ep_addr, #0        wz
-        if_z    jmp     #.notify_client                 ' No keyboard
-                rdbyte  htmp, kb_intf_num_p
+        if_z    jmp     #.gamepad_config                ' No keyboard
+                getbyte htmp, kb_intf_num, #0
                 loc     ptra, #set_protocol
                 wrword  #BOOT_PROTOCOL, ptra[wValue]
                 wrword  htmp, ptra[wIndex]
@@ -2044,7 +2031,7 @@ hset_config
         if_nz   mov     hkbd_ep_addr, #0
         if_nz   jmp     #.notify_client
                 mov     hpar1, #0                       ' SetIdle() duration 0 = indefinite
-                rdbyte  hpar2, kb_intf_num_p
+                getbyte hpar2, kb_intf_num, #0
                 call    #hset_idle
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hkbd_ep_addr, #0
@@ -2061,7 +2048,70 @@ hset_config
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
                 mov     htmp2, #KB_READY                ' Keyboard interface configured
+                jmp     #.notify_client
+.gamepad_config
+                cmp     hpad_ep_addr, #0        wz
+        if_z    jmp     #.notify_client                 ' No gamepad
+
+                mov     ep_addr_pid, hpad_ep_addr
+                call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+                mov     hpad_ep_addr, ep_addr_pid
+                mov     ep_addr_pid, hpad_out_addr  wz
+        if_nz   setbyte ep_addr_pid, #PID_OUT, #0
+        if_nz   call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+        if_nz   mov     hpad_out_addr, ep_addr_pid
+                mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
+
+                cmp     hdev_class, #$FF        wz      ' XInput vendor class
+        if_ne   jmp     #.noxinput                      ' No XInput, try others
+
+                loc     ptra, #xinp_led_cmd             ' Turn on LEDs
+                mov     pkt_data, #3
+                bitl    hstatus, #DATAx_TGLB
+                mov     ep_addr_pid, hpad_out_addr
+                call    #txn_out
+                mov     ep_addr_pid, hctrl_ep_addr
+
+                mov     htmp2, #XINPUT_READY
+                jmp     #.notify_client
+
+.noxinput
+                loc     ptra, #get_desc                 ' Hub start address of GetConfigurationDescriptor SETUP struct
+                wrword  #$ff, ptra[wLength]             ' Maximum DATAx bytes for receive to the SETUP struct
+                mov     pb, gp_descr_p                  ' Hub start address of ConfigurationDescriptor structure
+                call    #control_read                   ' Execute GetConfigurationDescriptor()
+                cmp     retval, #PID_ACK        wz
+        if_nz   mov     hpad_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                mov     gp_descr_len, total_data
+                'debug(uhex_byte_array(gp_descr,gp_descr_len))
+
+                cmp     hdev_id, ##$054C_0268   wz      ' PS3 vendor/product
+        if_ne   mov     htmp2, #GP_READY                ' No PS3, standard gamepad
+        if_ne   jmp     #.notify_client                 ' No further processing needed
+
+                getbyte htmp, gp_intf_num, #0
+                loc     ptra, #set_report
+                wrword  ##(TYPE_OUTPUT << 8) | $01, ptra[wValue]
+                wrword  htmp, ptra[wIndex]
+                wrword  #48, ptra[wLength]
+                loc     pb, #ps3_command_buff           ' set LEDs
+                call    #control_write
+
+                getbyte htmp, gp_intf_num, #0
+                loc     ptra, #set_report
+                wrword  ##(TYPE_FEATURE << 8) | $F4, ptra[wValue]
+                wrword  htmp, ptra[wIndex]
+                wrword  #4, ptra[wLength]
+                loc     pb, #ps3_enable_cmd             ' Enable PS3
+                call    #control_write
+                cmp     retval, #PID_ACK    wz
+        if_nz   mov     hpad_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                mov     htmp2, #PS3_READY               ' PS3 gamepad ready
+
 .notify_client
+                mov     hdev_ready, htmp2               ' Save device ready
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
 
 '------------------------------------------------------------------------------
@@ -2072,14 +2122,24 @@ hset_config
 '------------------------------------------------------------------------------
 init_kbdm_data
                 mov     hkbd_ep_addr, #0
-                mov     ptra, kb_intf_num_p
-                mov     pa, kb_report_p
-                add     pa, #KBD_IN_RPT_LEN
+                mov     hpad_ep_addr, #0
+
+                mov     ptra, cache_start_p         ' Clear cached data buffers
+                mov     pa, cache_end_p
 .loop
                 wrbyte  #0, ptra++
-                cmp     pa, ptra                wcz
+                cmp     ptra, pa                wcz
         if_b    jmp     #.loop
-        _ret_   wrbyte  #PID_DATA0, kb_next_datax_p     ' Reset interrupt IN datax sequence PIDs
+
+                mov     pa, #hdev_init_start        ' Clear device data registers
+.regloop
+                altd    pa
+                mov     0-0, #0
+                add     pa, #1
+                cmp     pa, #hdev_init_end      wz
+        if_nz   jmp     #.regloop
+                mov     kb_next_datax, #PID_DATA0   ' Reset interrupt IN datax sequence PIDs
+        _ret_   mov     gp_next_datax, #PID_DATA0
 
 '------------------------------------------------------------------------------
 ' Execute a ControlWrite() that will perform the HID-specific HID_SET_IDLE
@@ -2108,12 +2168,13 @@ hset_idle
 '   retval - transaction result.
 '------------------------------------------------------------------------------
 hset_kbdled_report
-                rdbyte  htmp, kb_intf_num_p
+                getbyte htmp, kb_intf_num, #0
                 loc     ptra, #set_report
                 wrword  ##(TYPE_OUTPUT << 8), ptra[wValue] ' Byte1 report type, byte0 reportID (0)
                 wrword  htmp, ptra[wIndex]
                 wrword  #KBD_OUT_RPT_LEN, ptra[wLength]
-                mov     pb, kb_led_states_p             ' Start address of OUT data
+                mov     pb, urx_buff_p
+                wrbyte  kb_led_states, pb
                 jmp     #control_write                  ' Execute ControlWrite(SET_REPORT) and back to caller
 
 '------------------------------------------------------------------------------
@@ -2124,11 +2185,9 @@ hset_kbdled_report
 '------------------------------------------------------------------------------
 hget_kbd_in_report
                 mov     ep_addr_pid, hkbd_ep_addr
-                mov     ptra, kb_in_max_pkt_p
-                rdbyte  htmp, ptra++                    ' Always ask for max report size
-                rdbyte  hpar3, ptra
-                setword hpar3, htmp, #1                 ' Max IN packet size to expect
-                mov     hpar2, kb_report_p
+                mov     hpar2, kb_cur_report_p
+                setword hpar3, kb_next_datax, #0
+                setword hpar3, kb_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
         if_z    jmp     #.data
@@ -2139,22 +2198,583 @@ hget_kbd_in_report
                 drvnot  host_active_led                 ' Show keypress activity on the feedback LED
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
-                mov     ptra, kb_next_datax_p
-                rdbyte  hpar1, ptra
+                mov     hpar1, kb_next_datax
                 cmp     hpar1, #PID_DATA0       wz
         if_z    mov     hpar1, #PID_DATA1               ' Txn success, so toggle DATAx
         if_nz   mov     hpar1, #PID_DATA0
-                wrbyte  hpar1, ptra++
-                wrbyte  hpar3, ptra                     ' Save actual bytes read
+                mov     kb_next_datax, hpar1
+                mov     kb_max_index, hpar3             ' Save actual bytes read
+                call    #hkbd_compare
 .led_check
-                rdbyte  htmp, kb_led_states_p
+                mov     htmp, kb_led_states
                 cmp     hkbd_ledstates, htmp    wz
         if_z    ret                                     ' No toggle key indicator changes, so we're done
-                wrbyte  hkbd_ledstates, kb_led_states_p ' Update toggle key indicator states
+                mov     kb_led_states, hkbd_ledstates   ' Update toggle key indicator states
                 mov     ep_addr_pid, hctrl_ep_addr
                 call    #hset_kbdled_report
                 cmp     retval, #PID_ACK        wz
         if_nz   jmp     #host_error                     ' FIXME: on !ACK try to recover instead of fatal error
+                ret
+
+'------------------------------------------------------------------------------
+' Compare current and previous keyboard data buffers for keypress changes.
+'------------------------------------------------------------------------------
+hkbd_compare
+                mov     ptra, kb_cur_report_p
+
+                mov     htmp, ##$7F7F7F7F
+
+                rdbyte  hr0, ptra
+                testb   hr0, #LEFT_CTRLB    wz  ' LCTRL (LEFT BUTTON)
+                bitnz   htmp, #8+6
+                testb   hr0, #LEFT_SHIFTB   wz  ' LSHIFT (RIGHT BUTTON)
+                bitnz   htmp, #6
+
+                add     ptra, #2
+                mov     pa, #6
+.l1             rdbyte  hr0, ptra++
+
+                cmp     hr0, #$1E       wz  ' 1
+        if_z    setnib  htmp, #$D,  #0
+                cmp     hr0, #$1F       wz  ' 2
+        if_z    setnib  htmp, #$7,  #0
+                cmp     hr0, #$20       wz  ' 3
+        if_z    setnib  htmp, #$C,  #0
+                cmp     hr0, #$21       wz  ' 4
+        if_z    setnib  htmp, #$2,  #0
+                cmp     hr0, #$22       wz  ' 5
+        if_z    setnib  htmp, #$3,  #0
+                cmp     hr0, #$23       wz  ' 6
+        if_z    setnib  htmp, #$E,  #0
+                cmp     hr0, #$24       wz  ' 7
+        if_z    setnib  htmp, #$5,  #0
+                cmp     hr0, #$25       wz  ' 8
+        if_z    setnib  htmp, #$1,  #0
+                cmp     hr0, #$26       wz  ' 9
+        if_z    setnib  htmp, #$B,  #0
+                cmp     hr0, #$27       wz  ' 0
+        if_z    setnib  htmp, #$A,  #0
+                cmp     hr0, #$2D       wz  ' *
+        if_z    setnib  htmp, #$9,  #0
+                cmp     hr0, #$2E       wz  ' #
+        if_z    setnib  htmp, #$6,  #0
+
+                cmp     hr0, #$4F       wz  ' RIGHT
+        if_z    bitl    htmp, #8+1
+                cmp     hr0, #$50       wz  ' LEFT
+        if_z    bitl    htmp, #8+3
+                cmp     hr0, #$51       wz  ' DOWN
+        if_z    bitl    htmp, #8+2
+                cmp     hr0, #$52       wz  ' UP
+        if_z    bitl    htmp, #8+0
+
+                djnz    pa, #.l1
+
+                wrlong  htmp, #@coleco_ctrls
+
+                ret
+
+'------------------------------------------------------------------------------
+' Execute an IN interrupt transaction to poll for gamepad activity.
+'------------------------------------------------------------------------------
+' On entry:
+' On exit:
+'------------------------------------------------------------------------------
+hget_gp_in_report
+                mov     ep_addr_pid, hpad_ep_addr
+                mov     hpar2, gp_cur_report_p
+                setword hpar3, gp_next_datax, #0
+                setword hpar3, gp_in_max_pkt, #1        ' Always ask for max report size
+                call    #do_int_in
+                cmp     retval, #PID_ACK        wz
+        if_z    jmp     #.data
+                cmp     retval, #PID_NAK        wz
+        if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
+                ret
+.data
+                incmod  hpad_poll_cnt, #62      wc
+        if_c    drvnot  host_active_led
+                cmp     hpar3, #0               wz
+        if_z    ret                                     ' Ignore an empty DATAx packet
+                mov     hpar1, gp_next_datax
+                cmp     hpar1, #PID_DATA0       wz
+        if_z    mov     hpar1, #PID_DATA1               ' Txn success, so toggle DATAx
+        if_nz   mov     hpar1, #PID_DATA0
+                mov     gp_next_datax, hpar1
+                mov     gp_max_index, hpar3             ' Save actual bytes read
+
+' Note: the following code compares the current and previous reports
+' and process the data if there are changes to ease the debug output.
+' Actual implementations should remove this block, along with gp_pre_report_p and
+' gpPreReport buffer.
+
+                ' ----- start of block to remove
+                mov     ptra, gp_cur_report_p           ' Attempt to notify changes
+                mov     ptrb, gp_pre_report_p           ' by comparing the report bytes
+
+                cmp     hdev_ready, #PS3_READY  wz
+        if_e    mov     hpar3, #10                      ' Only first 10 bytes are significant for PS3 report
+
+                mov     pa, hpar3
+                modz    _set            wz
+.lp
+                rdbyte  htmp1, ptra++
+                rdbyte  htmp2, ptrb
+        if_z    cmp     htmp1, htmp2    wz
+                wrbyte  htmp1, ptrb++
+                djnz    pa, #.lp
+        if_z    ret                                     ' Ignore report if not changed
+                ' ----- end of block to remove
+
+'------------------------------------------------------------------------------
+' Decode controller report
+'------------------------------------------------------------------------------
+hid_decode
+                mov     htmp, #hidr_start       ' clear all hid report registers
+.cl             altd    htmp
+                mov     0-0, #0
+                add     htmp, #1
+                cmp     htmp, #hidr_end     wz
+        if_nz   jmp     #.cl
+
+                mov     ptrb, gp_cur_report_p
+                cmp     hdev_ready, #XINPUT_READY   wz
+        if_z    jmp     #hpad_xinput
+                cmp     hdev_ready, #PS3_READY      wz
+        if_z    jmp     #hpad_ps3
+
+'------------------------------------------------------------------------------
+' Handle HID controller
+' On entry:
+'   ptrb - controller report
+'------------------------------------------------------------------------------
+hpad_hid
+                mov     ptra, gp_descr_p
+                mov     pa, gp_descr_len
+                mov     hidr_usage, ##$76543210
+
+.next
+                cmps    pa, #0      wcz
+        if_be   jmp     #hpad_translate
+
+                rdbyte  hpar1, ptra++
+                sub     pa, #1
+                mov     hpar2, #0
+
+                mov     htmp, hpar1
+                and     htmp, #$03
+                cmp     htmp, #1    wz
+        if_z    rdbyte  hpar2, ptra++
+        if_z    sub     pa, #1
+                cmp     htmp, #2    wz
+        if_z    rdword  hpar2, ptra++
+        if_z    sub     pa, #2
+                cmp     htmp, #3    wz
+        if_z    rdlong  hpar2, ptra++
+        if_z    sub     pa, #4
+
+                and     hpar1, #$FC
+                'debug(uhex_byte(hpar1),uhex_long(hpar2))
+
+                cmp     hpar1, #HID_REPORT_ID   wz
+        if_z    jmp     #.report_id
+                cmp     hpar1, #HID_USAGE_PAGE  wz
+        if_z    jmp     #.usage_page
+                cmp     hpar1, #HID_USAGE       wz
+        if_z    jmp     #.usage
+                cmp     hpar1, #HID_LOGICAL_MIN wz
+        if_z    setword hidr_lminmax, hpar2, #1
+                cmp     hpar1, #HID_LOGICAL_MAX wz
+        if_z    setword hidr_lminmax, hpar2, #0
+                cmp     hpar1, #HID_PHYSICAL_MIN wz
+        if_z    setword hidr_pminmax, hpar2, #1
+                cmp     hpar1, #HID_PHYSICAL_MAX wz
+        if_z    setword hidr_pminmax, hpar2, #0
+                cmp     hpar1, #HID_REPORT_SIZE wz
+        if_z    mov     hidr_size, hpar2
+                cmp     hpar1, #HID_REPORT_COUNT wz
+        if_z    mov     hidr_count, hpar2
+                cmp     hpar1, #HID_INPUT       wz
+        if_nz   jmp     #.next
+
+                and     hpar2, #$03
+                cmp     hpar2, #HID_ITEM_VARIABLE   wz
+        if_nz   jmp     #.skip
+
+                cmp     hidr_state, #2  wz
+        if_z    jmp     #.axes
+                cmp     hidr_state, #3  wz
+        if_z    jmp     #.hats
+                cmp     hidr_state, #4  wz
+        if_z    jmp     #.buttons
+.skip
+                mov     htmp, hidr_size
+                mul     htmp, hidr_count
+                add     hidr_offset, htmp
+                jmp     #.next
+.axes
+                'debug(".axes ", udec(hidr_offset,hidr_size,hidr_count))
+                getnib  hr0, hidr_flags, #2
+                mov     hr1, hidr_count
+.l1
+                mov     hpar1, hidr_offset
+                mov     hpar2, hidr_size
+                call    #hpad_getbits
+                call    #hpad_normalize
+                cmp     hr0, #6         wcz
+        if_b    altgn   hr0, #hidr_usage
+        if_b    getnib  hr2
+        if_b    altsw   hr2, #hidr_axis
+        if_b    setword retval
+        if_b    add     hr0, #1
+                add     hidr_offset, hidr_size
+                djnz    hr1, #.l1
+
+                setnib  hidr_flags, hr0, #2
+                mov     hidr_state, #1
+                jmp     #.next
+.hats
+                'debug(".hats ", udec(hidr_offset,hidr_size,hidr_count))
+                mov     hpar1, hidr_offset
+                mov     hpar2, hidr_size
+                call    #hpad_getbits
+                setbyte hidr_hats, retval, #0
+                setnib  hidr_flags, #1, #3
+                mov     hidr_state, #1
+                jmp     #.skip
+.buttons
+                'debug(".buttons ", udec(hidr_offset,hidr_size,hidr_count))
+                mov     hpar1, hidr_offset
+                mov     hpar2, hidr_size
+                mul     hpar2, hidr_count
+                call    #hpad_getbits
+                getbyte htmp, hidr_flags, #0
+                shl     retval, htmp
+                or      hidr_buttons, retval
+                add     htmp, hidr_count
+                setbyte hidr_flags, htmp, #0
+                mov     hidr_state, #1
+                jmp     #.skip
+.report_id
+                cmp     hidr_id, #0     wz
+        if_nz   jmp     #hpad_translate
+                rdbyte  hidr_id, ptrb++
+                cmp     hidr_id, hpar2  wz
+        if_nz   ret
+                jmp     #.next
+.usage_page
+                cmp     hpar2, #HID_USAGE_PAGE_BUTTONS  wz
+        if_z    cmp     hidr_state, #1  wz
+        if_z    mov     hidr_state, #4
+                jmp     #.next
+.usage
+                cmp     hpar2, #HID_USAGE_JOYSTICK  wz
+        if_nz   cmp     hpar2, #HID_USAGE_GAMEPAD   wz
+        if_z    mov     hidr_state, #1
+        if_z    jmp     #.next
+                cmp     hpar2, #HID_USAGE_X     wz
+        if_nz   cmp     hpar2, #HID_USAGE_Y     wz
+        if_nz   cmp     hpar2, #HID_USAGE_Z     wz
+        if_nz   cmp     hpar2, #HID_USAGE_RX    wz
+        if_nz   cmp     hpar2, #HID_USAGE_RY    wz
+        if_nz   cmp     hpar2, #HID_USAGE_RZ    wz
+        if_z    jmp     #.usage_axis
+                cmp     hpar2, #HID_USAGE_HATSWITCH wz
+        if_z    cmp     hidr_state, #1      wz
+        if_z    mov     hidr_state, #3
+                jmp     #.next
+.usage_axis
+                altsn   hidr_usage_idx, #hidr_usage
+                setnib  hpar2
+
+                sub     hpar2, #HID_USAGE_X - 16
+                decod   hpar2
+                or      hidr_flags, hpar2
+
+                add     hidr_usage_idx, #1
+                cmp     hidr_state, #1      wz
+        if_z    mov     hidr_state, #2
+                jmp     #.next
+
+'------------------------------------------------------------------------------
+' Handle XInput controller
+' On entry:
+'   ptrb - controller report
+'------------------------------------------------------------------------------
+'   Default implementation translates the report to a pseudo-defacto hid
+'   standard and jumps to hpad_translate for actions.
+'   Implementors may take specific actions for this kind of controller.
+'------------------------------------------------------------------------------
+hpad_xinput
+                rdbyte  htmp, ptrb      wz
+        if_nz   ret                         ' Ignore message type <> $00
+                rdbyte  htmp, ptrb[1]
+                cmp     htmp, #$14      wz
+        if_nz   ret                         ' Ignore report length <> $14 (20)
+
+                rdword  retval, ptrb[3]     ' X = left stick X
+                signx   retval, #15
+                setword hidr_axis, retval, #0
+                bith    hidr_flags, #HID_AXIS_X
+                rdword  retval, ptrb[4]     ' Y = left stick Y (inverted)
+                not     retval
+                signx   retval, #15
+                setword hidr_axis, retval, #1
+                bith    hidr_flags, #HID_AXIS_Y
+                rdword  retval, ptrb[5]     ' Z = right stick X
+                signx   retval, #15
+                setword hidr_axis+1, retval, #0
+                bith    hidr_flags, #HID_AXIS_Z
+                rdword  retval, ptrb[6]     ' RZ = right stick Y (inverted)
+                not     retval
+                signx   retval, #15
+                setword hidr_axis+2, retval, #1
+                bith    hidr_flags, #HID_AXIS_RZ
+
+                mov     hidr_lminmax, #$0000_00FF
+                rdbyte  retval, ptrb[4]     ' left analog trigger
+                cmp     retval, #192    wcz
+        if_ae   bith    hidr_buttons, #6    ' left analog trigger (button)
+                call    #hpad_normalize
+                setword hidr_axis+1, retval, #1
+                bith    hidr_flags, #16+3
+                rdbyte  retval, ptrb[5]     ' right analog trigger
+                cmp     retval, #192    wcz
+        if_ae   bith    hidr_buttons, #7    ' right analog trigger (button)
+                call    #hpad_normalize
+                setword hidr_axis+2, retval, #0
+                bith    hidr_flags, #16+4
+
+                rdword  retval, ptrb[1]
+                testb   retval, #12     wc  ' A
+                bitc    hidr_buttons, #0
+                testb   retval, #13     wc  ' B
+                bitc    hidr_buttons, #1
+                testb   retval, #14     wc  ' X
+                bitc    hidr_buttons, #2
+                testb   retval, #15     wc  ' Y
+                bitc    hidr_buttons, #3
+                testb   retval, #8      wc  ' LB
+                bitc    hidr_buttons, #4
+                testb   retval, #9      wc  ' RB
+                bitc    hidr_buttons, #5
+                testb   retval, #5      wc  ' SELECT
+                bitc    hidr_buttons, #8
+                testb   retval, #4      wc  ' START
+                bitc    hidr_buttons, #9
+                testb   retval, #6      wc  ' L3
+                bitc    hidr_buttons, #10
+                testb   retval, #7      wc  ' R3
+                bitc    hidr_buttons, #11
+                testb   retval, #10     wc  ' XBOX
+                bitc    hidr_buttons, #12
+
+                setnib  hidr_flags, #1, #3
+                setbyte hidr_hats, #$0F, #0
+                getnib  htmp, retval, #0    ' map dpad buttons to hat direction
+                cmp     htmp, #%0001    wz
+        if_z    setbyte hidr_hats, #0, #0
+                cmp     htmp, #%1001    wz
+        if_z    setbyte hidr_hats, #1, #0
+                cmp     htmp, #%1000    wz
+        if_z    setbyte hidr_hats, #2, #0
+                cmp     htmp, #%1010    wz
+        if_z    setbyte hidr_hats, #3, #0
+                cmp     htmp, #%0010    wz
+        if_z    setbyte hidr_hats, #4, #0
+                cmp     htmp, #%0110    wz
+        if_z    setbyte hidr_hats, #5, #0
+                cmp     htmp, #%0100    wz
+        if_z    setbyte hidr_hats, #6, #0
+                cmp     htmp, #%0101    wz
+        if_z    setbyte hidr_hats, #7, #0
+
+                jmp     #hpad_translate
+
+'------------------------------------------------------------------------------
+' Handle PS3 controller
+' On entry:
+'   ptrb - controller report
+'------------------------------------------------------------------------------
+'   Default implementation translates the report to a pseudo-defacto hid
+'   standard and jumps to hpad_translate for actions.
+'   Implementors may take specific actions for this kind of controller.
+'------------------------------------------------------------------------------
+hpad_ps3
+                rdbyte  htmp, ptrb++
+                cmp     htmp, #$01      wz
+        if_nz   ret                         ' Ignore report ID <> $01
+
+                mov     hidr_lminmax, #$0000_00FF
+                rdbyte  retval, ptrb[5]         ' X = left stick X
+                call    #hpad_normalize
+                setword hidr_axis, retval, #0
+                bith    hidr_flags, #HID_AXIS_X
+                rdbyte  retval, ptrb[6]         ' Y = left stick Y
+                call    #hpad_normalize
+                setword hidr_axis, retval, #1
+                bith    hidr_flags, #HID_AXIS_Y
+                rdbyte  retval, ptrb[7]         ' Z = right stick X
+                call    #hpad_normalize
+                setword hidr_axis+1, retval, #0
+                bith    hidr_flags, #HID_AXIS_Z
+                rdbyte  retval, ptrb[8]         ' RZ = right stick Y
+                call    #hpad_normalize
+                setword hidr_axis+2, retval, #1
+                bith    hidr_flags, #HID_AXIS_RZ
+
+                mov     hpar1, #8
+                mov     hpar2, #19
+                call    #hpad_getbits
+
+                testb   retval, #12     wc  ' A
+                bitc    hidr_buttons, #0
+                testb   retval, #13     wc  ' B
+                bitc    hidr_buttons, #1
+                testb   retval, #14     wc  ' X
+                bitc    hidr_buttons, #2
+                testb   retval, #15     wc  ' Y
+                bitc    hidr_buttons, #3
+                testb   retval, #10     wc  ' L1
+                bitc    hidr_buttons, #4
+                testb   retval, #11     wc  ' R1
+                bitc    hidr_buttons, #5
+                testb   retval, #8      wc  ' L2
+                bitc    hidr_buttons, #6
+                testb   retval, #9      wc  ' R2
+                bitc    hidr_buttons, #7
+                testb   retval, #0      wc  ' SELECT
+                bitc    hidr_buttons, #8
+                testb   retval, #3      wc  ' START
+                bitc    hidr_buttons, #9
+                testb   retval, #1      wc  ' LEFT STICK
+                bitc    hidr_buttons, #10
+                testb   retval, #2      wc  ' RIGHT STICK
+                bitc    hidr_buttons, #11
+                testb   retval, #16     wc  ' HOME
+                bitc    hidr_buttons, #12
+
+                setnib  hidr_flags, #1, #3
+                setbyte hidr_hats, #$0F, #0
+                getnib  htmp, retval, #1    ' map dpad buttons to hat direction
+                cmp     htmp, #%0001    wz
+        if_z    setbyte hidr_hats, #0, #0
+                cmp     htmp, #%0011    wz
+        if_z    setbyte hidr_hats, #1, #0
+                cmp     htmp, #%0010    wz
+        if_z    setbyte hidr_hats, #2, #0
+                cmp     htmp, #%0110    wz
+        if_z    setbyte hidr_hats, #3, #0
+                cmp     htmp, #%0100    wz
+        if_z    setbyte hidr_hats, #4, #0
+                cmp     htmp, #%1100    wz
+        if_z    setbyte hidr_hats, #5, #0
+                cmp     htmp, #%1000    wz
+        if_z    setbyte hidr_hats, #6, #0
+                cmp     htmp, #%1001    wz
+        if_z    setbyte hidr_hats, #7, #0
+
+                jmp     #hpad_translate
+
+'------------------------------------------------------------------------------
+' Read bits from report data buffer
+'------------------------------------------------------------------------------
+' On entry:
+'   PTRB - report buffer
+'   hpar1 - start bit
+'   hpar2 - number of bits
+' On exit:
+'   retval - bits
+'------------------------------------------------------------------------------
+hpad_getbits
+                mov     htmp, hpar1
+                shr     htmp, #3        ' byte offset
+                add     htmp, ptrb
+                rdlong  retval, htmp
+
+                mov     htmp1, hpar1
+                and     htmp1, #$07     ' shift
+                shr     retval, htmp1
+
+                cmp     hpar2, #24      wcz
+        if_a    jmp     #.l1
+
+                decod   hpar2
+                sub     hpar2, #1
+                and     retval, hpar2
+                ret
+.l1
+                and     retval, ##$00_FFFFFF
+                add     htmp, #3
+                rdlong  htmp2, htmp
+                sub     hpar2, #24
+                decod   hpar2
+                sub     hpar2, #1
+                shr     htmp2, htmp1
+                and     htmp2, hpar2
+                shl     htmp2, #24
+                or      retval, htmp2
+                ret
+
+'------------------------------------------------------------------------------
+' Normalize value to signed word (-32768 / 32767)
+'------------------------------------------------------------------------------
+' On entry:
+'   retval - value to normalize
+'   hidr_lminmax - min (word 1) max (word 0) value range
+'   - or -
+'   hidr_pminmax - min (word 1) max (word 0) value range
+'   hidr_size - value bits length
+' On exit:
+'   retval - normalized value
+'------------------------------------------------------------------------------
+hpad_normalize
+                mov     htmp, hidr_lminmax  wz
+        if_z    mov     htmp, hidr_pminmax  wz
+        if_z    ret
+                getword htmp1, htmp, #1     ' htmp1 = min
+                getword htmp, htmp, #0      ' htmp = max
+                signx   htmp1, #15      wc
+        if_c    sub     hidr_size, #1
+        if_c    signx   retval, hidr_size
+        if_c    add     hidr_size, #1
+                subs    htmp, htmp1         ' htmp = (max - min)
+                subs    retval, htmp1       ' retval = (retval - min)
+                shl     retval, #16         ' retval = (retval - min) << 16
+                subs    retval, #1          ' retval = ((retval - min) << 16) - 1
+                abs     htmp            wc
+                testb   retval, #31     wz
+                abs     retval
+                qdiv    retval, htmp
+                getqx   retval
+    if_c_ne_z   neg     retval              ' retval = (((retval - min) << 16) - 1) / (max - min)
+                adds    retval, ##$8000 signx 15
+                ret
+
+'------------------------------------------------------------------------------
+' Perform controller actions
+' On entry:
+'    hidr_id        report id
+'    hidr_axis      axis value (signed word, 2 axes per long)
+'                      X = hidr_axis+0, #0
+'                      Y = hidr_axis+0, #1
+'                      Z = hidr_axis+1, #0
+'                     RX = hidr_axis+1, #1
+'                     RY = hidr_axis+2, #0
+'                     RZ = hidr_axis+2, #1
+'    hidr_buttons   buttons state (bits 0 to 31)
+'    hidr_hats      hats state (byte 0, 1, 2, 3)
+'
+'                     -------3 -------2 -------1 -------0 byte
+'                     ---7---6 ---5---4 ---3---2 ---1---0 nibble
+'    hidr_flags       xxxxxxxx_xxrrrzyx_hhhhaaaa_bbbbbbbb
+'                                zyx||| |||||||| ++++++++ n. buttons
+'                                |||||| ||||++++--------- n. axes
+'                                |||||| ++++------------- n. hats
+'                                ++++++------------------ valid axes
+'------------------------------------------------------------------------------
+hpad_translate
+                ' TODO
                 ret
 
 '------------------------------------------------------------------------------
@@ -2209,29 +2829,63 @@ set_report      byte    (DIR_HOST_TO_DEV | TYPE_CLASS | RECIP_INTERFACE)
                                         ' (HID 1.11 Section 7.2.2).
                 word    0       ' Interface index number.
                 word    0       ' Size of the report, in bytes.
+get_desc        byte    (DIR_DEV_TO_HOST | TYPE_STANDARD | RECIP_INTERFACE)
+                byte    REQ_GET_DESC
+                word    TYPE_REPORT << 8
+                word    0       ' Zero or Language ID (Section 9.6.7)
+                word    0       ' Number of bytes to transfer if there is a data stage
+'------------------------------------------------------------------------------
+ps3_enable_cmd  byte    $42, $0C, $00, $00
+ps3_command_buff
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00 | (%0001 << 1) ' TODO led(s) to turn on
+                byte    $ff, $27, $10, $00, $32
+                byte    $ff, $27, $10, $00, $32
+                byte    $ff, $27, $10, $00, $32
+                byte    $ff, $27, $10, $00, $32
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00, $00, $00
+                byte    $00, $00, $00
+'------------------------------------------------------------------------------
+xinp_led_cmd    byte    $01, $03, $02   ' 0x00 All off
+                                        ' 0x01 All blinking
+                                        ' 0x02 1 flashes, then on
+                                        ' 0x03 2 flashes, then on
+                                        ' 0x04 3 flashes, then on
+                                        ' 0x05 4 flashes, then on
+                                        ' 0x06 1 on
+                                        ' 0x07 2 on
+                                        ' 0x08 3 on
+                                        ' 0x09 4 on
+                                        ' 0x0A Rotating (e.g. 1-2-4-3)
+                                        ' 0x0B Blinking*
+                                        ' 0x0C Slow blinking*
+                                        ' 0x0D Alternating (e.g. 1+4-2+3), then back to previous*
+xinp_rumble_cmd byte    $00, $08, $00
+                byte    $00             ' Left rumble
+                byte    $00             ' Right rumble
+                byte    $00, $00, $00
 
 '------------------------------------------------------------------------------
 ' The USB data cache area gets zero-filled at every device disconnect
 '------------------------------------------------------------------------------
 usb_cache_start
+
+' Keyboard report buffers
+kb_cur_report   byte    0[KBD_IN_RPT_LEN]
+kb_pre_report   byte    0[KBD_IN_RPT_LEN]
+
+' Gamepad descriptor and report buffers
+gp_descr        byte    0[HID_DESCR_LEN]
+gp_cur_report   byte    0[HID_IN_RPT_LEN]
+gp_pre_report   byte    0[HID_IN_RPT_LEN]
+
+usb_cache_end
+
 urx_buff        byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
 dev_desc_buff   byte    0[DEV_DESC_LEN]         ' Device descriptor
 con_desc_buff   byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
-usb_cache_end
-
-' USB
-usbCmdData      long    0
-usbErrCode      byte    0
-
-' Class driver vars for keyboard boot protocol.
-kbIntfNum       byte    0
-kbInterval      byte    0
-kbInMaxPkt      byte    0
-kbNextDatax     byte    0
-kbMaxIndex      byte    0
-kbLedStates     byte    0
-kbCurReport     byte    0[KBD_IN_RPT_LEN]
-kbPreReport     byte    0[KBD_IN_RPT_LEN]
 
 CON ' USB Host Shared constants
 '------------------------------------------------------------------------------
@@ -2246,7 +2900,8 @@ CON ' USB Host Shared constants
 ' this smart pin (testp #USB_EVENT_REPO wc) as often as possible in its "main"
 ' loop and process the event IDs you're interested in.
 '------------------------------------------------------------------------------
-    #0, NO_EVENT, USB_ERROR, DEV_UNKNOWN, KB_READY, DEV_DISCONNECT
+    #0, NO_EVENT, USB_ERROR, DEV_UNKNOWN, KB_READY, M_READY, KBM_READY, GP_READY
+    XINPUT_READY, PS3_READY, DEV_DISCONNECT, DBG_DATA, M_DATA, GP_DATA
     CMD_SUSPEND, CMD_RESUME, CMD_RESET
 '------------------------------------------------------------------------------
 ' The CMD_* tokens are asynchronous USB commands available to the user, through
@@ -2616,10 +3271,69 @@ CON ' USB Descriptor Definitions
     HID_bNumDesc     = 5    ' 1     Number          Number of HID class descriptors to follow, always at least one.
     HID_bDescType    = 6    ' 1     Constant        Type of HID class descriptor e.g. TYPE_REPORT ($22).
     HID_wDescLength  = 7    ' 2     Number          Total length of descriptor(s).
-' Keyboard and mouse report data buffer lengths (boot protocol):
+
+' HID Report Items from HID 1.11 Section 6.2.2
+    HID_USAGE_PAGE      = $04
+    HID_USAGE           = $08
+    HID_COLLECTION      = $A0
+    HID_END_COLLECTION  = $C0
+    HID_REPORT_COUNT    = $94
+    HID_REPORT_SIZE     = $74
+    HID_USAGE_MIN       = $18
+    HID_USAGE_MAX       = $28
+    HID_LOGICAL_MIN     = $14
+    HID_LOGICAL_MAX     = $24
+    HID_PHYSICAL_MIN    = $34
+    HID_PHYSICAL_MAX    = $44
+    HID_INPUT           = $80
+    HID_REPORT_ID       = $84
+    HID_OUTPUT          = $90
+
+' HID Report Usage Pages from HID Usage Tables 1.12 Section 3, Table 1
+    HID_USAGE_PAGE_GENERIC_DESKTOP = $01
+    HID_USAGE_PAGE_KEY_CODES       = $07
+    HID_USAGE_PAGE_LEDS            = $08
+    HID_USAGE_PAGE_BUTTONS         = $09
+
+' HID Report Usages from HID Usage Tables 1.12 Section 4, Table 6
+    HID_USAGE_POINTER   = $01
+    HID_USAGE_MOUSE     = $02
+    HID_USAGE_JOYSTICK  = $04
+    HID_USAGE_GAMEPAD   = $05
+    HID_USAGE_KEYBOARD  = $06
+    HID_USAGE_X         = $30
+    HID_USAGE_Y         = $31
+    HID_USAGE_Z         = $32
+    HID_USAGE_RX        = $33
+    HID_USAGE_RY        = $34
+    HID_USAGE_RZ        = $35
+    HID_USAGE_SLIDER    = $36
+    HID_USAGE_WHEEL     = $38
+    HID_USAGE_HATSWITCH = $39
+
+' HID Report Collection Types from HID 1.12 6.2.2.6
+    HID_COLLECTION_PHYSICAL    = 0
+    HID_COLLECTION_APPLICATION = 1
+
+' HID Input/Output/Feature Item Data (attributes) from HID 1.11 6.2.2.5
+    HID_ITEM_CONSTANT = $1
+    HID_ITEM_VARIABLE = $2
+    HID_ITEM_RELATIVE = $4
+
+' Keyboard report data buffer lengths (boot protocol):
     KBD_OUT_RPT_LEN = 1     ' CapsLock, NumLock and ScrollLock status bits
     KBD_IN_RPT_LEN  = 8     ' Maximum keyboard boot protocol IN data packet size
-    MOUSE_RPT_LEN   = 8     ' Maximum mouse boot protocol IN data packet size
+' Gamepad report and descriptor data buffer lengths:
+    HID_IN_RPT_LEN   = 256
+    HID_DESCR_LEN    = 256
+
+' Gamepad axes flag bits
+    HID_AXIS_X   = 16+0
+    HID_AXIS_Y   = 16+1
+    HID_AXIS_Z   = 16+2
+    HID_AXIS_RX  = 16+3
+    HID_AXIS_RY  = 16+4
+    HID_AXIS_RZ  = 16+5
 
 DAT             ' ZiKore Z80 COG resident code
                 org     $000
@@ -4985,7 +5699,7 @@ z80_ram         file    "COLECO.ROM"                ' BIOS rom
                 'file    "Pitfall! (USA).col"
                 'file    "Pitfall II - Lost Caverns (USA).col"
                 'file    "Popeye (USA).col"
-                'file    "River Raid (USA).col"
+                file    "River Raid (USA).col"
                 'file    "Super Cobra (USA).col"
                 'file    "Time Pilot (USA, Europe).col"
                 'file    "Zaxxon (USA, Europe).col"
