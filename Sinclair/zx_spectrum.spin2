@@ -53,8 +53,6 @@ DAT             ' Startup
 zk_nmi_mem      long    0                   ' bit 8 = NMI
 zk_irq_mem      long    0                   ' bit 8 = IRQ, 7..0 vector
 
-zx_border       byte    $00                 ' screen border
-
                                             ' ROW  D4 D3 D2 D1 D0
 zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
                                             '  1   G  F  D  S  A
@@ -64,6 +62,9 @@ zx_keys         byte    $FF[8]              '  0   V  C  X  Z  CS
                                             '  5   Y  U  I  O  P
                                             '  6   H  J  K  L  ENTER
                                             '  7   B  N  M  SS SPACE
+
+zx_border       byte    $00                 ' screen border
+zx_kempston     byte    $00                 ' kempston joystick
 
 DAT             ' PS/2 Keyboard driver
                 org     $000
@@ -975,7 +976,6 @@ kb_cur_report_p long    @kb_cur_report
 kb_pre_report_p long    @kb_pre_report
 gp_descr_p      long    @gp_descr
 gp_cur_report_p long    @gp_cur_report
-gp_pre_report_p long    @gp_pre_report
 urx_buff_p      long    @urx_buff
 dev_desc_buff_p long    @dev_desc_buff
 con_desc_buff_p long    @con_desc_buff
@@ -2439,29 +2439,6 @@ hget_gp_in_report
                 mov     gp_next_datax, hpar1
                 mov     gp_max_index, hpar3             ' Save actual bytes read
 
-' Note: the following code compares the current and previous reports
-' and process the data if there are changes to ease the debug output.
-' Actual implementations should remove this block, along with gp_pre_report_p and
-' gpPreReport buffer.
-
-                ' ----- start of block to remove
-                mov     ptra, gp_cur_report_p           ' Attempt to notify changes
-                mov     ptrb, gp_pre_report_p           ' by comparing the report bytes
-
-                cmp     hdev_ready, #PS3_READY  wz
-        if_e    mov     hpar3, #10                      ' Only first 10 bytes are significant for PS3 report
-
-                mov     pa, hpar3
-                modz    _set            wz
-.lp
-                rdbyte  htmp1, ptra++
-                rdbyte  htmp2, ptrb
-        if_z    cmp     htmp1, htmp2    wz
-                wrbyte  htmp1, ptrb++
-                djnz    pa, #.lp
-        if_z    ret                                     ' Ignore report if not changed
-                ' ----- end of block to remove
-
 '------------------------------------------------------------------------------
 ' Decode controller report
 '------------------------------------------------------------------------------
@@ -2910,8 +2887,56 @@ hpad_normalize
 '                                ++++++------------------ valid axes
 '------------------------------------------------------------------------------
 hpad_translate
-                ' TODO
-                ret
+                mov     hr0, #$00
+
+                testb   hidr_flags, #HID_AXIS_X wz
+                testb   hidr_flags, #HID_AXIS_Y andz
+        if_x0   jmp     #.noaxis
+
+                getword htmp, hidr_axis, #0     ' X axis
+                signx   htmp, #15
+                cmps    htmp, ##-16384  wcz     ' left threshold
+                muxc    hr0, #%0_0010
+                cmps    htmp, ##16384   wcz     ' right threshold
+                muxnc   hr0, #%0_0001
+
+                getword htmp, hidr_axis, #1     ' Y axis
+                signx   htmp, #15
+                cmps    htmp, ##-16384  wcz     ' up threshold
+                muxc    hr0, #%0_1000
+                cmps    htmp, ##16384   wcz     ' down threshold
+                muxnc   hr0, #%0_0100
+
+.noaxis
+                getnib  htmp, hidr_flags, #3    ' hats
+                cmp     htmp, #0        wz
+        if_z    jmp     #.nohat
+                mov     hr1, #$00
+                getbyte htmp, hidr_hats, #0     ' hat 0
+                cmp     htmp, #$00      wz
+        if_ne   cmp     htmp, #$01      wz
+        if_ne   cmp     htmp, #$07      wz
+                muxz    hr1, #%0_1000           ' UP
+                cmp     htmp, #$01      wz
+        if_ne   cmp     htmp, #$02      wz
+        if_ne   cmp     htmp, #$03      wz
+                muxz    hr1, #%0_0001           ' RIGHT
+                cmp     htmp, #$03      wz
+        if_ne   cmp     htmp, #$04      wz
+        if_ne   cmp     htmp, #$05      wz
+                muxz    hr1, #%0_0100           ' DOWN
+                cmp     htmp, #$05      wz
+        if_ne   cmp     htmp, #$06      wz
+        if_ne   cmp     htmp, #$07      wz
+                muxz    hr1, #%0_0010           ' LEFT
+                or      hr0, hr1
+
+.nohat
+                testb   hidr_buttons, #0    wz  ' B
+        if_x0   testb   hidr_buttons, #1    wz  ' A
+                muxz    hr0, #%1_0000
+
+        _ret_   wrbyte  hr0, #@zx_kempston
 
 '------------------------------------------------------------------------------
 ' Partially populated SETUP packets
@@ -3015,7 +3040,6 @@ kb_pre_report   byte    0[KBD_IN_RPT_LEN]
 ' Gamepad descriptor and report buffers
 gp_descr        byte    0[HID_DESCR_LEN]
 gp_cur_report   byte    0[HID_IN_RPT_LEN]
-gp_pre_report   byte    0[HID_IN_RPT_LEN]
 
 usb_cache_end
 
@@ -4033,6 +4057,9 @@ zk_portin
                 call    #\ula_contend_port
                 testb   zk_ea, #0       wz  ' Z=A0
         if_x0   jmp     #\zx_ula_read
+                getbyte zk_ea, zk_ea, #0
+                cmp     zk_ea, #$1F     wz
+        if_e    rdbyte  zk_tmp8, #@zx_kempston
                 ret     wcz
 
 zk_ffffh        long    $FFFF
@@ -5216,7 +5243,7 @@ sys_reset
 
                 mov     pa, ##48*1024/4
                 mov     ptra, ##@z80_4000   ' initialize memory
-.l1             wrlong  #0, ptra++          '   0 if user reset
+.l1             wrlong  #0, ptra++
                 djnz    pa, #.l1
 
                 coginit #0, ##@zk_cogbase   ' start Z80 on cog #0
