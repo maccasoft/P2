@@ -2093,8 +2093,23 @@ hset_config
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
 
                 cmp     hdev_class, #$FF        wz      ' XInput vendor class
-        if_ne   jmp     #.noxinput                      ' No XInput, try others
+        if_e    jmp     #.xinput
+                cmp     hdev_id, ##$054C_0268   wz      ' PS3 vendor/product
+        if_e    jmp     #.ps3
 
+                loc     ptra, #get_desc                 ' Get HID descriptor
+                wrword  #$ff, ptra[wLength]
+                mov     pb, gp_descr_p
+                call    #control_read
+                cmp     retval, #PID_ACK        wz
+        if_nz   mov     hpad_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                mov     gp_descr_len, total_data
+                'debug(uhex_byte_array(gp_descr,gp_descr_len))
+
+                mov     htmp2, #GP_READY                ' Standard gamepad
+                jmp     #.notify_client
+.xinput
                 loc     ptra, #xinp_led_cmd             ' Turn on LEDs
                 mov     pkt_data, #3
                 bitl    hstatus, #DATAx_TGLB
@@ -2104,22 +2119,7 @@ hset_config
 
                 mov     htmp2, #XINPUT_READY
                 jmp     #.notify_client
-
-.noxinput
-                loc     ptra, #get_desc                 ' Hub start address of GetConfigurationDescriptor SETUP struct
-                wrword  #$ff, ptra[wLength]             ' Maximum DATAx bytes for receive to the SETUP struct
-                mov     pb, gp_descr_p                  ' Hub start address of ConfigurationDescriptor structure
-                call    #control_read                   ' Execute GetConfigurationDescriptor()
-                cmp     retval, #PID_ACK        wz
-        if_nz   mov     hpad_ep_addr, #0
-        if_nz   jmp     #.notify_client
-                mov     gp_descr_len, total_data
-                'debug(uhex_byte_array(gp_descr,gp_descr_len))
-
-                cmp     hdev_id, ##$054C_0268   wz      ' PS3 vendor/product
-        if_ne   mov     htmp2, #GP_READY                ' No PS3, standard gamepad
-        if_ne   jmp     #.notify_client                 ' No further processing needed
-
+.ps3
                 getbyte htmp, gp_intf_num, #0
                 loc     ptra, #set_report
                 wrword  ##(TYPE_OUTPUT << 8) | $01, ptra[wValue]
@@ -2139,7 +2139,6 @@ hset_config
         if_nz   mov     hpad_ep_addr, #0
         if_nz   jmp     #.notify_client
                 mov     htmp2, #PS3_READY               ' PS3 gamepad ready
-
 .notify_client
                 mov     hdev_ready, htmp2               ' Save device ready
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
