@@ -98,7 +98,7 @@ psg_regs        byte    $00[14]
                 byte    $FF ' port A
                 byte    $FF ' port B
 
-DAT             ' PS/2 Keyboard driver
+DAT             ' PS/2 keyboard driver
                 org     $000
 
 ps2_driver
@@ -114,12 +114,17 @@ ps2_driver
                 jmp     #ps2_locks
 
 ps2_reset
-                setq    #3-1
-                wrlong  msx_keys, #@msx_keys
+                wrlong  ps2_ffffffff, #@msx_keys
+                wrlong  ps2_ffffffff, #@msx_keys+4
+                wrlong  ps2_ffffffff, #@msx_keys+8
+                wrlong  ps2_ffffffff, #@msx_keys+12
 
 ps2_loop        and     ps2_state, #$07     ' keep locks state
 
-.l1             call    #ps2_receive
+.l1             testp   #PS2_DATA_PIN   wz  ' wait initial clock low
+        if_x1   jmp     #$-1
+
+                call    #ps2_rx
                 getbyte ps2_code, ps2_data, #0
 
                 cmp     ps2_data, #$F0  wz  ' release
@@ -199,11 +204,11 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
                 testb   ps2_state, #7   wc      ' release
 
                 getnib  ps2_data, ps2_key, #2
-                mov     ps2_ptr, #@msx_keys
-                add     ps2_ptr, ps2_data
-                rdbyte  ps2_temp, ps2_ptr
+                mov     ptra, #@msx_keys
+                add     ptra, ps2_data
+                rdbyte  ps2_temp, ptra
                 muxc    ps2_temp, ps2_key
-                wrbyte  ps2_temp, ps2_ptr
+                wrbyte  ps2_temp, ptra
                 jmp     #ps2_loop
 
 ps2_locks       mov     ps2_data, #$ED
@@ -253,59 +258,71 @@ ps2_transmit    drvl    #PS2_CLOCK_PIN      ' pull clock low
                 bith    ps2_data, #9        ' append stop bit
 
                 getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ps2_us2000
+                addct1  ps2_tout, ps2_us6000
 
                 mov     ps2_bits, #10
-.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
-        if_nz   jct1    #ps2_reset          ' | check timeout
-        if_nz   jmp     #.l1                ' |
+.l1             testp   #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_x1   jct1    #ps2_reset          ' | check timeout
+        if_x1   jmp     #.l1                ' |
                 shr     ps2_data, #1    wc  ' output data bit
                 drvc    #PS2_DATA_PIN       ' |
-.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
-        if_z    jct1    #ps2_reset          ' | check timeout
-        if_z    jmp     #.l2                ' |
+.l2             testp   #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_x0   jct1    #ps2_reset          ' | check timeout
+        if_x0   jmp     #.l2                ' |
                 djnz    ps2_bits, #.l1      ' another bit ?
 
                 fltl    #PS2_DATA_PIN
 
-.l3             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data low
-        if_z    testpn  #PS2_DATA_PIN   wz  ' |
-        if_nz   jct1    #ps2_reset          ' | check timeout
-        if_nz   jmp     #.l3                ' |
+.l3             testp   #PS2_CLOCK_PIN  wc  ' wait until clock and data low
+                testp   #PS2_DATA_PIN   wz  ' |
+    if_not_00   jct1    #ps2_reset          ' | check timeout
+    if_not_00   jmp     #.l3                ' |
 
-.l4             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock and data high
-        if_nz   testpn  #PS2_DATA_PIN   wz  ' |
-        if_z    jct1    #ps2_reset          ' | check timeout
-        if_z    jmp     #.l4                ' |
+.l4             testp   #PS2_CLOCK_PIN  wc  ' wait until clock and data high
+                testp   #PS2_DATA_PIN   wz  ' |
+    if_not_11   jct1    #ps2_reset          ' | check timeout
+    if_not_11   jmp     #.l4                ' |
 
                 ' Fall through to receive ack
 
-ps2_receive     testpn  #PS2_CLOCK_PIN  wz  ' wait initial clock low
-        if_nz   jmp     #ps2_receive        ' |
+ps2_receive     getct   ps2_tout            ' safety timeout
+                addct1  ps2_tout, ps2_us6000
 
+.l0             testp   #PS2_DATA_PIN   wz  ' wait until data low
+        if_x1   jct1    #ps2_reset          ' | check timeout
+        if_x1   jmp     #.l0                ' |
+
+ps2_rx
                 getct   ps2_tout            ' safety timeout
-                addct1  ps2_tout, ps2_us2000
+                addct1  ps2_tout, ps2_us3000
 
                 mov     ps2_bits, #11
-.l1             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock low
-        if_nz   jct1    #ps2_reset          ' | check timeout
-        if_nz   jmp     #.l1                ' |
+.l1             testp   #PS2_CLOCK_PIN  wz  ' wait until clock low
+        if_x1   jct1    #ps2_reset          ' | check timeout
+        if_x1   jmp     #.l1                ' |
                 testp   #PS2_DATA_PIN   wc  ' sample data
                 rcr     ps2_data, #1        ' |
-.l2             testpn  #PS2_CLOCK_PIN  wz  ' wait until clock high
-        if_z    jct1    #ps2_reset          ' | check timeout
-        if_z    jmp     #.l2                ' |
+.l2             testp   #PS2_CLOCK_PIN  wz  ' wait until clock high
+        if_x0   jct1    #ps2_reset          ' | check timeout
+        if_x0   jmp     #.l2                ' |
                 djnz    ps2_bits, #.l1      ' another bit?
 
+.l3             testp   #PS2_CLOCK_PIN  wc  ' wait until clock and data high
+                testp   #PS2_DATA_PIN   wz  ' |
+    if_not_11   jct1    #.l4                ' | check timeout
+    if_not_11   jmp     #.l3                ' |
+.l4
                 shr     ps2_data, #22       ' align byte
                 test    ps2_data, #$1FF wc  ' test parity
         if_nc   jmp     #ps2_reset          ' |
         _ret_   and     ps2_data, #$FF      ' ok
 
-ps2_us1         long    _CLKFREQ / 1000_000 * 1     ' 1 usec.
-ps2_us4         long    _CLKFREQ / 1000_000 * 4     ' 4 usec.
-ps2_us128       long    _CLKFREQ / 1000_000 * 128   ' 128 usec.
-ps2_us2000      long    _CLKFREQ / 1000_000 * 4000  ' 2000 usec.
+
+ps2_us1         long    _CLKFREQ / 1_000_000 * 1    ' 1 usec.
+ps2_us4         long    _CLKFREQ / 1_000_000 * 4    ' 4 usec.
+ps2_us128       long    _CLKFREQ / 1_000_000 * 128  ' 128 usec.
+ps2_us3000      long    _CLKFREQ / 1_000_000 * 3000 ' 3000 usec.
+ps2_us6000      long    _CLKFREQ / 1_000_000 * 6000 ' 6000 usec.
 
 ps2_bits        long    0
 ps2_code        long    0
@@ -316,7 +333,8 @@ ps2_key         long    0
 ps2_data        long    0
 ps2_tout        long    0
 ps2_temp        long    0
-ps2_ptr         long    0
+
+ps2_ffffffff    long    $FFFFFFFF
 
                 fit     $1F0
 
