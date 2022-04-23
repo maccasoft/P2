@@ -21,7 +21,9 @@ CON
     VGA_PIN  = 48
     CVBS_PIN = 32 addpins 1 ' 32=CVBS/Y, 33=C
 
-    USB_BASE_PIN  = 40
+    USB0_BASEPIN = 40
+    USB1_BASEPIN = 24
+    USB2_BASEPIN = 28
 
     PS2_DATA_PIN  = 47
     PS2_CLOCK_PIN = 46
@@ -70,12 +72,17 @@ DAT             ' Startup
 .lockmadness
 
                 setq    #@psg_regs
-                coginit #5, ##@ay_emu       ' start AY-3-8912 on cog #5
-
-                coginit #4, ##@tms_driver   ' start video on cog #4
-                coginit #3, ##@ps2_driver   ' start PS/2 driver on cog #3
-                coginit #1, ##@usb_host_start ' start USB driver on cog #1
-
+                coginit #6, ##@ay_emu       ' start AY-3-8912 on cog #5
+                coginit #5, ##@tms_driver   ' start video on cog #4
+                coginit #4, ##@ps2_driver   ' start PS/2 driver on cog #3
+                setq    ##@usb2
+                coginit #3, ##@usb_host_start ' start USB2 driver on cog #3
+                waitx   ##_CLKFREQ / 1000 * 5
+                setq    ##@usb1
+                coginit #2, ##@usb_host_start ' start USB1 driver on cog #2
+                waitx   ##_CLKFREQ / 1000 * 5
+                setq    ##@usb0
+                coginit #1, ##@usb_host_start ' start USB0 driver on cog #1 (this)
                 waitx   ##_CLKFREQ          ' delay to allow monitor to settle
                 coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
 
@@ -97,6 +104,9 @@ tms_status      long    $0_00   ' bit 8 = VDP_IRQ, 7..0 = VDP status
 psg_regs        byte    $00[14]
                 byte    $FF ' port A
                 byte    $FF ' port B
+
+msx_joystick0   byte    $FF
+msx_joystick1   byte    $FF
 
 DAT             ' PS/2 keyboard driver
                 org     $000
@@ -499,6 +509,9 @@ usb_host_start
                 add     ptrb, ##@hlut_start - @usb_host_start
                 setq2   #512-1
                 rdlong  0, ptrb
+
+                setq    #14-1
+                rdlong  dm, ptra
 
                 jmp     #\usb_host_init
 
@@ -1017,21 +1030,20 @@ cmd_data        long    0
 usb_err_code    long    ERR_NONE
 
 ' Parameters block assigned at cog startup
-dm              long    USB_BASE_PIN + 2    ' Client defines the basepin for four consecutive USB port pins
-dp              long    USB_BASE_PIN + 3
-usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
-host_active_led long    57                  ' Client defines the LED pin# for host bus activity
-host_error_led  long    56                  ' Client defines the LED pin# to light on error
-kb_cur_report_p long    @kb_cur_report
-kb_pre_report_p long    @kb_pre_report
-gp_descr_p      long    @gp_descr
-gp_cur_report_p long    @gp_cur_report
-gp_pre_report_p long    @gp_pre_report
-urx_buff_p      long    @urx_buff
-dev_desc_buff_p long    @dev_desc_buff
-con_desc_buff_p long    @con_desc_buff
-cache_start_p   long    @usb_cache_start
-cache_end_p     long    @usb_cache_end
+dm              long    0           ' DM (must be even)
+dp              long    0           ' DP (must be DM+1)
+usb_event_pin   long    0           ' Host event reporting uses a long repository smart pin
+host_active_led long    0           ' LED pin# for host bus activity
+host_error_led  long    0           ' LED pin# to light on error
+kb_cur_report_p long    0
+kb_pre_report_p long    0
+gp_descr_p      long    0
+gp_cur_report_p long    0
+urx_buff_p      long    0
+dev_desc_buff_p long    0
+con_desc_buff_p long    0
+cache_start_p   long    0
+cache_end_p     long    0
 
 hdev_init_start
 kb_intf_num     long    0
@@ -2077,6 +2089,7 @@ hset_config
                 mov     hkbd_ep_addr, ep_addr_pid
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
+                debug("keyboard configured")
                 mov     htmp2, #KB_READY                ' Keyboard interface configured
                 jmp     #.notify_client
 .gamepad_config
@@ -2107,6 +2120,7 @@ hset_config
                 mov     gp_descr_len, total_data
                 'debug(uhex_byte_array(gp_descr,gp_descr_len))
 
+                debug("gamepad configured")
                 mov     htmp2, #GP_READY                ' Standard gamepad
                 jmp     #.notify_client
 .xinput
@@ -2117,6 +2131,7 @@ hset_config
                 call    #txn_out
                 mov     ep_addr_pid, hctrl_ep_addr
 
+                debug("XInput gamepad configured")
                 mov     htmp2, #XINPUT_READY
                 jmp     #.notify_client
 .ps3
@@ -2138,6 +2153,7 @@ hset_config
                 cmp     retval, #PID_ACK    wz
         if_nz   mov     hpad_ep_addr, #0
         if_nz   jmp     #.notify_client
+                debug("PS3 gamepad configured")
                 mov     htmp2, #PS3_READY               ' PS3 gamepad ready
 .notify_client
                 mov     hdev_ready, htmp2               ' Save device ready
@@ -2496,33 +2512,6 @@ hget_gp_in_report
                 mov     gp_next_datax, hpar1
                 mov     gp_max_index, hpar3             ' Save actual bytes read
 
-' Note: the following code compares the current and previous reports
-' and process the data if there are changes to ease the debug output.
-' Actual implementations should remove this block, along with gp_pre_report_p and
-' gpPreReport buffer.
-
-                ' ----- start of block to remove
-                mov     ptra, gp_cur_report_p           ' Attempt to notify changes
-                mov     ptrb, gp_pre_report_p           ' by comparing the report bytes
-
-                cmp     hdev_ready, #PS3_READY  wz
-        if_e    mov     hpar3, #10                      ' Only first 10 bytes are significant for PS3 report
-
-                mov     pa, hpar3
-                modz    _set            wz
-.lp
-                rdbyte  htmp1, ptra++
-                rdbyte  htmp2, ptrb
-        if_z    cmp     htmp1, htmp2    wz
-                wrbyte  htmp1, ptrb++
-                djnz    pa, #.lp
-        if_z    ret                                     ' Ignore report if not changed
-                ' ----- end of block to remove
-
-'------------------------------------------------------------------------------
-' Decode controller report
-'------------------------------------------------------------------------------
-hid_decode
                 mov     htmp, #hidr_start       ' clear all hid report registers
 .cl             altd    htmp
                 mov     0-0, #0
@@ -3017,7 +3006,10 @@ hpad_translate
                 testb   hidr_buttons, #0    wz  ' B
                 muxnz   hr0, #%10_0000
 
-        _ret_   wrbyte  hr0, #@psg_regs+14
+                cmp     dm, #USB2_BASEPIN+2 wz
+        if_z    wrbyte  hr0, #@msx_joystick1
+        if_nz   wrbyte  hr0, #@msx_joystick0
+                ret
 
 '------------------------------------------------------------------------------
 ' Partially populated SETUP packets
@@ -3108,26 +3100,87 @@ xinp_rumble_cmd byte    $00, $08, $00
                 byte    $00             ' Left rumble
                 byte    $00             ' Right rumble
                 byte    $00, $00, $00
-
 '------------------------------------------------------------------------------
-' The USB data cache area gets zero-filled at every device disconnect
+' USB Port A
+usb0
+                long    USB0_BASEPIN + 2    ' DM (must be even)
+                long    USB0_BASEPIN + 3    ' DP (must be DM+1)
+                long    USB0_BASEPIN        ' Host event reporting uses a long repository smart pin
+                long    USB0_BASEPIN        ' LED pin# for host bus activity
+                long    56                  ' LED pin# to light on error
+                long    @kbd0_cur_rpt
+                long    @kbd0_pre_rpt
+                long    @hid0_descr
+                long    @hid0_cur_rpt
+                long    @host0_urx_buff
+                long    @host0_dev_desc
+                long    @host0_con_buff
+                long    @usb0_cache_start   ' Cached data area, cleaned at device connect
+                long    @usb0_cache_end
 '------------------------------------------------------------------------------
-usb_cache_start
-
-' Keyboard report buffers
-kb_cur_report   byte    0[KBD_IN_RPT_LEN]
-kb_pre_report   byte    0[KBD_IN_RPT_LEN]
-
-' Gamepad descriptor and report buffers
-gp_descr        byte    0[HID_DESCR_LEN]
-gp_cur_report   byte    0[HID_IN_RPT_LEN]
-gp_pre_report   byte    0[HID_IN_RPT_LEN]
-
-usb_cache_end
-
-urx_buff        byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
-dev_desc_buff   byte    0[DEV_DESC_LEN]         ' Device descriptor
-con_desc_buff   byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
+usb0_cache_start
+kbd0_cur_rpt    byte    0[KBD_IN_RPT_LEN]
+kbd0_pre_rpt    byte    0[KBD_IN_RPT_LEN]
+hid0_descr      byte    0[HID_DESCR_LEN]
+hid0_cur_rpt    byte    0[HID_IN_RPT_LEN]
+usb0_cache_end
+host0_urx_buff  byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
+host0_dev_desc  byte    0[DEV_DESC_LEN]         ' Device descriptor
+host0_con_buff  byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
+'------------------------------------------------------------------------------
+' USB Port B
+usb1
+                long    USB1_BASEPIN + 2    ' DM (must be even)
+                long    USB1_BASEPIN + 3    ' DP (must be DM+1)
+                long    USB1_BASEPIN        ' Host event reporting uses a long repository smart pin
+                long    USB1_BASEPIN        ' LED pin# for host bus activity
+                long    57                  ' LED pin# to light on error
+                long    @kbd1_cur_rpt
+                long    @kbd1_pre_rpt
+                long    @hid1_descr
+                long    @hid1_cur_rpt
+                long    @host1_urx_buff
+                long    @host1_dev_desc
+                long    @host1_con_buff
+                long    @usb1_cache_start   ' Cached data area, cleaned at device connect
+                long    @usb1_cache_end
+'------------------------------------------------------------------------------
+usb1_cache_start
+kbd1_cur_rpt    byte    0[KBD_IN_RPT_LEN]
+kbd1_pre_rpt    byte    0[KBD_IN_RPT_LEN]
+hid1_descr      byte    0[HID_DESCR_LEN]
+hid1_cur_rpt    byte    0[HID_IN_RPT_LEN]
+usb1_cache_end
+host1_urx_buff  byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
+host1_dev_desc  byte    0[DEV_DESC_LEN]         ' Device descriptor
+host1_con_buff  byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
+'------------------------------------------------------------------------------
+' USB Port C
+usb2
+                long    USB2_BASEPIN + 2    ' DM (must be even)
+                long    USB2_BASEPIN + 3    ' DP (must be DM+1)
+                long    USB2_BASEPIN        ' Host event reporting uses a long repository smart pin
+                long    USB2_BASEPIN        ' LED pin# for host bus activity
+                long    57                  ' LED pin# to light on error
+                long    @kbd2_cur_rpt
+                long    @kbd2_pre_rpt
+                long    @hid2_descr
+                long    @hid2_cur_rpt
+                long    @host2_urx_buff
+                long    @host2_dev_desc
+                long    @host2_con_buff
+                long    @usb2_cache_start   ' Cached data area, cleaned at device connect
+                long    @usb2_cache_end
+'------------------------------------------------------------------------------
+usb2_cache_start
+kbd2_cur_rpt    byte    0[KBD_IN_RPT_LEN]
+kbd2_pre_rpt    byte    0[KBD_IN_RPT_LEN]
+hid2_descr      byte    0[HID_DESCR_LEN]
+hid2_cur_rpt    byte    0[HID_IN_RPT_LEN]
+usb2_cache_end
+host2_urx_buff  byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
+host2_dev_desc  byte    0[DEV_DESC_LEN]         ' Device descriptor
+host2_con_buff  byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
 
 CON ' USB Host Shared constants
 '------------------------------------------------------------------------------
@@ -6063,7 +6116,7 @@ psg_reg_write
                 ret     wcz
 
 psg_write
-                cmp     msx_psg_latch, #$0E     wcz ' port A
+                cmp     msx_psg_latch, #14      wcz ' port A
         if_e    ret     wcz
                 mov     zk_tmp0, #@psg_regs
                 add     zk_tmp0, msx_psg_latch
@@ -6074,10 +6127,15 @@ psg_read
                 mov     zk_tmp0, #@psg_regs
                 add     zk_tmp0, msx_psg_latch
                 rdbyte  zk_tmp8, zk_tmp0
-                cmp     msx_psg_latch, #$0E     wcz ' port A
+                cmp     msx_psg_latch, #14      wcz ' port A
         if_ne   ret     wcz
-                testp   #TAPE_EAR               wc  ' tape read (EAR)
-                bitc    zk_tmp8, #7                 ' |
+
+                rdbyte  zk_tmp0, #@psg_regs+15      ' port B
+                testb   zk_tmp0, #6             wz  ' joystick selection
+        if_x0   rdbyte  zk_tmp8, #@msx_joystick0
+        if_x1   rdbyte  zk_tmp8, #@msx_joystick1
+                testp   #TAPE_EAR               wz  ' tape read (EAR)
+                bitz    zk_tmp8, #7                 ' |
                 ret     wcz
 
 ' System reset
