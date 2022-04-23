@@ -21,7 +21,8 @@ CON
     VGA_PIN  = 48
     CVBS_PIN = 32 addpins 1 ' 32=CVBS/Y, 33=C
 
-    USB_BASE_PIN  = 40
+    USB0_BASEPIN = 40
+    USB1_BASEPIN = 24
 
     PS2_DATA_PIN  = 47
     PS2_CLOCK_PIN = 46
@@ -49,7 +50,11 @@ DAT             ' Startup
 
                 coginit #4, ##@video_driver ' start video on cog #4
                 coginit #3, ##@ps2_driver   ' start PS/2 driver on cog #3
-                coginit #1, ##@usb_host_start ' start USB driver on cog #1
+                setq    ##@usb1
+                coginit #2, ##@usb_host_start ' start USB1 driver on cog #2
+                waitx   ##_CLKFREQ / 1000 * 5
+                setq    ##@usb0
+                coginit #1, ##@usb_host_start ' start USB0 driver on cog #1 (this)
 
                 waitx   ##_CLKFREQ          ' delay to allow monitor to settle
                 coginit #0, ##@zk_cogbase   ' start Z80 on cog #0 (this)
@@ -481,6 +486,9 @@ usb_host_start
                 add     ptrb, ##@hlut_start - @usb_host_start
                 setq2   #512-1
                 rdlong  0, ptrb
+
+                setq    #14-1
+                rdlong  dm, ptra
 
                 jmp     #\usb_host_init
 
@@ -999,20 +1007,20 @@ cmd_data        long    0
 usb_err_code    long    ERR_NONE
 
 ' Parameters block assigned at cog startup
-dm              long    USB_BASE_PIN + 2    ' Client defines the basepin for four consecutive USB port pins
-dp              long    USB_BASE_PIN + 3
-usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
-host_active_led long    57                  ' Client defines the LED pin# for host bus activity
-host_error_led  long    56                  ' Client defines the LED pin# to light on error
-kb_cur_report_p long    @kb_cur_report
-kb_pre_report_p long    @kb_pre_report
-gp_descr_p      long    @gp_descr
-gp_cur_report_p long    @gp_cur_report
-urx_buff_p      long    @urx_buff
-dev_desc_buff_p long    @dev_desc_buff
-con_desc_buff_p long    @con_desc_buff
-cache_start_p   long    @usb_cache_start
-cache_end_p     long    @usb_cache_end
+dm              long    0           ' DM (must be even)
+dp              long    0           ' DP (must be DM+1)
+usb_event_pin   long    0           ' Host event reporting uses a long repository smart pin
+host_active_led long    0           ' LED pin# for host bus activity
+host_error_led  long    0           ' LED pin# to light on error
+kb_cur_report_p long    0
+kb_pre_report_p long    0
+gp_descr_p      long    0
+gp_cur_report_p long    0
+urx_buff_p      long    0
+dev_desc_buff_p long    0
+con_desc_buff_p long    0
+cache_start_p   long    0
+cache_end_p     long    0
 
 hdev_init_start
 kb_intf_num     long    0
@@ -3058,25 +3066,60 @@ xinp_rumble_cmd byte    $00, $08, $00
                 byte    $00             ' Left rumble
                 byte    $00             ' Right rumble
                 byte    $00, $00, $00
-
 '------------------------------------------------------------------------------
-' The USB data cache area gets zero-filled at every device disconnect
+' USB Port A
+usb0
+                long    USB0_BASEPIN + 2    ' DM (must be even)
+                long    USB0_BASEPIN + 3    ' DP (must be DM+1)
+                long    USB0_BASEPIN        ' Host event reporting uses a long repository smart pin
+                long    USB0_BASEPIN        ' LED pin# for host bus activity
+                long    56                  ' LED pin# to light on error
+                long    @kbd0_cur_rpt
+                long    @kbd0_pre_rpt
+                long    @hid0_descr
+                long    @hid0_cur_rpt
+                long    @host0_urx_buff
+                long    @host0_dev_desc
+                long    @host0_con_buff
+                long    @usb0_cache_start   ' Cached data area, cleaned at device connect
+                long    @usb0_cache_end
 '------------------------------------------------------------------------------
-usb_cache_start
-
-' Keyboard report buffers
-kb_cur_report   byte    0[KBD_IN_RPT_LEN]
-kb_pre_report   byte    0[KBD_IN_RPT_LEN]
-
-' Gamepad descriptor and report buffers
-gp_descr        byte    0[HID_DESCR_LEN]
-gp_cur_report   byte    0[HID_IN_RPT_LEN]
-
-usb_cache_end
-
-urx_buff        byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
-dev_desc_buff   byte    0[DEV_DESC_LEN]         ' Device descriptor
-con_desc_buff   byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
+usb0_cache_start
+kbd0_cur_rpt    byte    0[KBD_IN_RPT_LEN]
+kbd0_pre_rpt    byte    0[KBD_IN_RPT_LEN]
+hid0_descr      byte    0[HID_DESCR_LEN]
+hid0_cur_rpt    byte    0[HID_IN_RPT_LEN]
+usb0_cache_end
+host0_urx_buff  byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
+host0_dev_desc  byte    0[DEV_DESC_LEN]         ' Device descriptor
+host0_con_buff  byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
+'------------------------------------------------------------------------------
+' USB Port B
+usb1
+                long    USB1_BASEPIN + 2    ' DM (must be even)
+                long    USB1_BASEPIN + 3    ' DP (must be DM+1)
+                long    USB1_BASEPIN        ' Host event reporting uses a long repository smart pin
+                long    USB1_BASEPIN        ' LED pin# for host bus activity
+                long    57                  ' LED pin# to light on error
+                long    @kbd1_cur_rpt
+                long    @kbd1_pre_rpt
+                long    @hid1_descr
+                long    @hid1_cur_rpt
+                long    @host1_urx_buff
+                long    @host1_dev_desc
+                long    @host1_con_buff
+                long    @usb1_cache_start   ' Cached data area, cleaned at device connect
+                long    @usb1_cache_end
+'------------------------------------------------------------------------------
+usb1_cache_start
+kbd1_cur_rpt    byte    0[KBD_IN_RPT_LEN]
+kbd1_pre_rpt    byte    0[KBD_IN_RPT_LEN]
+hid1_descr      byte    0[HID_DESCR_LEN]
+hid1_cur_rpt    byte    0[HID_IN_RPT_LEN]
+usb1_cache_end
+host1_urx_buff  byte    0[URX_BUFF_LEN]         ' USB IN DATAx scratch buffer
+host1_dev_desc  byte    0[DEV_DESC_LEN]         ' Device descriptor
+host1_con_buff  byte    0[CON_BUFF_LEN]         ' Configuration descriptor chain
 
 CON ' USB Host Shared constants
 '------------------------------------------------------------------------------
