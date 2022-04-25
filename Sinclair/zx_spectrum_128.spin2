@@ -210,13 +210,13 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
                 wrbyte  ps2_temp, ptra
                 jmp     #ps2_loop
 
-c_shift         rdbyte  ps2_temp, ptra[%000]
+c_shift         rdbyte  ps2_temp, ptra[0]
                 muxc    ps2_temp, #%00001
-        _ret_   wrbyte  ps2_temp, ptra[%000]
+        _ret_   wrbyte  ps2_temp, ptra[0]
 
-s_shift         rdbyte  ps2_temp, ptra[%111]
+s_shift         rdbyte  ps2_temp, ptra[7]
                 muxc    ps2_temp, #%00010
-        _ret_   wrbyte  ps2_temp, ptra[%111]
+        _ret_   wrbyte  ps2_temp, ptra[7]
 
 ps2_locks       mov     ps2_data, #$ED
                 call    #ps2_transmit
@@ -342,6 +342,7 @@ ps2_data        long    0
 ps2_tout        long    0
 ps2_temp        long    0
 
+                '        ROW        B4.B0   ROW        B4.B0
 ps2_table       byte                    0,                 0  '00
                 byte                    0,                 0  '01    F9
                 byte                    0,                 0  '02
@@ -2344,9 +2345,8 @@ hkbd_translate
                 muxc    htmp, hpar1
         _ret_   wrbyte  htmp, ptrb
 
-' Translation table from USB key code to ZX Spectrum keyboard matrix
-usb_table
-                byte                    0  '00
+                '        ROW        B4.B0
+usb_table       byte                    0  '00
                 byte                    0  '01
                 byte                    0  '02
                 byte                    0  '03
@@ -2396,7 +2396,7 @@ usb_table
                 byte                    0  '2F    [ and {
                 byte                    0  '30    ] and }
                 byte                    0  '31    \ and |
-                byte                    0  '32    None-US # and ~
+                byte                    0  '32    ` and ~
                 byte                    0  '33    ; and :
                 byte                    0  '34    ' and "
                 byte                    0  '35    ` and ~
@@ -2446,7 +2446,7 @@ usb_table
                 byte                    0  '61    (9)
                 byte                    0  '62    (0)
                 byte                    0  '63    (.)
-                byte                    0  '64    Non-US \ and |
+                byte                    0  '64    \ and |
                 byte                    0  '65    App
 
 '------------------------------------------------------------------------------
