@@ -318,10 +318,10 @@ i_inde_xy       getbyte t1, _X, #0          '  0   1   0   1
                 getbyte _Y, t1, #0          '  1   0   1   0
                 jmp     #_flags
 
-i_jmp           rdword  ptrb, ptrb           ' 0 0
-                add     ptrb, ram_addr       ' 1 0
-                rdword  ptrb, ptrb           ' 1 0
-        _ret_   add     ptrb, ram_addr       ' 0 0
+i_jmp           rdword  ptrb, ptrb          ' 0 0
+                add     ptrb, ram_addr      ' 1 0
+                rdword  ptrb, ptrb          ' 1 0
+        _ret_   add     ptrb, ram_addr      ' 0 0
 
 i_jsr           rdword  t4, ptrb            ' t4 = new PC
                 add     ptrb, #1
@@ -515,6 +515,7 @@ i_taxya         getbyte t1, _A, #0          '  0   0   1   1   1   1
                 getbyte _Y, t1, #0          '  1   0   1   1   1   1
                 getbyte _S, t1, #0          '  1   1   1   1   0   1
                 jmp     #\_flags            '                  1
+                ret
 
 i_alr           push    #.ret
                 execf   ##(%110_0 << 10) | i_log_imm
