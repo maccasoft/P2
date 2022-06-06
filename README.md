@@ -8,6 +8,7 @@ Projects based on the **Parallax Propeller 2** multicore microcontroller.
 **Emulators**
 
  * **[Coleco](Coleco)** - ColecoVision
+ * **[I8086](I8086)** - Intel 8086 Processor
  * **[M6502](M6502)** - MOS6502 Processor
    * **[apple1](M6502/apple1)** - Apple-1
    * **[uk101](M6502/uk101)** - Compukit UK101
