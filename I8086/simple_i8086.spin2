@@ -678,6 +678,7 @@ i_flags         long    $0000
 i_ip            long    $FFF0
 
 i_ffffh         long    $FFFF
+i_eamask        long    $FFFFF
 i_optable       long    @i8086_optable
 
 i_rambase       long    RAM_BASE
@@ -1326,6 +1327,7 @@ i_hlt
 i_readmemb
                 ' i_ea   = address
                 ' i_tmpb = data
+                and     i_ea, i_eamask
                 mov     i_tmpb, #$FF
                 mov     pa, i_ea
                 shr     pa, #12             ' get 4k-bank number
@@ -1352,6 +1354,7 @@ i_readmemb
 i_writememb
                 ' i_ea   = address
                 ' i_tmpb = data
+                and     i_ea, i_eamask
                 mov     pa, i_ea
                 shr     pa, #12             ' get 4k-bank number
                                             ' 00000
