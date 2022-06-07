@@ -233,15 +233,15 @@ i_rotshift_impl
 i_math_pre
                 call    #\i_readcodeb           ' a b c d   a:80pre   %00000_10_11100_00
                 getbyte i_modrm, i_tmpb, #0     ' a b c d   b:81pre %0011000_01_10000_00
-                ' src(r)                        '           c:82pre   %00000_10_01100_00
-                call    #\i_readcodeb           ' a b c d   d:83pre %0011000_01_01100_00
+                ' dst(r)                                    c:82pre   %00000_10_01100_00
+                call    #\i_readopb             ' a | c |   d:83pre %0011000_01_01100_00
+                call    #\i_readopw             ' | b | d
+                ' src(r)                        '
+                call    #\i_readcodeb           ' a b c d
                 getbyte i_data1, i_tmpb, #0     ' a b c d
                 call    #\i_readcodeb           ' | b | |
                 setbyte i_data1, i_tmpb, #1     ' | b | |
                 signx   i_data1, #7             ' | | c d
-                ' dst(r)
-                call    #\i_readopb             ' a | c |
-                call    #\i_readopw             ' | b | d
                 ' operation
                 mov     pb, i_modrm             ' a b c d
                 shr     pb, #3                  ' a b c d
@@ -1575,10 +1575,10 @@ i8086_optable
                 long    i_jmp_d8       |           %1_110100101111_00 << 10 ' 7E dd          jle dd
                 long    i_jmp_d8       |           %1_011010101111_00 << 10 ' 7F dd          jnle dd
 
-                long    i_math_pre     |           %00000_10_11100_00 << 10 ' 80 rm nn       add/or/adc/sbb/and/sub(xor/cmp [rm8], nn
-                long    i_math_pre     |         %0011000_01_10000_00 << 10 ' 81 rm ll hh    add/or/adc/sbb/and/sub(xor/cmp [rm16], hhll
-                long    i_math_pre     |           %00000_10_01100_00 << 10 ' 82 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm8], sn
-                long    i_math_pre     |         %0011000_01_01100_00 << 10 ' 83 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm16], sn
+                long    i_math_pre     |           %00000_11100_10_00 << 10 ' 80 rm nn       add/or/adc/sbb/and/sub(xor/cmp [rm8], nn
+                long    i_math_pre     |         %0011000_10000_01_00 << 10 ' 81 rm ll hh    add/or/adc/sbb/and/sub(xor/cmp [rm16], hhll
+                long    i_math_pre     |           %00000_01100_10_00 << 10 ' 82 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm8], sn
+                long    i_math_pre     |         %0011000_01100_01_00 << 10 ' 83 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm16], sn
                 long    i_mathop8      |   %0111_11101111_0110_010_00 << 10 ' 84 rm          test r8, [mm]
                 long    i_mathop16     |   %0111_11101111_0110_010_00 << 10 ' 85 rm          test r16, [mm]
                 long    i_xchg_rmod    |            %00100_010_010_00 << 10 ' 86 rm          xchg r8, [mm]
