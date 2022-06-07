@@ -131,18 +131,20 @@ i_branch
         _ret_   getword i_ip, i_data0, #0       ' a b c d e f g h
 
 i_ret_d16
-                call    #\i_readimmw            '   b   d     a=ret      %011100
-                mov     i_data0, i_data         '   b   d     b=ret_d16  %001100_11_00
-i_iret                                          '             c=retf     %010000
-                call    #\i_pop                 '   |   | e   d=retf_d16 %000000_11_00
-                setword i_flags, i_data, #0     '   |   | e   e=iret     %010000_00
+                call    #\i_readimmw            '   b   d
+                mov     i_data0, i_data         '   b   d
 i_ret                                           '
-                call    #\i_pop                 ' a b c d e
-                getword i_ip, i_data, #0        ' a b c d e
-                call    #\i_pop                 ' | | c d e
-                mov     i_cs, i_data            ' | | c d e
+                call    #\i_pop                 ' a b c d e     a:ret      %01_11_11_00
+                getword i_ip, i_data, #0        ' a b c d e     b:ret_d16  %00_11_11_00_00
+                                                '               c:retf     %01_11_00_00
+                call    #\i_pop                 ' | | c d e     d:retf_d16 %00_11_00_00_00
+                getword i_cs, i_data, #0        ' | | c d e     e:iret     %01_00_00_00
+
+                call    #\i_pop                 ' | | | | e
+                setword i_flags, i_data, #0     ' | | | | e
+
                 add     i_sp, i_data0           ' | b | d |
-        _ret_   getword i_sp, i_sp, #0          ' a b c d d
+        _ret_   getword i_sp, i_sp, #0          ' a b c d e
 
 i_jmp_d8
                 call    #\i_readcodeb               ' a b c d e f g h i j k l m n o p q  a=jmp
@@ -1642,22 +1644,22 @@ i8086_optable
                 long    i_mov_imm      |                    %010_0000 << 10 ' BE ll hh       mov si, hhll
                 long    i_mov_imm      |                    %010_0000 << 10 ' BF ll hh       mov di, hhll
 
-                long    i_ret_d16      |                %001100_11_00 << 10 ' C0 dl dh       ret (SP+dhdl)
-                long    i_ret          |                      %011100 << 10 ' C1             ret
-                long    i_ret_d16      |                %001100_11_00 << 10 ' C2 dl dh       ret (SP+dhdl)
-                long    i_ret          |                      %011100 << 10 ' C3             ret
+                long    i_ret_d16      |              %00_11_11_00_00 << 10 ' C0 dl dh       ret (SP+dhdl)
+                long    i_ret          |                 %01_11_11_00 << 10 ' C1             ret
+                long    i_ret_d16      |              %00_11_11_00_00 << 10 ' C2 dl dh       ret (SP+dhdl)
+                long    i_ret          |                 %01_11_11_00 << 10 ' C3             ret
                 long    i_lseg_reg     |                  %010_00_000 << 10 ' C4 rm          les [rm]
                 long    i_lseg_reg     |                   %00_00_000 << 10 ' C5 rm          lds [rm]
                 long    i_mov_rmod_imm |                  %0_1100_000 << 10 ' C6 rm nn       mov byte [rmod], nn
                 long    i_mov_rmod_imm |                 %01_0000_000 << 10 ' C7 rm ll hh    mov word [rmod], hhll
-                long    i_ret_d16      |                %000000_11_00 << 10 ' C8 dl dh       retf (SP+dhdl)
-                long    i_ret          |                      %010000 << 10 ' C9             retf
-                long    i_ret_d16      |                %000000_11_00 << 10 ' CA dl dh       retf (SP+dhdl)
-                long    i_ret          |                      %010000 << 10 ' CB             retf
+                long    i_ret_d16      |              %00_11_00_00_00 << 10 ' C8 dl dh       retf (SP+dhdl)
+                long    i_ret          |                 %01_11_00_00 << 10 ' C9             retf
+                long    i_ret_d16      |              %00_11_00_00_00 << 10 ' CA dl dh       retf (SP+dhdl)
+                long    i_ret          |                 %01_11_00_00 << 10 ' CB             retf
                 long    i_int3         |                          %10 << 10 ' CC             int3
                 long    i_int          |                           %0 << 10 ' CD             int
                 long    i_into         |                       %11_00 << 10 ' CE             into
-                long    i_iret         |                   %010000_00 << 10 ' CF             iret
+                long    i_ret          |                 %01_00_00_00 << 10 ' CF             iret
 
                 long    i_rotshift     |         %00_0010000_10_10_00 << 10 ' D0 rm          rol/ror/rolc/rorc/shl/shr/shra
                 long    i_rotshift     |       %0011_0001000_01_10_00 << 10 ' D1 rm          rol/ror/rolc/rorc/shl/shr/shra
