@@ -959,27 +959,27 @@ i_mathop_acc
                 jmp     #\@i_flags16_zp         '                         m n o
 
 i_mathop8
-                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o p q r   a:add_r8_rm    %010_11111010_010_010_00
-                getbyte i_modrm, i_tmpb, #0     ' a b c d e f g h i j k l m n o p q r   b:adc_r8_rm    %010_11111001_010_010_00
-                ' src(r)                                                                c:sub_r8_rm    %010_11110110_010_010_00
-                call    #\i_readopb             ' a b c d e f g h | | | | | | | | q |   d:sbb_r8_rm    %010_11110101_010_010_00
-                call    #\i_getmodr8            ' | | | | | | | | i j k l m n o p | r   e:and_r8_rm   %0110_11101111_010_010_00
-                mov     i_data1, i_data         ' a b c d e f g h i j k l m n o p q r   f: or_r8_rm   %0110_11011111_010_010_00
-                ' dst(r)                                                                g:xor_r8_rm   %0110_10111111_010_010_00
-                call    #\i_getmodr8            ' a b c d e f g h | | | | | | | | q |   h:cmp_r8_rm    %011_11110110_010_010_00
-                call    #\i_readopb             ' | | | | | | | | i j k l m n o p | r
-i_mathop8_op
-                mov     i_data0, i_data         ' a b c d e f g h i j k l m n o p q r   i:add_rm_r8    %001_11111010_001_001_00
-                ' operation                                                             j:adc_rm_r8    %001_11111001_001_001_00
-                modc    _clr                wc  ' a | c | | | | h i | k | | | | p | |   k:sub_rm_r8    %001_11110110_001_001_00
-                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   l:sbb_rm_r8    %001_11110101_001_001_00
-                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   m:and_rm_r8   %0101_11101111_001_001_00
-                subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p | |   n: or_rm_r8   %0101_11011111_001_001_00
-                and     i_data, i_data1         ' | | | | e | | | | | | | m | | | | |   o:xor_rm_r8   %0101_10111111_001_001_00
-                or      i_data, i_data1         ' | | | | | f | | | | | | | n | | | |   p:cmp_rm_r8    %011_11110110_001_001_00
+                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o p q r   a:add_r8_rm    %010_11111010_0110_010_00
+                getbyte i_modrm, i_tmpb, #0     ' a b c d e f g h i j k l m n o p q r   b:adc_r8_rm    %010_11111001_0110_010_00
+                ' src(r)                                                                c:sub_r8_rm    %010_11110110_0110_010_00
+                call    #\i_readopb             ' a b c d e f g h | | | | | | | | q |   d:sbb_r8_rm    %010_11110101_0110_010_00
+                call    #\i_getmodr8            ' | | | | | | | | i j k l m n o p | r   e:and_r8_rm   %0110_11101111_0110_010_00
+                mov     i_data1, i_data         ' a b c d e f g h i j k l m n o p q r   f: or_r8_rm   %0110_11011111_0110_010_00
+                ' dst(r)                                                                g:xor_r8_rm   %0110_10111111_0110_010_00
+                call    #\i_getmodr8            ' a b c d e f g h | | | | | | | | q |   h:cmp_r8_rm    %011_11110110_0110_010_00
+                call    #\i_readopb             ' | | | | | | | | i j k l m n o p | |
+                call    #\i_setupmodrm          ' | | | | | | | | | | | | | | | | | r
+i_mathop8_op    mov     i_data0, i_data         ' a b c d e f g h i j k l m n o p q r   i:add_rm_r8    %001_11111010_0101_001_00
+                ' operation                                                             j:adc_rm_r8    %001_11111001_0101_001_00
+                modc    _clr                wc  ' a | c | | | | h i | k | | | | p | |   k:sub_rm_r8    %001_11110110_0101_001_00
+                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   l:sbb_rm_r8    %001_11110101_0101_001_00
+                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   m:and_rm_r8   %0101_11101111_0101_001_00
+                subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p | |   n: or_rm_r8   %0101_11011111_0101_001_00
+                and     i_data, i_data1         ' | | | | e | | | | | | | m | | | | |   o:xor_rm_r8   %0101_10111111_0101_001_00
+                or      i_data, i_data1         ' | | | | | f | | | | | | | n | | | |   p:cmp_rm_r8    %011_11110110_0101_001_00
                 xor     i_data, i_data1         ' | | | | | | g | | | | | | | o | | |
-                mov     i_data, i_data1         ' | | | | | | | | | | | | | | | | q r   q:mov_r8_rm  %01110_01111111_010_010_00
-                ' dst(w)                                                                r:mov_rm_r8  %01101_01111111_001_001_00
+                mov     i_data, i_data1         ' | | | | | | | | | | | | | | | | q r   q:mov_r8_rm  %01110_01111111_0110_010_00
+                ' dst(w)                                                                r:mov_rm_r8  %01101_01111111_0011_001_00
                 call    #\i_setmodr8            ' a b c d e f g | | | | | | | | | q |
                 call    #\i_writebackb          ' | | | | | | | | i j k l m n o | | r
                 jmp     #\@i_flags8             ' a b c d | | | h i j k l | | | p | |
@@ -987,28 +987,27 @@ i_mathop8_op
                 ret                             '                                 q r
 
 i_mathop16
-                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o p q r   a:add_r16_rm   %010_11111010_010_010_00
-                getbyte i_modrm, i_tmpb, #0     ' a b c d e f g h i j k l m n o p q r   b:adc_r16_rm   %010_11111001_010_010_00
-i_mathop16_pre
-                ' src(r)                                                                c:sub_r16_rm   %010_11110110_010_010_00
-                call    #\i_readopw             ' a b c d e f g h | | | | | | | | q |   d:sbb_r16_rm   %010_11110101_010_010_00
-                call    #\i_getmodr16           ' | | | | | | | | i j k l m n o p | r   e:and_r16_rm  %0110_11101111_010_010_00
-                mov     i_data1, i_data         ' a b c d e f g h i j k l m n o p q r   f: or_r16_rm  %0110_11011111_010_010_00
-                ' dst(r)                                                                g:xor_r16_rm  %0110_10111111_010_010_00
-                call    #\i_getmodr16           ' a b c d e f g h | | | | | | | | q |   h:cmp_r16_rm   %011_11110110_010_010_00
+                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o p q r   a:add_r16_rm   %010_11111010_0110_010_00
+                getbyte i_modrm, i_tmpb, #0     ' a b c d e f g h i j k l m n o p q r   b:adc_r16_rm   %010_11111001_0110_010_00
+i_mathop16_pre  ' src(r)                                                                c:sub_r16_rm   %010_11110110_0110_010_00
+                call    #\i_readopw             ' a b c d e f g h | | | | | | | | q |   d:sbb_r16_rm   %010_11110101_0110_010_00
+                call    #\i_getmodr16           ' | | | | | | | | i j k l m n o p | r   e:and_r16_rm  %0110_11101111_0110_010_00
+                mov     i_data1, i_data         ' a b c d e f g h i j k l m n o p q r   f: or_r16_rm  %0110_11011111_0110_010_00
+                ' dst(r)                                                                g:xor_r16_rm  %0110_10111111_0110_010_00
+                call    #\i_getmodr16           ' a b c d e f g h | | | | | | | | q |   h:cmp_r16_rm   %011_11110110_0110_010_00
                 call    #\i_readopw             ' | | | | | | | | i j k l m n o p | r
-i_mathop16_op
-                mov     i_data0, i_data         ' a b c d e f g h i j k l m n o p q r   i:add_rm_r16   %001_11111010_001_001_00
-                ' operation                                                             j:adc_rm_r16   %001_11111001_001_001_00
-                modc    _clr                wc  ' a | c | | | | h i | k | | | | p | |   k:sub_rm_r16   %001_11110110_001_001_00
-                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   l:sbb_rm_r16   %001_11110101_001_001_00
-                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   m:and_rm_r16  %0101_11101111_001_001_00
-                subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p | |   n: or_rm_r16  %0101_11011111_001_001_00
-                and     i_data, i_data1         ' | | | | e | | | | | | | m | | | | |   o:xor_rm_r16  %0101_10111111_001_001_00
-                or      i_data, i_data1         ' | | | | | f | | | | | | | n | | | |   p:cmp_rm_r16   %011_11110110_001_001_00
+                call    #\i_setupmodrm          ' | | | | | | | | | | | | | | | | | r
+i_mathop16_op   mov     i_data0, i_data         ' a b c d e f g h i j k l m n o p q r   i:add_rm_r16   %001_11111010_0101_001_00
+                ' operation                                                             j:adc_rm_r16   %001_11111001_0101_001_00
+                modc    _clr                wc  ' a | c | | | | h i | k | | | | p | |   k:sub_rm_r16   %001_11110110_0101_001_00
+                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   l:sbb_rm_r16   %001_11110101_0101_001_00
+                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   m:and_rm_r16  %0101_11101111_0101_001_00
+                subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p | |   n: or_rm_r16  %0101_11011111_0101_001_00
+                and     i_data, i_data1         ' | | | | e | | | | | | | m | | | | |   o:xor_rm_r16  %0101_10111111_0101_001_00
+                or      i_data, i_data1         ' | | | | | f | | | | | | | n | | | |   p:cmp_rm_r16   %011_11110110_0101_001_00
                 xor     i_data, i_data1         ' | | | | | | g | | | | | | | o | | |
-                mov     i_data, i_data1         ' | | | | | | | | | | | | | | | | q r   q:mov_r16_rm %01110_01111111_010_010_00
-                ' dst(w)                                                                r:mov_rm_r16 %01101_01111111_001_001_00
+                mov     i_data, i_data1         ' | | | | | | | | | | | | | | | | q r   q:mov_r16_rm %01110_01111111_0110_010_00
+                ' dst(w)                                                                r:mov_rm_r16 %01101_01111111_0011_001_00
                 call    #\i_setmodr16           ' a b c d e f g | | | | | | | | | q |
                 call    #\i_writebackw          ' | | | | | | | | i j k l m n o | | r
                 jmp     #\@i_flags16            ' a b c d | | | h i j k l | | | p | |
@@ -1440,69 +1439,69 @@ i8086_optable
 '
 ' instruction           snippet                          skip pattern         encoding
 '----------------------------------------------------------------------------------------------------
-                long    i_mathop8      |     %001_11111010_001_001_00 << 10 ' 00 rm    add [rm], r8
-                long    i_mathop16     |     %001_11111010_001_001_00 << 10 ' 01 rm    add [rm], r16
-                long    i_mathop8      |     %010_11111010_010_010_00 << 10 ' 02 rm    add r8, [rm]
-                long    i_mathop16     |     %010_11111010_010_010_00 << 10 ' 03 rm    add r16, [rm]
+                long    i_mathop8      |    %001_11111010_0101_001_00 << 10 ' 00 rm    add [rm], r8
+                long    i_mathop16     |    %001_11111010_0101_001_00 << 10 ' 01 rm    add [rm], r16
+                long    i_mathop8      |    %010_11111010_0110_010_00 << 10 ' 02 rm    add r8, [rm]
+                long    i_mathop16     |    %010_11111010_0110_010_00 << 10 ' 03 rm    add r16, [rm]
                 long    i_mathop_acc   |        %010_1111010_010_1100 << 10 ' 04 nn    add al, nn
                 long    i_mathop_acc   |      %01101_1111010_001_0000 << 10 ' 05 ll hh add ax, hhll
                 long    i_push_es      |                    %111111_0 << 10 ' 06       push es
                 long    i_pop_r16      |                       %01110 << 10 ' 07       pop es
-                long    i_mathop8      |    %0101_11011111_001_001_00 << 10 ' 08 rm    or [rm], r8
-                long    i_mathop16     |    %0101_11011111_001_001_00 << 10 ' 09 rm    or [rm], r16
-                long    i_mathop8      |    %0110_11011111_010_010_00 << 10 ' 0A rm    or r8, [rm]
-                long    i_mathop16     |    %0110_11011111_010_010_00 << 10 ' 0B rm    or r16, [rm]
+                long    i_mathop8      |   %0101_11011111_0101_001_00 << 10 ' 08 rm    or [rm], r8
+                long    i_mathop16     |   %0101_11011111_0101_001_00 << 10 ' 09 rm    or [rm], r16
+                long    i_mathop8      |   %0110_11011111_0110_010_00 << 10 ' 0A rm    or r8, [rm]
+                long    i_mathop16     |   %0110_11011111_0110_010_00 << 10 ' 0B rm    or r16, [rm]
                 long    i_mathop_acc   |       %0110_1011111_010_1100 << 10 ' 0C nn    or al, nn
                 long    i_mathop_acc   |     %011101_1011111_001_0000 << 10 ' 0D ll hh or ax, hhll
                 long    i_push_cs      |                     %11111_0 << 10 ' 0E       push cs
                 long    i_pop_r16      |                      %011110 << 10 ' 0F       pop cs
 
-                long    i_mathop8      |     %001_11111001_001_001_00 << 10 ' 10 rm    adc [rm], r8
-                long    i_mathop16     |     %001_11111001_001_001_00 << 10 ' 11 rm    adc [rm], r16
-                long    i_mathop8      |     %010_11111001_010_010_00 << 10 ' 12 rm    adc r8, [rm]
-                long    i_mathop16     |     %010_11111001_010_010_00 << 10 ' 13 rm    adc r16, [rm]
+                long    i_mathop8      |    %001_11111001_0101_001_00 << 10 ' 10 rm    adc [rm], r8
+                long    i_mathop16     |    %001_11111001_0101_001_00 << 10 ' 11 rm    adc [rm], r16
+                long    i_mathop8      |    %010_11111001_0110_010_00 << 10 ' 12 rm    adc r8, [rm]
+                long    i_mathop16     |    %010_11111001_0110_010_00 << 10 ' 13 rm    adc r16, [rm]
                 long    i_mathop_acc   |        %010_1111001_010_1100 << 10 ' 14 nn    adc al nn
                 long    i_mathop_acc   |      %01101_1111001_001_0000 << 10 ' 15 ll hh adc ax, hhll
                 long    i_push_ss      |                      %1111_0 << 10 ' 16       push ss
                 long    i_pop_r16      |                     %0111110 << 10 ' 17       pop ss
-                long    i_mathop8      |     %001_11110101_001_001_00 << 10 ' 18 rm    sbb [rm], r8
-                long    i_mathop16     |     %001_11110101_001_001_00 << 10 ' 19 rm    sbb [rm], r16
-                long    i_mathop8      |     %010_11110101_010_010_00 << 10 ' 1A rm    sbb r8, [rm]
-                long    i_mathop16     |     %010_11110101_010_010_00 << 10 ' 1B rm    sbb r16, [rm]
+                long    i_mathop8      |    %001_11110101_0101_001_00 << 10 ' 18 rm    sbb [rm], r8
+                long    i_mathop16     |    %001_11110101_0101_001_00 << 10 ' 19 rm    sbb [rm], r16
+                long    i_mathop8      |    %010_11110101_0110_010_00 << 10 ' 1A rm    sbb r8, [rm]
+                long    i_mathop16     |    %010_11110101_0110_010_00 << 10 ' 1B rm    sbb r16, [rm]
                 long    i_mathop_acc   |        %010_1110101_010_1100 << 10 ' 1C nn    sbb al, nn
                 long    i_mathop_acc   |      %01101_1110101_001_0000 << 10 ' 1D ll hh sbb ax, hhll
                 long    i_push_ds      |                       %111_0 << 10 ' 1E       push ds
                 long    i_pop_r16      |                    %01111110 << 10 ' 1F       pop ds
 
-                long    i_mathop8      |    %0101_11101111_001_001_00 << 10 ' 20 rm    and [rm], r8
-                long    i_mathop16     |    %0101_11101111_001_001_00 << 10 ' 21 rm    and [rm], r16
-                long    i_mathop8      |    %0110_11101111_010_010_00 << 10 ' 22 rm    and r8, [rm]
-                long    i_mathop16     |    %0110_11101111_010_010_00 << 10 ' 23 rm    and r16, [rm]
+                long    i_mathop8      |   %0101_11101111_0101_001_00 << 10 ' 20 rm    and [rm], r8
+                long    i_mathop16     |   %0101_11101111_0101_001_00 << 10 ' 21 rm    and [rm], r16
+                long    i_mathop8      |   %0110_11101111_0110_010_00 << 10 ' 22 rm    and r8, [rm]
+                long    i_mathop16     |   %0110_11101111_0110_010_00 << 10 ' 23 rm    and r16, [rm]
                 long    i_mathop_acc   |       %0110_1101111_010_1100 << 10 ' 24 nn    and al, nn
                 long    i_mathop_acc   |     %011101_1101111_001_0000 << 10 ' 25 ll hh and ax, hhll
                 long    i_seg_es       |                      %0010__ << 10 ' 26       es:
                 long    i_daas         |                           %0 << 10 ' 27       daa
-                long    i_mathop8      |     %001_11110110_001_001_00 << 10 ' 28 rm    sub [rm], r8
-                long    i_mathop16     |     %001_11110110_001_001_00 << 10 ' 29 rm    sub [rm], r16
-                long    i_mathop8      |     %010_11110110_010_010_00 << 10 ' 2A rm    sub r8, [rm]
-                long    i_mathop16     |     %010_11110110_010_010_00 << 10 ' 2B rm    sub r16, [rm]
+                long    i_mathop8      |    %001_11110110_0101_001_00 << 10 ' 28 rm    sub [rm], r8
+                long    i_mathop16     |    %001_11110110_0101_001_00 << 10 ' 29 rm    sub [rm], r16
+                long    i_mathop8      |    %010_11110110_0110_010_00 << 10 ' 2A rm    sub r8, [rm]
+                long    i_mathop16     |    %010_11110110_0110_010_00 << 10 ' 2B rm    sub r16, [rm]
                 long    i_mathop_acc   |        %010_1110110_010_1100 << 10 ' 2C nn    sub al, nn
                 long    i_mathop_acc   |      %01101_1110110_001_0000 << 10 ' 2D ll hh sub ax, hhll
                 long    i_seg_cs       |                      %001110 << 10 ' 2E       cs:
                 long    i_daas         |                           %0 << 10 ' 2F       das
 
-                long    i_mathop8      |    %0101_10111111_001_001_00 << 10 ' 30 rm    xor [rm], r8
-                long    i_mathop16     |    %0101_10111111_001_001_00 << 10 ' 31 rm    xor [rm], r16
-                long    i_mathop8      |    %0110_10111111_010_010_00 << 10 ' 32 rm    xor r8, [rm]
-                long    i_mathop16     |    %0110_10111111_010_010_00 << 10 ' 33 rm    xor r16, [rm]
+                long    i_mathop8      |   %0101_10111111_0101_001_00 << 10 ' 30 rm    xor [rm], r8
+                long    i_mathop16     |   %0101_10111111_0101_001_00 << 10 ' 31 rm    xor [rm], r16
+                long    i_mathop8      |   %0110_10111111_0110_010_00 << 10 ' 32 rm    xor r8, [rm]
+                long    i_mathop16     |   %0110_10111111_0110_010_00 << 10 ' 33 rm    xor r16, [rm]
                 long    i_mathop_acc   |       %0110_0111111_010_1100 << 10 ' 34 nn    xor al, nn
                 long    i_mathop_acc   |     %011101_0111111_001_0000 << 10 ' 35 ll hh xor ax, hhll
                 long    i_seg_ss       |                      %000___ << 10 ' 36       ss:
                 long    i_aaas         |                           %0 << 10 ' 37       aaa
-                long    i_mathop8      |     %011_11110110_001_001_00 << 10 ' 38 rm    cmp [rm], r8
-                long    i_mathop16     |     %011_11110110_001_001_00 << 10 ' 39 rm    cmp [rm], r16
-                long    i_mathop8      |     %011_11110110_010_010_00 << 10 ' 3A rm    cmp r8, [rm]
-                long    i_mathop16     |     %011_11110110_010_010_00 << 10 ' 3B rm    cmp r16, [rm]
+                long    i_mathop8      |    %011_11110110_0101_001_00 << 10 ' 38 rm    cmp [rm], r8
+                long    i_mathop16     |    %011_11110110_0101_001_00 << 10 ' 39 rm    cmp [rm], r16
+                long    i_mathop8      |    %011_11110110_0110_010_00 << 10 ' 3A rm    cmp r8, [rm]
+                long    i_mathop16     |    %011_11110110_0110_010_00 << 10 ' 3B rm    cmp r16, [rm]
                 long    i_mathop_acc   |        %011_1110110_010_1100 << 10 ' 3C nn    cmp al, nn
                 long    i_mathop_acc   |      %01111_1110110_001_0000 << 10 ' 3D ll hh cmp ax, hhll
                 long    i_seg_ds       |                      %00110_ << 10 ' 3E       ds:
@@ -1580,14 +1579,14 @@ i8086_optable
                 long    i_math_pre     |         %0011000_01_10000_00 << 10 ' 81 rm ll hh    add/or/adc/sbb/and/sub(xor/cmp [rm16], hhll
                 long    i_math_pre     |           %00000_10_01100_00 << 10 ' 82 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm8], sn
                 long    i_math_pre     |         %0011000_01_01100_00 << 10 ' 83 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm16], sn
-                long    i_mathop8      |    %0111_11101111_010_010_00 << 10 ' 84 rm          test r8, [mm]
-                long    i_mathop16     |    %0111_11101111_010_010_00 << 10 ' 85 rm          test r16, [mm]
+                long    i_mathop8      |   %0111_11101111_0110_010_00 << 10 ' 84 rm          test r8, [mm]
+                long    i_mathop16     |   %0111_11101111_0110_010_00 << 10 ' 85 rm          test r16, [mm]
                 long    i_xchg_rmod    |            %00100_010_010_00 << 10 ' 86 rm          xchg r8, [mm]
                 long    i_xchg_rmod    |           %010010_001_001_00 << 10 ' 87 rm          xchg r16, [mm]
-                long    i_mathop8      |   %01101_01111111_001_001_00 << 10 ' 88 rm          mov [rm], r8
-                long    i_mathop16     |   %01101_01111111_001_001_00 << 10 ' 89 rm          add [rm], r16
-                long    i_mathop8      |   %01110_01111111_010_010_00 << 10 ' 8A rm          mov r8, [rm]
-                long    i_mathop16     |   %01110_01111111_010_010_00 << 10 ' 8B rm          add r16, [rm]
+                long    i_mathop8      |  %01101_01111111_0011_001_00 << 10 ' 88 rm          mov [rm], r8
+                long    i_mathop16     |  %01101_01111111_0011_001_00 << 10 ' 89 rm          mov [rm], r16
+                long    i_mathop8      |  %01110_01111111_0110_010_00 << 10 ' 8A rm          mov r8, [rm]
+                long    i_mathop16     |  %01110_01111111_0110_010_00 << 10 ' 8B rm          mov r16, [rm]
                 long    i_mov_sreg     |               %000_111_00000 << 10 ' 8C mm          mov [rm], sreg
                 long    i_lea          |                           %0 << 10 ' 8D mm          lea r16, ofs
                 long    i_mov_sreg     |                   %000_00000 << 10 ' 8E mm          mov sregs, [rm]
