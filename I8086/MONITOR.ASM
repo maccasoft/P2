@@ -12,11 +12,15 @@ TDRE:   EQU     02h             ;UART transmitter ready bit
 
 BUFLEN: EQU     80              ;Maximum length of line input buffer
 BPMAX:  EQU     10              ;Maximum number of breakpoints
+BPLEN:  EQU     BPMAX+BPMAX     ;Length of breakpoint table
 REGTABLEN:EQU   14              ;Number of registers
+;SEGDIF: EQU     800H            ;-0FF800H (ROM address)
 PROMPT: EQU     ">"
 CAN:    EQU     "@"
 
                 section .bss
+
+        RESB    100H
 
 ; RAM area
 
@@ -30,21 +34,21 @@ STACK:
 
 ;Register save area
 
-AXSAVE: RESW    2
-BXSAVE: RESW    2
-CXSAVE: RESW    2
-DXSAVE: RESW    2
-SPSAVE: RESW    2
-BPSAVE: RESW    2
-SISAVE: RESW    2
-DISAVE: RESW    2
-DSSAVE: RESW    2
-ESSAVE: RESW    2
+AXSAVE: RESW    1
+BXSAVE: RESW    1
+CXSAVE: RESW    1
+DXSAVE: RESW    1
+SPSAVE: RESW    1
+BPSAVE: RESW    1
+SISAVE: RESW    1
+DISAVE: RESW    1
+DSSAVE: RESW    1
+ESSAVE: RESW    1
 RSTACK:         ;Stack set here so registers can be saved by pushing
-SSSAVE: RESW    2
-CSSAVE: RESW    2
-IPSAVE: RESW    2
-FSAVE:  RESW    2
+SSSAVE: RESW    1
+CSSAVE: RESW    1
+IPSAVE: RESW    1
+FSAVE:  RESW    1
 
                 section .text
 
@@ -81,8 +85,8 @@ COMMAND:
         MOV     DS,AX
         MOV     ES,AX
         MOV     SP,STACK
-        ;MOV     [64H],INT       ;Set UART interrupt vector
-        ;MOV     [66H],CS
+        MOV     WORD [64H],INT  ;Set UART interrupt vector
+        MOV     WORD [66H],CS
         MOV     AL,PROMPT
         CALL    OUT
         CALL    INBUF           ;Get command line
@@ -283,7 +287,7 @@ COMTAB:
         DW      DUMP            ;D
         DW      ENTER           ;E
         DW      FILL            ;F
-        DW      PERR ;GO              ;G
+        DW      GO              ;G
         DW      PERR            ;H
         DW      INPUT           ;I
         DW      PERR            ;J
@@ -296,7 +300,7 @@ COMTAB:
         DW      PERR            ;Q
         DW      REG             ;R
         DW      SEARCH          ;S
-        DW      PERR ;TRACE           ;T
+        DW      TRACE           ;T
 
 ;Given 20-bit address in AH:DX, breaks it down to a segment
 ;number in AX and a displacement in DX. Displacement is 
@@ -968,6 +972,136 @@ NEXTFLG:
         LOOP    DFLAGS
         RET
 
+;Trace 1 instruction or the number of instruction specified
+;by the parameter using 8086 trace mode. Registers are all
+;set according to values in save area
+
+TRACE:
+        CALL    SCANP
+        CALL    HEXIN
+        MOV     DX,1
+        JC      STOCNT
+        MOV     CX,4
+        CALL    GETHEX
+STOCNT:
+        MOV     [TCOUNT],DX
+        CALL    GETEOL
+STEP:
+        MOV     WORD [BRKCNT],0
+        OR      BYTE [FSAVE+1],1
+EXIT:
+        MOV     WORD [12],BREAKFIX
+        MOV     [14],CS
+        MOV     WORD [4],REENTER
+        MOV     [6],CS
+        CLI
+        MOV     WORD [64H],REENTER
+        MOV     [66H],CS
+        MOV     SP,STACK
+        POP     AX
+        POP     BX
+        POP     CX
+        POP     DX
+        POP     BP
+        POP     BP
+        POP     SI
+        POP     DI
+        POP     ES
+        POP     ES
+        POP     SS
+        MOV     SP,[SPSAVE]
+        PUSH    WORD [FSAVE]
+        PUSH    WORD [CSSAVE]
+        PUSH    WORD [IPSAVE]
+        MOV     DS,[DSSAVE]
+        IRET
+STEP1:  JMP     STEP
+
+;Re-entry point from breakpoint. Need to decrement instruction
+;pointer so it points to location where breakpoint actually
+;occured.
+
+BREAKFIX:
+        XCHG    SP,BP
+        DEC     WORD [BP]
+        XCHG    SP,BP
+
+;Re-entry point from trace mode or interrupt during
+;execution. All registers are saved so they can be
+;displayed or modified.
+
+REENTER:
+        ;SEG     CS
+        ;MOV     [SPSAVE-SEGDIF],SP
+        ;SEG     CS
+        ;MOV     [SSSAVE-SEGDIF],SS
+
+        PUSH    AX
+        PUSH    DS
+        XOR     AX,AX
+        MOV     DS,AX
+        MOV     [SPSAVE],SP
+        MOV     [SSSAVE],SS
+        POP     DS
+        POP     AX
+
+        XOR     SP,SP
+        MOV     SS,SP
+        MOV     SP,RSTACK
+        PUSH    ES
+        PUSH    DS
+        PUSH    DI
+        PUSH    SI
+        PUSH    BP
+        DEC     SP
+        DEC     SP
+        PUSH    DX
+        PUSH    CX
+        PUSH    BX
+        PUSH    AX
+        PUSH    SS
+        POP     DS
+        MOV     SP,[SPSAVE]
+        MOV     SS,[SSSAVE]
+
+        ADD     SP,4
+
+        POP     WORD [IPSAVE]
+        POP     WORD [CSSAVE]
+        POP     AX
+        AND     AH,0FEH
+        MOV     [FSAVE],AX
+        MOV     [SPSAVE],SP
+        PUSH    DS
+        POP     ES
+        PUSH    DS
+        POP     SS
+        MOV     SP,STACK
+        MOV     WORD [64H],INT
+        ;MOV     AL,20H
+        ;OUT     BASE+2.AL
+        STI
+        CLD
+        CALL    CRLF
+        CALL    DISPREG
+        DEC     WORD [TCOUNT]
+        JNZ     STEP1
+ENDGO:
+        MOV     SI,BPTAB
+        MOV     CX,[BRKCNT]
+        JCXZ    COMJMP
+CLEARBP:
+        MOV     DX,[SI+BPLEN]
+        LODSW
+        PUSH    AX
+        CALL    GETSEG
+        MOV     ES,AX
+        MOV     DI,DX
+        POP     AX
+        STOSB
+        LOOP    CLEARBP
+COMJMP: JMP     COMMAND
+
 ;Input from the specified port and display result
 
 INPUT:
@@ -989,6 +1123,76 @@ OUTPUT:
         POP     DX              ;Port in DX
         OUT     DX,AL           ;Variable port output
         RET
+
+;Jump to program, setting up registers according to the
+;save area. Up to 10 breakpoint addresses may be specified.
+
+GO:
+        MOV     BX,LINEBUF
+        XOR     SI,SI
+GO1:
+        CALL    SCANP
+        JZ      EXEC
+        MOV     CX,5
+        CALL    GETHEX
+        MOV     [BX],DX
+        MOV     [BX-BPLEN+1],AH
+        INC     BX
+        INC     BX
+        INC     SI
+        CMP     SI,BPMAX+1
+        JNZ     GO1
+        MOV     AX,5000H+"B"    ;BP ERROR
+        JMP     ERR
+EXEC:
+        MOV     [BRKCNT],SI
+        CALL    GETEOL
+        MOV     CX,SI
+        JCXZ    NOBP
+        MOV     SI,BPTAB
+SETBP:
+        MOV     DX,[SI+BPLEN]
+        LODSW
+        CALL    GETSEG
+        MOV     DS,AX
+        MOV     DI,DX
+        MOV     AL,[DI]
+        MOV     BYTE [DI],0CCH
+        PUSH    ES
+        POP     DS
+        MOV     [SI-2],AL
+        LOOP    SETBP
+NOBP:
+        MOV     WORD [TCOUNT],1
+        JMP     EXIT
+
+;Console input interrupt handler. Used to interrupt commands
+;or programs under execution (if they have interrupts
+;enabled). Control-S causes a loop which waits for any other
+;character to be typed. Control-C causes abort to command
+;mode. All other characters are ignored.
+
+INT:
+        PUSH    AX              ;Don't destroy accumulator
+;Output End-of-Interrupt commands to slave 8259A. This
+;wouldn't be necessary if Automatic End of Interrupt mode
+;worked like it was supposed to!
+        MOV     AL,20H
+        OUT     BASE+2,AL
+        IN      AL,DATA         ;Get interrupting character
+        AND     AL,7FH          ;ASCII has only 7 bits
+        CMP     AL,"S"-"@"      ;Check for Control-S
+        JNZ     NOSTOP
+        CALL    IN              ;Wait for continue character
+NOSTOP:
+        CMP     AL,"C"-"@"      ;Check for Control-C
+        JZ      BREAK
+;Just ignore interrupt - restore AX and return
+        POP     AX
+        IRET
+BREAK:
+        CALL    CRLF
+        JMP     COMMAND
 
 REGTAB:
         DB      "AXBXCXDXSPBPSIDIDSESSSCSIPPC"
