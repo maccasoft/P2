@@ -44,6 +44,10 @@ i_nextop
                 mov     i_cycles, #0
                 mov     i_override, #0
 
+                testb   i_flags, #I_TF_BIT      wz
+        if_x1   mov     i_temp0, #1
+        if_x1   jmp     #\i_trap
+
 i_next
                 call    #\i_readop
                 push    #i_nextop
@@ -144,7 +148,8 @@ i_ret                                           '
                 setword i_flags, i_data, #0     ' | | | | e
 
                 add     i_sp, i_data0           ' | b | d |
-        _ret_   getword i_sp, i_sp, #0          ' a b c d e
+                getword i_sp, i_sp, #0          ' a b c d e
+                jmp     #\i_next
 
 i_jmp_d8
                 call    #\i_readcodeb               ' a b c d e f g h i j k l m n o p q  a=jmp
@@ -1076,7 +1081,7 @@ i_pop_r16
         _ret_   getword i_ds, i_data, #0        '           f
 
 i_pop_rmod
-                call    #\i_readopb
+                call    #\i_readcodeb
                 mov     i_modrm, i_tmpb
                 call    #\i_pop
                 jmp     #\i_writeopw
@@ -1299,7 +1304,7 @@ i_into
 i_int3          mov     i_tmpb, #3
 i_int           call    #\i_readcodeb
                 mov     i_temp0, i_tmpb
-                getword i_data, i_flags, #0
+i_trap          getword i_data, i_flags, #0
                 call    #\i_push
                 getword i_data, i_cs, #0
                 call    #\i_push
@@ -1312,7 +1317,8 @@ i_int           call    #\i_readcodeb
                 call    #\i_readw
                 getword i_ip, i_data, #0
                 call    #\i_readw
-        _ret_   getword i_cs, i_data, #0
+                getword i_cs, i_data, #0
+                jmp     #\i_nextop
 
 i_hlt
 '        _ret_   decmod  i_ip, i_ffffh
