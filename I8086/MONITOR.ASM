@@ -2,7 +2,7 @@
 ;   by Tim Paterson
 ; This software is not copyrighted.
 
-                CPU     8086
+        CPU     8086
 
 BASE:   EQU     0F0H            ;CPU Support base port address
 STAT:   EQU     BASE+7          ;UART status port
@@ -18,7 +18,7 @@ REGTABLEN:EQU   14              ;Number of registers
 PROMPT: EQU     ">"
 CAN:    EQU     "@"
 
-                section .bss
+        SECTION .bss
 
         RESB    100H
 
@@ -50,7 +50,7 @@ CSSAVE: RESW    1
 IPSAVE: RESW    1
 FSAVE:  RESW    1
 
-                section .text
+        SECTION .text
 
 RESET:
 

@@ -866,9 +866,7 @@ i_div8
     if_c_ne_z   neg     i_temp0                     ' | b
     if_c_ne_z   neg     i_temp1                     ' | b
                 setbyte i_ax, i_temp0, #0           ' a b
-                setbyte i_ax, i_temp1, #1           ' a b
-
-                ret
+        _ret_   setbyte i_ax, i_temp1, #1           ' a b
 
 i_div16
                 ' src
@@ -889,9 +887,7 @@ i_div16
     if_c_ne_z   neg     i_temp0                     ' | b
     if_c_ne_z   neg     i_temp1                     ' | b
                 getword i_ax, i_temp0, #0           ' a b
-                getword i_dx, i_temp1, #0           ' a b
-
-                ret
+        _ret_   getword i_dx, i_temp1, #0           ' a b
 
 i_mov_imm
                 call    #\i_readcodeb           ' a b   a:mov_r8_nn  %00_1100
@@ -1047,7 +1043,7 @@ i_fe_pre
                 cmp     i_temp0, #$08       wz
         if_z    sub     i_data, i_data1
 
-                call    #\i_writebackb
+                jmp     #\i_writebackb
 
 i_push_es       getword i_data, i_es, #0        '     c         a=push r16
 i_push_cs       getword i_data, i_cs, #0        '     | d       b=pushf
@@ -1067,8 +1063,7 @@ i_push          decmod  i_sp, i_ffffh
                 shl     i_ea, #4
                 add     i_ea, i_sp
                 getbyte i_tmpb, i_data, #0
-                call    #\i_writememb
-                ret
+                jmp     #\i_writememb
 
 i_pop_r16
                 call    #\i_pop                 ' a b c d e f   a:pop r16      %00_0
@@ -1322,10 +1317,6 @@ i_trap          getword i_data, i_flags, #0
 
 i_hlt
 '        _ret_   decmod  i_ip, i_ffffh
-                debug(uhex_word(i_ax,i_bx,i_cx,i_dx))
-                debug(uhex_word(i_si,i_di,i_bp,i_sp))
-                debug(uhex_word(i_es,i_cs,i_ss,i_ds))
-                debug(uhex_word(i_ip),ubin_word(i_flags))
                 cogid   pa
                 cogstop pa
 
@@ -1348,14 +1339,12 @@ i_readmemb
                 mov     pa, i_ea
                 add     pa, i_rambase
                 rdbyte  i_tmpb, pa
-                'debug("RAM  (R) : ", uhex_long(i_ea,pa),uhex_byte(i_tmpb),dly(#10))
                 ret     wcz
 .rom
                 mov     pa, i_ea
                 and     pa, i_ffffh
                 add     pa, i_rombase
                 rdbyte  i_tmpb, pa
-                'debug("ROM  (R) : ", uhex_long(i_ea,pa),uhex_byte(i_tmpb),dly(#10))
                 ret     wcz
 
 i_writememb
@@ -1372,7 +1361,6 @@ i_writememb
                 mov     pa, i_ea
                 add     pa, i_rambase
                 wrbyte  i_tmpb, pa
-                'debug("RAM  (W) : ", uhex_long(i_ea,pa),uhex_byte(i_tmpb),dly(#10))
                 ret     wcz
 
 i_readiob
@@ -1764,11 +1752,9 @@ acia_data_rd
                 rdpin   i_tmpb, #ACIA_RX
                 shr     i_tmpb, #24
                 bitl    acia_ctl_reg, #7 + 16
-                'debug("I/O  (R) : ", uhex_long(i_ea),uhex_byte(i_tmpb),dly(#200))
                 ret     wcz
 
 acia_data_wr
-                'debug("I/O  (W) : ", uhex_long(i_ea),uhex_byte(i_tmpb),dly(#200))
                 and     i_tmpb, #$7F
                 wypin   i_tmpb, #ACIA_TX
                 ret     wcz
@@ -1779,11 +1765,9 @@ acia_ctl_rd
                 bitc    i_tmpb, #0
                 testp   #ACIA_TX    wc
                 bitc    i_tmpb, #1
-                'debug("I/O  (R) : ", uhex_long(i_ea),uhex_byte(i_tmpb),dly(#200))
                 ret     wcz
 
 acia_ctl_wr
-                'debug("I/O  (W) : ", uhex_long(i_ea),uhex_byte(i_tmpb))
                 setbyte acia_ctl_reg, i_tmpb, #0
                 ret     wcz
 
