@@ -76,14 +76,12 @@ i_repne
         if_nz   cmp     i_opcode, #$AE      wz
         if_nz   cmp     i_opcode, #$AF      wz
         if_nz   jmp     #\i_rep_loop
-
+i_repne_loop
 .loop           push    #.ret
                 execf   i_opimpl
-.ret            testb   i_flags, #I_ZF_BIT  wc
-                sub     i_rep_cnt, #1       wz
- if_nc_and_nz   jmp     #.loop
-                getword i_cx, i_rep_cnt, #0
-                ret
+.ret            testb   i_flags, #I_ZF_BIT  wz
+        if_x0   djnz    i_rep_cnt, #.loop
+        _ret_   getword i_cx, i_rep_cnt, #0
 
 i_repe
                 call    #\i_readop
@@ -94,22 +92,18 @@ i_repe
         if_nz   cmp     i_opcode, #$AE      wz
         if_nz   cmp     i_opcode, #$AF      wz
         if_nz   jmp     #\i_rep_loop
-
+i_repe_loop
 .loop           push    #.ret
                 execf   i_opimpl
-.ret            testb   i_flags, #I_ZF_BIT  wc
-                sub     i_rep_cnt, #1       wz
-  if_c_and_nz   jmp     #.loop
-                getword i_cx, i_rep_cnt, #0
-                ret
+.ret            testb   i_flags, #I_ZF_BIT  wz
+        if_x1   djnz    i_rep_cnt, #.loop
+        _ret_   getword i_cx, i_rep_cnt, #0
 
 i_rep_loop
 .loop           push    #.ret
                 execf   i_opimpl
-.ret            sub     i_rep_cnt, #1       wz
-        if_nz   jmp     #.loop
-                getword i_cx, i_rep_cnt, #0
-                ret
+.ret            djnz    i_rep_cnt, #.loop
+        _ret_   getword i_cx, i_rep_cnt, #0
 
 i_branch_rmod
                 call    #\i_setupea             '         e f g h   e:jmp_ip    %01_1_1111_11_11_11000
