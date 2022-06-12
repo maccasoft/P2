@@ -750,7 +750,7 @@ i_ff_pre_tbl
           {100} long    i_branch_rmod   | %01_1_1111_11_11_11000 << 10 ' JMP
           {101} long    i_branch_rmod   | %00_1_1111_11_11_00000 << 10 ' JMP_FAR
           {110} long    i_ff_impl       | %0_10 << 10 ' PUSH
-          {111} long    i_mathop16_pre  | %011_11110110_010_010 << 10 ' CMP
+          {111} long    i_ff_impl       | %0_10 << 10 ' PUSH
 
 i_f6f7_mathb
                 'dst(r)
@@ -1166,7 +1166,9 @@ i_xlatb
                 getbyte i_temp0, i_ax, #0
                 add     i_temp0, i_bx
                 getword i_temp0, i_temp0, #0
-                getword i_ea, i_ds, #0
+                cmp     i_override, #0      wz
+        if_nz   getword i_ea, i_override, #0
+        if_z    getword i_ea, i_ds, #0
                 shl     i_ea, #4
                 add     i_ea, i_temp0
                 call    #\i_readmemb
@@ -1542,7 +1544,7 @@ i8086_optable
                 long    i_mov_sreg     |                    %000_0000 << 10 ' 8E mm          mov sregs, [rm]
                 long    i_pop_rmod     |                           %0 << 10 ' 8F mm          pop [rm]
 
-                long    i_nop          |                           %0 << 10 ' 90             nop
+                long    i_xchg         |                           %0 << 10 ' 90             xchg ax, ax
                 long    i_xchg         |                           %0 << 10 ' 91             xchg ax, cx
                 long    i_xchg         |                           %0 << 10 ' 92             xchg ax, dx
                 long    i_xchg         |                           %0 << 10 ' 93             xchg ax, bx
