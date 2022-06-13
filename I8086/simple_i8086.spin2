@@ -924,20 +924,20 @@ i_mov_rmod_imm
 
 i_mov_acc_offs
                 call    #\i_readimmw            ' a b c d   a:mov_al_disp %0_1111_1100_00000_0
-                                                '           b_mov_ax_disp %0_1111_0000_00000_0
+                                                '           b_mov_ax_disp %0_1111_0011_00000_0
                 cmp     i_override, #0      wz  ' a b c d   c:mov_disp_al %0_1100_1111_00000_0
-        if_nz   getword i_ea, i_override, #0    ' a b c d   d:mov_disp_ax %0_0000_1111_00000_0
+        if_nz   getword i_ea, i_override, #0    ' a b c d   d:mov_disp_ax %0_0011_1111_00000_0
         if_z    getword i_ea, i_ds, #0          ' a b c d
                 shl     i_ea, #4                ' a b c d
                 add     i_ea, i_data            ' a b c d
 
-                call    #\i_readb               ' a b | |
-                setbyte i_ax, i_data, #0        ' a b | |
+                call    #\i_readb               ' a | | |
+                setbyte i_ax, i_data, #0        ' a | | |
                 call    #\i_readw               ' | b | |
-                setbyte i_ax, i_data, #1        ' | b | |
+                getword i_ax, i_data, #0        ' | b | |
 
-                getbyte i_data, i_ax, #0        ' | | c d
-                call    #\i_writeb              ' | | c d
+                getbyte i_data, i_ax, #0        ' | | c |
+                call    #\i_writeb              ' | | c |
                 getword i_data, i_ax, #0        ' | | | d
                 call    #\i_writew              ' | | | d
 
@@ -1565,9 +1565,9 @@ i8086_optable
                 long    i_lahf         |                           %0 << 10 ' 9F             lahf
 
                 long    i_mov_acc_offs |         %0_1111_1100_00000_0 << 10 ' A0 ol oh       mov al, [DS:ohol]
-                long    i_mov_acc_offs |         %0_1111_0000_00000_0 << 10 ' A1 ol oh       mov ax, [DS:ohol]
+                long    i_mov_acc_offs |         %0_1111_0011_00000_0 << 10 ' A1 ol oh       mov ax, [DS:ohol]
                 long    i_mov_acc_offs |         %0_1100_1111_00000_0 << 10 ' A2 ol oh       mov [DS:ohol], al
-                long    i_mov_acc_offs |         %0_0000_1111_00000_0 << 10 ' A3 ol oh       mov [DS:ohol], ax
+                long    i_mov_acc_offs |         %0_0011_1111_00000_0 << 10 ' A3 ol oh       mov [DS:ohol], ax
                 long    i_movsb        |                           %0 << 10 ' A4             movsb
                 long    i_movsw        |                           %0 << 10 ' A5             movsw
                 long    i_cmps         |    %0_0010010_0_10000_010000 << 10 ' A6             cmpsb
