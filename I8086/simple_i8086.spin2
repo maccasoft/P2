@@ -204,30 +204,6 @@ i_rep_opimpl
                 execf   i_opimpl
 .ret    _ret_   djnz    i_rep_cnt, #.loop
 
-i_rotshift_impl
-                testb   i_flags, #I_CF_BIT  wc  ' | | c d | | |   a=rol_rm8
-                                                '                 b=ror_rm8
-                testb   i_data, #0          wz  ' | b | d | | g   c=rolc_rm8
-                testb   i_data, #7          wz  ' a | c | | | |   d=rorc_rm8
-                testb   i_data, #15         wz  ' | | | | | | |   e=shl_rm8
-                bitz    i_flags, #I_CF_BIT      ' a b c d | | g   f=shr_rm8
-                                                '                 g=shra_rm8
-                signx   i_data, #7              ' | | | | | | g
-                signx   i_data, #15             ' | | | | | | |
-
-                shl     i_data, #1              ' a | c | e | |
-                shr     i_data, #1              ' | b | d | f g
-
-                bitz    i_data, #0              ' a | | | | | |
-                bitz    i_data, #7              ' | b | | | | |
-                bitz    i_data, #15             ' | | | | | | |
-
-                bitc    i_data, #0              ' | | c | | | |
-                bitc    i_data, #7              ' | | | d | | |
-                bitc    i_data, #15             ' | | | | | | |
-
-                ret                             ' a b c d e f g
-
 i_math_pre
                 call    #\i_setupmodrm          ' a b c d   a:80pre   %00000_11100_10_0
                 ' dst(r)                        ' a b c d   b:81pre %0011000_10000_01_0
@@ -647,6 +623,31 @@ i_prefixed_op
                 rdlut   i_opimpl, pa                ' a b c
                 execf   i_opimpl
 
+i_int3          mov     i_tmpb, #3
+i_int           call    #\i_readcodeb
+                mov     i_temp0, i_tmpb
+i_trap          getword i_data, i_flags, #0
+                call    #\i_push
+                getword i_data, i_cs, #0
+                call    #\i_push
+                getword i_data, i_ip, #0
+                call    #\i_push
+                bitl    i_flags, #I_TF_BIT
+                bitl    i_flags, #I_IF_BIT
+                mov     i_ea, i_temp0
+                shl     i_ea, #2
+                call    #\i_readw
+                getword i_ip, i_data, #0
+                call    #\i_readw
+                getword i_cs, i_data, #0
+                jmp     #\i_nextop
+
+i_into
+                testb   i_flags, #I_OF_BIT  wz
+        if_x1   mov     i_temp0, #4
+        if_x1   jmp     #\i_trap
+                ret
+
 i_esc_op
                 jmp     #\i_readcodeb
 
@@ -722,6 +723,30 @@ i_rotshift16_tbl
           {110} long    i_nop           | (%0 << 10)
           {111} long    i_rotshift_impl | (%0_111_111_01_10_0110_1 << 10) ' SHRA
 
+i_rotshift_impl
+                testb   i_flags, #I_CF_BIT  wc  ' | | c d | | |   a=rol_rm8
+                                                '                 b=ror_rm8
+                testb   i_data, #0          wz  ' | b | d | | g   c=rolc_rm8
+                testb   i_data, #7          wz  ' a | c | | | |   d=rorc_rm8
+                testb   i_data, #15         wz  ' | | | | | | |   e=shl_rm8
+                bitz    i_flags, #I_CF_BIT      ' a b c d | | g   f=shr_rm8
+                                                '                 g=shra_rm8
+                signx   i_data, #7              ' | | | | | | g
+                signx   i_data, #15             ' | | | | | | |
+
+                shl     i_data, #1              ' a | c | e | |
+                shr     i_data, #1              ' | b | d | f g
+
+                bitz    i_data, #0              ' a | | | | | |
+                bitz    i_data, #7              ' | b | | | | |
+                bitz    i_data, #15             ' | | | | | | |
+
+                bitc    i_data, #0              ' | | c | | | |
+                bitc    i_data, #7              ' | | | d | | |
+                bitc    i_data, #15             ' | | | | | | |
+
+                ret                             ' a b c d e f g
+
 i_f6_pre_tbl
           {000} long    i_f6f7_mathb    |      %01_110_1100_010 << 10 ' TEST
           {001} long    i_f6f7_mathb    |      %01_110_1100_010 << 10 ' TEST (alias)
@@ -729,8 +754,8 @@ i_f6_pre_tbl
           {011} long    i_f6f7_mathb    |      %00_011_1111_010 << 10 ' NEG
           {100} long    i_mul8          | %00100_100_1110_11010 << 10 ' MUL
           {101} long    i_mul8          | %00100_100_1100_10010 << 10 ' IMUL
-          {110} long    i_div8          |   %0011000_1110_11100 << 10 ' DIV
-          {111} long    i_div8          |   %0000000_0000_00000 << 10 ' IDIV
+          {110} long    i_div8          | %0011000_1110_1110000 << 10 ' DIV
+          {111} long    i_div8          | %0000000_0000_0000000 << 10 ' IDIV
 
 i_f7_pre_tbl
           {000} long    i_f6f7_mathw    |     %0111_110_0000_00 << 10 ' TEST
@@ -739,8 +764,8 @@ i_f7_pre_tbl
           {011} long    i_f6f7_mathw    |     %0011_011_1111_00 << 10 ' NEG
           {100} long    i_mul16         | %00010_000_1011_1100_ << 10 ' MUL
           {101} long    i_mul16         | %00010_000_0011_0100_ << 10 ' IMUL
-          {110} long    i_div16         |   %0011000_1110_11100 << 10 ' DIV
-          {111} long    i_div16         |   %0000000_0000_00000 << 10 ' IDIV
+          {110} long    i_div16         | %0011000_1110_1110000 << 10 ' DIV
+          {111} long    i_div16         | %0000000_0000_0000000 << 10 ' IDIV
 
 i_ff_pre_tbl
           {000} long    i_ff_impl       | %000_100_1_00 << 10 ' INC
@@ -832,8 +857,10 @@ i_mul16
 
 i_div8
                 ' src
-                call    #\i_readopb                 ' a b   a:div8  %0011000_1110_11100
-                mov     i_data1, i_data             ' a b   b:div16 %0000000_0000_00000
+                call    #\i_readopb                 ' a b   a:div8  %0011000_1110_1110000
+                mov     i_data1, i_data         wz  ' a b   b:div16 %0000000_0000_0000000
+        if_z    mov     i_temp0, #0                 ' a b
+        if_z    execf   #i_trap                     ' a b
                 signx   i_data1, #7                 ' | b
                 testb   i_data1, #31            wc  ' | b
         if_c    abs     i_data1                     ' | b
@@ -853,8 +880,10 @@ i_div8
 
 i_div16
                 ' src
-                call    #\i_readopw                 ' a b   a:div8  %0011000_1110_11100
-                mov     i_data1, i_data             ' a b   b:div16 %0000000_0000_00000
+                call    #\i_readopw                 ' a b   a:div8  %0011000_1110_1110000
+                mov     i_data1, i_data         wz  ' a b   b:div16 %0000000_0000_0000000
+        if_z    mov     i_temp0, #0                 ' a b
+        if_z    execf   #i_trap                     ' a b
                 signx   i_data1, #15                ' | b
                 testb   i_data1, #31            wc  ' | b
         if_c    abs     i_data1                     ' | b
@@ -1247,31 +1276,6 @@ i_inoutdx                                       '                   c:out [pp], 
 i_nop
                 ret                             ' a b c d e f g h
 
-i_int3          mov     i_tmpb, #3
-i_int           call    #\i_readcodeb
-                mov     i_temp0, i_tmpb
-i_trap          getword i_data, i_flags, #0
-                call    #\i_push
-                getword i_data, i_cs, #0
-                call    #\i_push
-                getword i_data, i_ip, #0
-                call    #\i_push
-                bitl    i_flags, #I_TF_BIT
-                bitl    i_flags, #I_IF_BIT
-                mov     i_ea, i_temp0
-                shl     i_ea, #2
-                call    #\i_readw
-                getword i_ip, i_data, #0
-                call    #\i_readw
-                getword i_cs, i_data, #0
-                jmp     #\i_nextop
-
-i_into
-                testb   i_flags, #I_OF_BIT  wz
-        if_x1   mov     i_temp0, #4
-        if_x1   jmp     #\i_trap
-                ret
-
 i_hlt
         _ret_   decmod  i_ip, i_ffffh
                 'cogid   pa
@@ -1360,7 +1364,6 @@ i_writememb
                 mov     pa, i_ea
                 add     pa, i_rambase
                 wrbyte  i_tmpb, pa
-                debug("ROM  (R) : ", uhex_long(i_ea,pa),uhex_byte(i_tmpb))
                 ret     wcz
 
 i_readiob
