@@ -3088,6 +3088,8 @@ i_rotshift
                 jmp     #\i_flags16                  '     c d
 
 i_rep_opimpl
+                mov     i_data0, i_data
+                mov     i_data1, #0
 .loop           push    #.ret
                 execf   i_opimpl
 .ret    _ret_   djnz    i_rep_cnt, #.loop
@@ -3625,48 +3627,51 @@ DAT             ' 8086 LUT
 i8086_lut
 
 i_rotshift8_tbl
-          {000} long    i_rotshift_impl | (%0_111_110_10_11_0101_1 << 10) ' ROL
-          {001} long    i_rotshift_impl | (%0_111_101_01_11_0110_1 << 10) ' ROR
-          {010} long    i_rotshift_impl | (%0_110_111_10_11_0101_0 << 10) ' ROLC
-          {011} long    i_rotshift_impl | (%0_101_111_01_11_0110_0 << 10) ' RORC
-          {100} long    i_rotshift_impl | (%0_111_111_10_11_1111_1 << 10) ' SHL
-          {101} long    i_rotshift_impl | (%0_111_111_01_11_1111_1 << 10) ' SHR
-          {110} long    i_nop           | (%0 << 10)
-          {111} long    i_rotshift_impl | (%0_111_111_01_10_0110_1 << 10) ' SHRA
+          {000} long    i_rot8        | (%0_111_110_10_11_1_1011_0 << 10) ' ROL
+          {001} long    i_rot8        | (%0_111_101_01_11_1_1101_0 << 10) ' ROR
+          {010} long    i_rot8        | (%0_110_111_10_11_0_1011_0 << 10) ' ROLC
+          {011} long    i_rot8        | (%0_101_111_01_11_0_1101_0 << 10) ' RORC
+          {100} long    i_rot8        | (%0_111_111_10_11_1_1011_0 << 10) ' SHL
+          {101} long    i_rot8        | (%0_111_111_01_11_1_1101_0 << 10) ' SHR
+          {110} long    i_nop         | (%0 << 10)
+          {111} long    i_rot8        | (%0_111_111_01_10_1_1101_0 << 10) ' SHRA
 
 i_rotshift16_tbl
-          {000} long    i_rotshift_impl | (%0_111_110_10_11_0011_1 << 10) ' ROL
-          {001} long    i_rotshift_impl | (%0_111_011_01_11_0110_1 << 10) ' ROR
-          {010} long    i_rotshift_impl | (%0_110_111_10_11_0011_0 << 10) ' ROLC
-          {011} long    i_rotshift_impl | (%0_011_111_01_11_0110_0 << 10) ' RORC
-          {100} long    i_rotshift_impl | (%0_111_111_10_11_1111_1 << 10) ' SHL
-          {101} long    i_rotshift_impl | (%0_111_111_01_11_1111_1 << 10) ' SHR
-          {110} long    i_nop           | (%0 << 10)
-          {111} long    i_rotshift_impl | (%0_111_111_01_10_0110_1 << 10) ' SHRA
+          {000} long    i_rot16       | (%01_111_110_10_11_1_0110 << 10) ' ROL
+          {001} long    i_rot16       | (%01_111_011_01_11_1_1100 << 10) ' ROR
+          {010} long    i_rot16       | (%01_110_111_10_11_0_0110 << 10) ' ROLC
+          {011} long    i_rot16       | (%01_011_111_01_11_0_1100 << 10) ' RORC
+          {100} long    i_rot16       | (%01_111_111_10_11_1_0110 << 10) ' SHL
+          {101} long    i_rot16       | (%01_111_111_01_11_1_1100 << 10) ' SHR
+          {110} long    i_nop         | (%0 << 10)
+          {111} long    i_rot16       | (%01_111_111_01_01_1_1100 << 10) ' SHRA
 
-i_rotshift_impl
-                testb   i_flags, #I_CF_BIT  wc  ' | | c d | | |   a=rol_rm8
-                                                '                 b=ror_rm8
-                testb   i_data, #0          wz  ' | b | d | | g   c=rolc_rm8
-                testb   i_data, #7          wz  ' a | c | | | |   d=rorc_rm8
-                testb   i_data, #15         wz  ' | | | | | | |   e=shl_rm8
-                bitz    i_flags, #I_CF_BIT      ' a b c d | | g   f=shr_rm8
-                                                '                 g=shra_rm8
-                signx   i_data, #7              ' | | | | | | g
-                signx   i_data, #15             ' | | | | | | |
+i_rot8
+                getbyte i_data, i_data, #0      ' a b c d e f g                   a:rol8    %0_111_110_10_11_1_1011_0
+i_rot16                                         '                                 b:ror8    %0_111_101_01_11_1_1101_0
+                getword i_data, i_data, #0      ' | | | | | | | h i j k l m n     c:rolc8   %0_110_111_10_11_0_1011_0
+                testb   i_data, #0          wz  ' | b | d | f g | i | k | m n     d:rorc8   %0_101_111_01_11_0_1101_0
+                testb   i_data, #7          wz  ' a | c | e | | | | | | | | |     e:shl8    %0_111_111_10_11_1_1011_0
+                testb   i_data, #15         wz  ' | | | | | | | h | j | l | |     f:shr8    %0_111_111_01_11_1_1101_0
+                                                '                                 g:shra8   %0_111_111_01_10_1_1101_0
+                testb   i_flags, #I_CF_BIT  wc  ' | | c d | | | | | j k | | |
+                                                '                                 h:rol16  %01_111_110_10_11_1_0110
+                signx   i_data, #7              ' | | | | | | g | | | | | | |     i:ror16  %01_111_011_01_11_1_1100
+                signx   i_data, #15             ' | | | | | | | | | | | | | n     j:rolc16 %01_110_111_10_11_0_0110
+                                                '                                 k:rorc16 %01_011_111_01_11_0_1100
+                shl     i_data, #1              ' a | c | e | | h | j | l | |     l:shl16  %01_111_111_10_11_1_0110
+                shr     i_data, #1              ' | b | d | f g | i | k | m n     m:shr16  %01_111_111_01_11_1_1100
+                                                '                                 n:shra15 %01_111_111_01_01_1_1100
+                bitz    i_data, #0              ' a | | | | | | h | | | | | |
+                bitz    i_data, #7              ' | b | | | | | | | | | | | |
+                bitz    i_data, #15             ' | | | | | | | | i | | | | |
 
-                shl     i_data, #1              ' a | c | e | |
-                shr     i_data, #1              ' | b | d | f g
+                bitc    i_data, #0              ' | | c | | | | | | j | | | |
+                bitc    i_data, #7              ' | | | d | | | | | | | | | |
+                bitc    i_data, #15             ' | | | | | | | | | | k | | |
 
-                bitz    i_data, #0              ' a | | | | | |
-                bitz    i_data, #7              ' | b | | | | |
-                bitz    i_data, #15             ' | | | | | | |
-
-                bitc    i_data, #0              ' | | c | | | |
-                bitc    i_data, #7              ' | | | d | | |
-                bitc    i_data, #15             ' | | | | | | |
-
-                ret                             ' a b c d e f g
+        _ret_   bitz    i_data, #8              ' a b c d e f g | | | | | | |
+        _ret_   bitz    i_data, #16             '               h i j k l m n
 
 i_f6_pre_tbl
           {000} long    i_f6f7_mathb    |      %01_110_1100_010 << 10 ' TEST
