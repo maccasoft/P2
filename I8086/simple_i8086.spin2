@@ -1279,42 +1279,63 @@ i_hlt
         _ret_   decmod  i_ip, i_ffffh
 
 i_flags8
-                testb   i_data, #7          wc
-                testb   i_data1, #7         xorc
-                testb   i_data, #7          wz
-                testb   i_data0, #7         xorz
-                modz    _c_and_nz           wz
-                bitz    i_flags, #I_OF_BIT
                 testb   i_data0, #4         wz
                 testb   i_data1, #4         xorz
                 testb   i_data, #4          xorz
                 bitz    i_flags, #I_AF_BIT
+
                 testb   i_data, #7          wz
                 bitz    i_flags, #I_SF_BIT
                 testb   i_data, #8          wz
                 bitz    i_flags, #I_CF_BIT
                 and     i_data, #$FF        wcz
                 bitz    i_flags, #I_ZF_BIT
-        _ret_   bitnc   i_flags, #I_PF_BIT
+                bitnc   i_flags, #I_PF_BIT
+
+                bitl    i_flags, #I_OF_BIT
+                testb   i_data, #7          wz
+
+                testb   i_data0, #7         wc
+                testb   i_data1, #7         andc
+        if_1x   bitnz   i_flags, #I_OF_BIT
+        if_1x   ret
+                testb   i_data0, #7         wc
+                testb   i_data1, #7         orc
+        if_0x   bitz    i_flags, #I_OF_BIT
+        if_0x   ret
+
+                testb   i_data0, #7         wz
+                testb   i_data, #7          xorz
+        if_x1   testb   i_flags, #I_ZF_BIT  xorz
+        _ret_   bitz    i_flags, #I_OF_BIT
 
 i_flags16
-                testb   i_data, #15         wc
-                testb   i_data1, #15        xorc
-                testb   i_data, #15         wz
-                testb   i_data0, #15        xorz
-                modz    _c_and_nz           wz
-                bitz    i_flags, #I_OF_BIT
                 testb   i_data0, #4         wz
                 testb   i_data1, #4         xorz
                 testb   i_data, #4          xorz
                 bitz    i_flags, #I_AF_BIT
+
                 testb   i_data, #15         wz
                 bitz    i_flags, #I_SF_BIT
                 testb   i_data, #16         wz
                 bitz    i_flags, #I_CF_BIT
                 and     i_data, i_ffffh     wcz
                 bitz    i_flags, #I_ZF_BIT
-        _ret_   bitnc   i_flags, #I_PF_BIT
+                bitnc   i_flags, #I_PF_BIT
+
+                testb   i_data0, #15        wc
+                testb   i_data1, #15        andc
+        if_1x   bitnz   i_flags, #I_OF_BIT
+        if_1x   ret
+                testb   i_data0, #15        wc
+                testb   i_data1, #15        orc
+        if_0x   bitz    i_flags, #I_OF_BIT
+        if_0x   ret
+
+                testb   i_data0, #15        wz
+                testb   i_data, #15         xorz
+        if_x1   testb   i_flags, #I_ZF_BIT  xorz
+        _ret_   bitz    i_flags, #I_OF_BIT
 
 ' --------------------------------------------------------------------
 
