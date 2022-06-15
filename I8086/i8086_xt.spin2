@@ -2929,6 +2929,7 @@ i8086
 i_nextop
                 mov     i_cycles, #0
                 mov     i_override, #0
+                or      i_flags, i_flags_pre
 
                 call    #\system_run
 
@@ -3584,6 +3585,7 @@ i_es            long    $0000
 i_ss            long    $0000
 
 i_flags         long    $0000
+i_flags_pre     long    $F002
 i_ip            long    $FFF0
 
 i_3fffh         long    $3FFF

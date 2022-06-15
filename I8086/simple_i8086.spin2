@@ -43,6 +43,7 @@ i8086
 i_nextop
                 mov     i_cycles, #0
                 mov     i_override, #0
+                or      i_flags, i_flags_pre
 
                 testb   i_flags, #I_TF_BIT      wz
         if_x1   mov     i_temp0, #1
@@ -696,6 +697,7 @@ i_es            long    $0000
 i_ss            long    $0000
 
 i_flags         long    $0000
+i_flags_pre     long    $F002
 i_ip            long    $FFF0
 
 i_ffffh         long    $FFFF
