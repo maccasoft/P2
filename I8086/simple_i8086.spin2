@@ -52,6 +52,10 @@ i_nextop
 i_next
                 call    #\i_readop
                 push    #i_nextop
+                cmp     i_opcode, #$F2      wz
+        if_e    jmp     #\i_repne
+                cmp     i_opcode, #$F3      wz
+        if_e    jmp     #\i_repe
                 execf   i_opimpl
 
 i_readop
@@ -67,44 +71,6 @@ i_seg_es        mov     i_override, i_es        ' | | c     c:es %0010__
 i_seg_ss        mov     i_override, i_ss        ' | | | d   d:ss %000___
                 bith    i_override, #31         ' a b c d
                 jmp     #\i_next                ' a b c d
-
-i_repne
-                call    #\i_readop
-                mov     i_rep_cnt, i_cx     wz
-        if_z    ret
-                cmp     i_opcode, #$A6      wz
-        if_nz   cmp     i_opcode, #$A7      wz
-        if_nz   cmp     i_opcode, #$AE      wz
-        if_nz   cmp     i_opcode, #$AF      wz
-        if_nz   jmp     #\i_rep_loop
-i_repne_loop
-.loop           push    #.ret
-                execf   i_opimpl
-.ret            testb   i_flags, #I_ZF_BIT  wz
-        if_x0   djnz    i_rep_cnt, #.loop
-        _ret_   getword i_cx, i_rep_cnt, #0
-
-i_repe
-                call    #\i_readop
-                mov     i_rep_cnt, i_cx     wz
-        if_z    ret
-                cmp     i_opcode, #$A6      wz
-        if_nz   cmp     i_opcode, #$A7      wz
-        if_nz   cmp     i_opcode, #$AE      wz
-        if_nz   cmp     i_opcode, #$AF      wz
-        if_nz   jmp     #\i_rep_loop
-i_repe_loop
-.loop           push    #.ret
-                execf   i_opimpl
-.ret            testb   i_flags, #I_ZF_BIT  wz
-        if_x1   djnz    i_rep_cnt, #.loop
-        _ret_   getword i_cx, i_rep_cnt, #0
-
-i_rep_loop
-.loop           push    #.ret
-                execf   i_opimpl
-.ret            djnz    i_rep_cnt, #.loop
-        _ret_   getword i_cx, i_rep_cnt, #0
 
 i_branch_rmod
                 call    #\i_setupea             '         e f g h   e:jmp_ip    %01_1_1111_11_11_11000
@@ -561,7 +527,8 @@ i_cmc   _ret_   bitnot  i_flags, #I_CF_BIT
 i_clc   _ret_   bitl    i_flags, #I_CF_BIT
 i_stc   _ret_   bith    i_flags, #I_CF_BIT
 i_cli   _ret_   bitl    i_flags, #I_IF_BIT
-i_sti   _ret_   bith    i_flags, #I_IF_BIT
+i_sti           bith    i_flags, #I_IF_BIT
+                jmp     #\i_next
 i_cld   _ret_   bitl    i_flags, #I_DF_BIT
 i_std   _ret_   bith    i_flags, #I_DF_BIT
 
@@ -979,29 +946,27 @@ i_mov_acc_offs
 
 i_mathop_acc
                 ' src(r)
-                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o p   a:add_al_rm    %010_1111010_010_1100
-                getbyte i_data1, i_tmpb, #0     ' a b c d e f g h i j k l m n o p   b:adc_al_rm    %010_1111001_010_1100
-                call    #\i_readcodeb           ' | | | | | | | | i j k l m n o p   c:sub_al_rm    %010_1110110_010_1100
-                setbyte i_data1, i_tmpb, #1     ' | | | | | | | | i j k l m n o p   d:sbb_al_rm    %010_1110101_010_1100
-                ' dst(r)                        '                                   e:and_al_rm   %0110_1101111_010_1100
-                getbyte i_data, i_ax, #0        ' a b c d e f g h | | | | | | | |   f: or_al_rm   %0110_1011111_010_1100
-                getword i_data, i_ax, #0        ' | | | | | | | | i j k l m n o p   g:xor_al_rm   %0110_0111111_010_1100
-                mov     i_data0, i_data         ' a b c f e f g h i j k l m n o p   h:cmp_al_rm    %011_1110110_010_1100
+                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o p   a:add_al_rm   %010_1111010_010_1100
+                getbyte i_data1, i_tmpb, #0     ' a b c d e f g h i j k l m n o p   b:adc_al_rm   %010_1111001_010_1100
+                call    #\i_readcodeb           ' | | | | | | | | i j k l m n o p   c:sub_al_rm   %010_1110110_010_1100
+                setbyte i_data1, i_tmpb, #1     ' | | | | | | | | i j k l m n o p   d:sbb_al_rm   %010_1110101_010_1100
+                ' dst(r)                        '                                   e:and_al_rm   %010_1101111_010_1100
+                getbyte i_data, i_ax, #0        ' a b c d e f g h | | | | | | | |   f: or_al_rm   %010_1011111_010_1100
+                getword i_data, i_ax, #0        ' | | | | | | | | i j k l m n o p   g:xor_al_rm   %010_0111111_010_1100
+                mov     i_data0, i_data         ' a b c f e f g h i j k l m n o p   h:cmp_al_rm   %011_1110110_010_1100
                 ' operation                     '
-                modc    _clr                wc  ' a | c | | | | h i | k | | | | p   i:add_al_rm  %01101_1111010_001_0000
-                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | |   j:adc_al_rm  %01101_1111001_001_0000
-                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | |   k:sub_al_rm  %01101_1110110_001_0000
-                subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p   l:sbb_al_rm  %01101_1110101_001_0000
-                and     i_data, i_data1         ' | | | | e | | | | | | | m | | |   m:and_al_rm %011101_1101111_001_0000
-                or      i_data, i_data1         ' | | | | | f | | | | | | | n | |   n: or_al_rm %011101_1011111_001_0000
-                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o |   o:xor_al_rm %011101_0111111_001_0000
-                ' dst(w)                        '                                   p:cmp_al_rm  %01111_1110110_001_0000
+                modc    _clr                wc  ' a | c | | | | h i | k | | | | p   i:add_ax_rm  %0101_1111010_001_0000
+                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | |   j:adc_ax_rm  %0101_1111001_001_0000
+                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | |   k:sub_ax_rm  %0101_1110110_001_0000
+                subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p   l:sbb_ax_rm  %0101_1110101_001_0000
+                and     i_data, i_data1         ' | | | | e | | | | | | | m | | |   m:and_ax_rm  %0101_1101111_001_0000
+                or      i_data, i_data1         ' | | | | | f | | | | | | | n | |   n: or_ax_rm  %0101_1011111_001_0000
+                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o |   o:xor_ax_rm  %0101_0111111_001_0000
+                ' dst(w)                        '                                   p:cmp_ax_rm  %0111_1110110_001_0000
                 setbyte i_ax, i_data, #0        ' a b c d e f g | | | | | | | | |
-                getword i_ax, i_data, #0        ' | | | | | | | | i j k l m n o |
-                jmp     #\i_flags8              ' a b c d | | | h | | | | | | | |
-                jmp     #\i_flags8              '         e f g   | | | | | | | |
-                jmp     #\i_flags16             '                 i j k l | | | p
-                jmp     #\i_flags16             '                         m n o
+                getword i_ax, i_data, #0        ' | | | | | | | | i j k l m n o |   q:test_al_rm  %011_1101111_010_1100
+                jmp     #\i_flags8              ' a b c d e f g h | | | | | | | |   p:test_ax_rm %0111_1101111_001_0000
+                jmp     #\i_flags16             '                 i j k l m n o p
 
 i_mathop8
                 call    #\i_setupmodrm          ' a b c d e f g h i j k l m n o p q r   a:add_r8_rm    %010_11111010_110_010_0
@@ -1408,6 +1373,101 @@ i_writeiob
 
 i8086_lut_end
 
+DAT             ' 8086 HUB
+                orgh
+
+i_repne
+                call    #\i_readop
+
+                cmp     i_opcode, #$26      wz
+        if_e    getword i_override, i_es, #0
+                cmp     i_opcode, #$2E      wz
+        if_e    getword i_override, i_cs, #0
+                cmp     i_opcode, #$36      wz
+        if_e    getword i_override, i_ss, #0
+                cmp     i_opcode, #$3E      wz
+        if_e    getword i_override, i_ds, #0
+
+                cmp     i_opcode, #$26      wz
+        if_ne   cmp     i_opcode, #$2E      wz
+        if_ne   cmp     i_opcode, #$36      wz
+        if_ne   cmp     i_opcode, #$3E      wz
+        if_e    bith    i_override, #31
+        if_e    call    #\i_readop
+
+                mov     i_rep_cnt, i_cx     wz
+        if_z    ret
+
+                cmp     i_opcode, #$A4      wz
+        if_ne   cmp     i_opcode, #$A5      wz
+        if_ne   cmp     i_opcode, #$AA      wz
+        if_ne   cmp     i_opcode, #$AB      wz
+        if_ne   cmp     i_opcode, #$AC      wz
+        if_ne   cmp     i_opcode, #$AD      wz
+        if_e    jmp     #i_rep_loop
+
+                cmp     i_opcode, #$A6      wz
+        if_ne   cmp     i_opcode, #$A7      wz
+        if_ne   cmp     i_opcode, #$AE      wz
+        if_ne   cmp     i_opcode, #$AF      wz
+        if_ne   decmod  i_ip, i_ffffh
+        if_ne   ret
+
+.loop           push    ##.ret
+                execf   i_opimpl
+.ret            testb   i_flags, #I_ZF_BIT  wz
+        if_x0   djnz    i_rep_cnt, #.loop
+        _ret_   getword i_cx, i_rep_cnt, #0
+
+i_repe
+                call    #\i_readop
+
+                cmp     i_opcode, #$26      wz
+        if_e    getword i_override, i_es, #0
+                cmp     i_opcode, #$2E      wz
+        if_e    getword i_override, i_cs, #0
+                cmp     i_opcode, #$36      wz
+        if_e    getword i_override, i_ss, #0
+                cmp     i_opcode, #$3E      wz
+        if_e    getword i_override, i_ds, #0
+
+                cmp     i_opcode, #$26      wz
+        if_ne   cmp     i_opcode, #$2E      wz
+        if_ne   cmp     i_opcode, #$36      wz
+        if_ne   cmp     i_opcode, #$3E      wz
+        if_e    bith    i_override, #31
+        if_e    call    #\i_readop
+
+                mov     i_rep_cnt, i_cx     wz
+        if_z    ret
+
+                cmp     i_opcode, #$A4      wz
+        if_ne   cmp     i_opcode, #$A5      wz
+        if_ne   cmp     i_opcode, #$AA      wz
+        if_ne   cmp     i_opcode, #$AB      wz
+        if_ne   cmp     i_opcode, #$AC      wz
+        if_ne   cmp     i_opcode, #$AD      wz
+        if_e    jmp     #i_rep_loop
+
+                cmp     i_opcode, #$A6      wz
+        if_ne   cmp     i_opcode, #$A7      wz
+        if_ne   cmp     i_opcode, #$AE      wz
+        if_ne   cmp     i_opcode, #$AF      wz
+        if_ne   decmod  i_ip, i_ffffh
+        if_ne   ret
+
+.loop           push    ##.ret
+                execf   i_opimpl
+.ret            testb   i_flags, #I_ZF_BIT  wz
+        if_x1   djnz    i_rep_cnt, #.loop
+        _ret_   getword i_cx, i_rep_cnt, #0
+
+i_rep_loop
+.loop           push    ##.ret
+                execf   i_opimpl
+.ret            djnz    i_rep_cnt, #.loop
+        _ret_   getword i_cx, i_rep_cnt, #0
+
 DAT             ' 8086 Opcode Table
                 orgh
 
@@ -1420,15 +1480,15 @@ i8086_optable
                 long    i_mathop8      |      %010_11111010_110_010_0 << 10 ' 02 rm    add r8, [rm]
                 long    i_mathop16     |      %010_11111010_110_010_0 << 10 ' 03 rm    add r16, [rm]
                 long    i_mathop_acc   |        %010_1111010_010_1100 << 10 ' 04 nn    add al, nn
-                long    i_mathop_acc   |      %01101_1111010_001_0000 << 10 ' 05 ll hh add ax, hhll
+                long    i_mathop_acc   |       %0101_1111010_001_0000 << 10 ' 05 ll hh add ax, hhll
                 long    i_push_es      |                    %111111_0 << 10 ' 06       push es
                 long    i_pop_r16      |                       %01110 << 10 ' 07       pop es
                 long    i_mathop8      |      %001_11011111_101_001_0 << 10 ' 08 rm    or [rm], r8
                 long    i_mathop16     |      %001_11011111_101_001_0 << 10 ' 09 rm    or [rm], r16
                 long    i_mathop8      |      %010_11011111_110_010_0 << 10 ' 0A rm    or r8, [rm]
                 long    i_mathop16     |      %010_11011111_110_010_0 << 10 ' 0B rm    or r16, [rm]
-                long    i_mathop_acc   |       %0110_1011111_010_1100 << 10 ' 0C nn    or al, nn
-                long    i_mathop_acc   |     %011101_1011111_001_0000 << 10 ' 0D ll hh or ax, hhll
+                long    i_mathop_acc   |        %010_1011111_010_1100 << 10 ' 0C nn    or al, nn
+                long    i_mathop_acc   |       %0101_1011111_001_0000 << 10 ' 0D ll hh or ax, hhll
                 long    i_push_cs      |                     %11111_0 << 10 ' 0E       push cs
                 long    i_pop_r16      |                      %011110 << 10 ' 0F       pop cs
 
@@ -1437,7 +1497,7 @@ i8086_optable
                 long    i_mathop8      |      %010_11111001_110_010_0 << 10 ' 12 rm    adc r8, [rm]
                 long    i_mathop16     |      %010_11111001_110_010_0 << 10 ' 13 rm    adc r16, [rm]
                 long    i_mathop_acc   |        %010_1111001_010_1100 << 10 ' 14 nn    adc al nn
-                long    i_mathop_acc   |      %01101_1111001_001_0000 << 10 ' 15 ll hh adc ax, hhll
+                long    i_mathop_acc   |       %0101_1111001_001_0000 << 10 ' 15 ll hh adc ax, hhll
                 long    i_push_ss      |                      %1111_0 << 10 ' 16       push ss
                 long    i_pop_r16      |                     %0111110 << 10 ' 17       pop ss
                 long    i_mathop8      |      %001_11110101_101_001_0 << 10 ' 18 rm    sbb [rm], r8
@@ -1445,7 +1505,7 @@ i8086_optable
                 long    i_mathop8      |      %010_11110101_110_010_0 << 10 ' 1A rm    sbb r8, [rm]
                 long    i_mathop16     |      %010_11110101_110_010_0 << 10 ' 1B rm    sbb r16, [rm]
                 long    i_mathop_acc   |        %010_1110101_010_1100 << 10 ' 1C nn    sbb al, nn
-                long    i_mathop_acc   |      %01101_1110101_001_0000 << 10 ' 1D ll hh sbb ax, hhll
+                long    i_mathop_acc   |       %0101_1110101_001_0000 << 10 ' 1D ll hh sbb ax, hhll
                 long    i_push_ds      |                       %111_0 << 10 ' 1E       push ds
                 long    i_pop_r16      |                    %01111110 << 10 ' 1F       pop ds
 
@@ -1453,8 +1513,8 @@ i8086_optable
                 long    i_mathop16     |      %001_11101111_101_001_0 << 10 ' 21 rm    and [rm], r16
                 long    i_mathop8      |      %010_11101111_110_010_0 << 10 ' 22 rm    and r8, [rm]
                 long    i_mathop16     |      %010_11101111_110_010_0 << 10 ' 23 rm    and r16, [rm]
-                long    i_mathop_acc   |       %0110_1101111_010_1100 << 10 ' 24 nn    and al, nn
-                long    i_mathop_acc   |     %011101_1101111_001_0000 << 10 ' 25 ll hh and ax, hhll
+                long    i_mathop_acc   |        %010_1101111_010_1100 << 10 ' 24 nn    and al, nn
+                long    i_mathop_acc   |       %0101_1101111_001_0000 << 10 ' 25 ll hh and ax, hhll
                 long    i_seg_es       |                      %0010__ << 10 ' 26       es:
                 long    i_daas         |                           %0 << 10 ' 27       daa
                 long    i_mathop8      |      %001_11110110_101_001_0 << 10 ' 28 rm    sub [rm], r8
@@ -1462,7 +1522,7 @@ i8086_optable
                 long    i_mathop8      |      %010_11110110_110_010_0 << 10 ' 2A rm    sub r8, [rm]
                 long    i_mathop16     |      %010_11110110_110_010_0 << 10 ' 2B rm    sub r16, [rm]
                 long    i_mathop_acc   |        %010_1110110_010_1100 << 10 ' 2C nn    sub al, nn
-                long    i_mathop_acc   |      %01101_1110110_001_0000 << 10 ' 2D ll hh sub ax, hhll
+                long    i_mathop_acc   |       %0101_1110110_001_0000 << 10 ' 2D ll hh sub ax, hhll
                 long    i_seg_cs       |                      %001110 << 10 ' 2E       cs:
                 long    i_daas         |                           %0 << 10 ' 2F       das
 
@@ -1470,8 +1530,8 @@ i8086_optable
                 long    i_mathop16     |      %001_10111111_101_001_0 << 10 ' 31 rm    xor [rm], r16
                 long    i_mathop8      |      %010_10111111_110_010_0 << 10 ' 32 rm    xor r8, [rm]
                 long    i_mathop16     |      %010_10111111_110_010_0 << 10 ' 33 rm    xor r16, [rm]
-                long    i_mathop_acc   |       %0110_0111111_010_1100 << 10 ' 34 nn    xor al, nn
-                long    i_mathop_acc   |     %011101_0111111_001_0000 << 10 ' 35 ll hh xor ax, hhll
+                long    i_mathop_acc   |        %010_0111111_010_1100 << 10 ' 34 nn    xor al, nn
+                long    i_mathop_acc   |       %0101_0111111_001_0000 << 10 ' 35 ll hh xor ax, hhll
                 long    i_seg_ss       |                      %000___ << 10 ' 36       ss:
                 long    i_aaas         |                           %0 << 10 ' 37       aaa
                 long    i_mathop8      |      %011_11110110_101_001_0 << 10 ' 38 rm    cmp [rm], r8
@@ -1479,7 +1539,7 @@ i8086_optable
                 long    i_mathop8      |      %011_11110110_110_010_0 << 10 ' 3A rm    cmp r8, [rm]
                 long    i_mathop16     |      %011_11110110_110_010_0 << 10 ' 3B rm    cmp r16, [rm]
                 long    i_mathop_acc   |        %011_1110110_010_1100 << 10 ' 3C nn    cmp al, nn
-                long    i_mathop_acc   |      %01111_1110110_001_0000 << 10 ' 3D ll hh cmp ax, hhll
+                long    i_mathop_acc   |       %0111_1110110_001_0000 << 10 ' 3D ll hh cmp ax, hhll
                 long    i_seg_ds       |                      %00110_ << 10 ' 3E       ds:
                 long    i_aaas         |                           %0 << 10 ' 3F       aas
 
@@ -1593,8 +1653,8 @@ i8086_optable
                 long    i_movsw        |                           %0 << 10 ' A5             movsw
                 long    i_cmps         |    %0_0010010_0_10000_010000 << 10 ' A6             cmpsb
                 long    i_cmps         |   %01_0000000_0_01000_001000 << 10 ' A7             cmpsw
-                long    i_mathop_acc   |       %0111_1101111_010_1100 << 10 ' A8 nn          test al, nn
-                long    i_mathop_acc   |     %011111_1101111_001_0000 << 10 ' A9 ll hh       test ax, hhll
+                long    i_mathop_acc   |        %011_1101111_010_1100 << 10 ' A8 nn          test al, nn
+                long    i_mathop_acc   |       %0111_1101111_001_0000 << 10 ' A9 ll hh       test ax, hhll
                 long    i_stos         |              %0010_10_10_000 << 10 ' AA             stosb
                 long    i_stos         |              %0000_01_01_000 << 10 ' AB             stosw
                 long    i_lods         |            %0010_10_10_00000 << 10 ' AC             lodsb
@@ -1672,8 +1732,8 @@ i8086_optable
 
                 long    i_lock         |                           %0 << 10 ' F0             lock
                 long    i_lock         |                           %0 << 10 ' F1             lock
-                long    i_repne        |                           %0 << 10 ' F2             repne
-                long    i_repe         |                           %0 << 10 ' F3             repe
+                long    i_nop          |                           %0 << 10 ' F2             repne
+                long    i_nop          |                           %0 << 10 ' F3             repe
                 long    i_hlt          |                           %0 << 10 ' F4             hlt
                 long    i_cmc          |                           %0 << 10 ' F5             cmc
                 long    i_prefixed_op  |                  %0_110_0000 << 10 ' F6
