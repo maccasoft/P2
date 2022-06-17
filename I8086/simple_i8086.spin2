@@ -196,20 +196,20 @@ i_math8_pre_tbl
                 long    i_mathop8_op   |     %001_11111010_0 << 10 ' ADD
                 long    i_mathop8_op   |     %001_11011111_0 << 10 ' OR
                 long    i_mathop8_op   |     %001_11111001_0 << 10 ' ADC
-                long    i_mathop8_op   |     %001_11110101_0 << 10 ' SBB
+                long    i_mathop8_op   |    %0101_11110101_0 << 10 ' SBB
                 long    i_mathop8_op   |     %001_11101111_0 << 10 ' AND
-                long    i_mathop8_op   |     %001_11110110_0 << 10 ' SUB
+                long    i_mathop8_op   |    %0101_11110110_0 << 10 ' SUB
                 long    i_mathop8_op   |     %001_10111111_0 << 10 ' XOR
-                long    i_mathop8_op   |     %011_11110110_0 << 10 ' CMP
+                long    i_mathop8_op   |    %0111_11110110_0 << 10 ' CMP
 i_math16_pre_tbl
                 long    i_mathop16_op  |     %001_11111010_0 << 10 ' ADD
                 long    i_mathop16_op  |     %001_11011111_0 << 10 ' OR
                 long    i_mathop16_op  |     %001_11111001_0 << 10 ' ADC
-                long    i_mathop16_op  |     %001_11110101_0 << 10 ' SBB
+                long    i_mathop16_op  |    %0101_11110101_0 << 10 ' SBB
                 long    i_mathop16_op  |     %001_11101111_0 << 10 ' AND
-                long    i_mathop16_op  |     %001_11110110_0 << 10 ' SUB
+                long    i_mathop16_op  |    %0101_11110110_0 << 10 ' SUB
                 long    i_mathop16_op  |     %001_10111111_0 << 10 ' XOR
-                long    i_mathop16_op  |     %011_11110110_0 << 10 ' CMP
+                long    i_mathop16_op  |    %0111_11110110_0 << 10 ' CMP
 
 i_loop
                 call    #\i_readcodeb               ' a b c   a = loop    %00_11_000
@@ -244,7 +244,7 @@ i_ff_impl
 
                 sub     i_ea, #2                ' a a
                 call    #\i_writeopw            ' a b
-                jmp     #\i_flags16             ' a b
+                jmp     #\i_flags16_nc          ' a b
 
 i_movsb
                 push    #.ret
@@ -946,76 +946,80 @@ i_mov_acc_offs
 
 i_mathop_acc
                 ' src(r)
-                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o p   a:add_al_rm   %010_1111010_010_1100
-                getbyte i_data1, i_tmpb, #0     ' a b c d e f g h i j k l m n o p   b:adc_al_rm   %010_1111001_010_1100
-                call    #\i_readcodeb           ' | | | | | | | | i j k l m n o p   c:sub_al_rm   %010_1110110_010_1100
-                setbyte i_data1, i_tmpb, #1     ' | | | | | | | | i j k l m n o p   d:sbb_al_rm   %010_1110101_010_1100
-                ' dst(r)                        '                                   e:and_al_rm   %010_1101111_010_1100
-                getbyte i_data, i_ax, #0        ' a b c d e f g h | | | | | | | |   f: or_al_rm   %010_1011111_010_1100
-                getword i_data, i_ax, #0        ' | | | | | | | | i j k l m n o p   g:xor_al_rm   %010_0111111_010_1100
-                mov     i_data0, i_data         ' a b c f e f g h i j k l m n o p   h:cmp_al_rm   %011_1110110_010_1100
+                call    #\i_readcodeb           ' a b c d e f g h i j k l m n o     a:add_al_rm     %010_1111010_010_1100
+                getbyte i_data1, i_tmpb, #0     ' a b c d e f g h i j k l m n o     b:adc_al_rm     %010_1111001_010_1100
+                call    #\i_readcodeb           ' | | | | | | | | i j k l m n o     c:sub_al_rm    %0110_1110110_010_1100
+                setbyte i_data1, i_tmpb, #1     ' | | | | | | | | i j k l m n o     d:sbb_al_rm    %0110_1110101_010_1100
+                ' dst(r)                        '                                   e:and_al_rm     %010_1101111_010_1100
+                getbyte i_data, i_ax, #0        ' a b c d e f g h | | | | | | |     f: or_al_rm     %010_1011111_010_1100
+                getword i_data, i_ax, #0        ' | | | | | | | | i j k l m n o     g:xor_al_rm     %010_0111111_010_1100
+                mov     i_data0, i_data         ' a b c f e f g h i j k l m n o     h:cmp_al_rm    %0111_1110110_010_1100
                 ' operation                     '
-                modc    _clr                wc  ' a | c | | | | h i | k | | | | p   i:add_ax_rm  %0101_1111010_001_0000
-                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | |   j:adc_ax_rm  %0101_1111001_001_0000
-                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | |   k:sub_ax_rm  %0101_1110110_001_0000
-                subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p   l:sbb_ax_rm  %0101_1110101_001_0000
-                and     i_data, i_data1         ' | | | | e | | | | | | | m | | |   m:and_ax_rm  %0101_1101111_001_0000
-                or      i_data, i_data1         ' | | | | | f | | | | | | | n | |   n: or_ax_rm  %0101_1011111_001_0000
-                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o |   o:xor_ax_rm  %0101_0111111_001_0000
-                ' dst(w)                        '                                   p:cmp_ax_rm  %0111_1110110_001_0000
-                setbyte i_ax, i_data, #0        ' a b c d e f g | | | | | | | | |
-                getword i_ax, i_data, #0        ' | | | | | | | | i j k l m n o |   q:test_al_rm  %011_1101111_010_1100
-                jmp     #\i_flags8              ' a b c d e f g h | | | | | | | |   p:test_ax_rm %0111_1101111_001_0000
-                jmp     #\i_flags16             '                 i j k l m n o p
+                modc    _clr                wc  ' a | c | | | | h i | k | | | |     i:add_ax_rm   %01101_1111010_001_0000
+                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | |     j:adc_ax_rm   %01101_1111001_001_0000
+                addx    i_data, i_data1         ' a b | | | | | | i j | | | | |     k:sub_ax_rm  %011101_1110110_001_0000
+                subx    i_data, i_data1         ' | | c d | | | h | | k l | | |     l:sbb_ax_rm  %011101_1110101_001_0000
+                and     i_data, i_data1         ' | | | | e | | | | | | | m | |     m:and_ax_rm   %01101_1101111_001_0000
+                or      i_data, i_data1         ' | | | | | f | | | | | | | n |     n: or_ax_rm   %01101_1011111_001_0000
+                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o     o:xor_ax_rm   %01101_0111111_001_0000
+                ' dst(w)                        '                                   p:cmp_ax_rm  %011111_1110110_001_0000
+                setbyte i_ax, i_data, #0        ' a b c d e f g | | | | | | | |
+                getword i_ax, i_data, #0        ' | | | | | | | | i j k l m n o     q:test_al_rm    %011_1101111_010_1100
+                jmp     #\i_flags8              ' a b | | e f g | | | | | | | |     p:test_ax_rm  %01111_1101111_001_0000
+                jmp     #\i_flags8_sub          '     c d       h | | | | | | |
+                jmp     #\i_flags16             '                 i j | | m n o
+                jmp     #\i_flags16_sub         '                     k l
 
 i_mathop8
                 call    #\i_setupmodrm          ' a b c d e f g h i j k l m n o p q r   a:add_r8_rm    %010_11111010_110_010_0
                 ' src(r)                                                                b:adc_r8_rm    %010_11111001_110_010_0
-                call    #\i_readopb             ' a b c d e f g h | | | | | | | | q |   c:sub_r8_rm    %010_11110110_110_010_0
-                call    #\i_getmodr8            ' | | | | | | | | i j k l m n o p | r   d:sbb_r8_rm    %010_11110101_110_010_0
+                call    #\i_readopb             ' a b c d e f g h | | | | | | | | q |   c:sub_r8_rm   %0110_11110110_110_010_0
+                call    #\i_getmodr8            ' | | | | | | | | i j k l m n o p | r   d:sbb_r8_rm   %0110_11110101_110_010_0
                 mov     i_data1, i_data         ' a b c d e f g h i j k l m n o p q r   e:and_r8_rm    %010_11101111_110_010_0
                 ' dst(r)                                                                f: or_r8_rm    %010_11011111_110_010_0
                 call    #\i_getmodr8            ' a b c d e f g h | | | | | | | | q |   g:xor_r8_rm    %010_10111111_110_010_0
-                call    #\i_readopb             ' | | | | | | | | i j k l m n o p | |   h:cmp_r8_rm    %011_11110110_110_010_0
+                call    #\i_readopb             ' | | | | | | | | i j k l m n o p | |   h:cmp_r8_rm   %0111_11110110_110_010_0
 i_mathop8_op    mov     i_data0, i_data         ' a b c d e f g h i j k l m n o p q r
                 ' operation                                                             i:add_rm_r8    %001_11111010_101_001_0
                 modc    _clr                wc  ' a | c | | | | h i | k | | | | p | |   j:adc_rm_r8    %001_11111001_101_001_0
-                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   k:sub_rm_r8    %001_11110110_101_001_0
-                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   l:sbb_rm_r8    %001_11110101_101_001_0
+                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   k:sub_rm_r8   %0101_11110110_101_001_0
+                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   l:sbb_rm_r8   %0101_11110101_101_001_0
                 subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p | |   m:and_rm_r8    %001_11101111_101_001_0
                 and     i_data, i_data1         ' | | | | e | | | | | | | m | | | | |   n: or_rm_r8    %001_11011111_101_001_0
                 or      i_data, i_data1         ' | | | | | f | | | | | | | n | | | |   o:xor_rm_r8    %001_10111111_101_001_0
-                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o | | |   p:cmp_rm_r8    %011_11110110_101_001_0
+                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o | | |   p:cmp_rm_r8   %0111_11110110_101_001_0
                 mov     i_data, i_data1         ' | | | | | | | | | | | | | | | | q r
-                ' dst(w)                                                                q:mov_r8_rm   %0110_01111111_110_010_0
-                call    #\i_setmodr8            ' a b c d e f g | | | | | | | | | q |   r:mov_rm_r8   %0101_01111111_011_001_0
+                ' dst(w)                                                                q:mov_r8_rm  %01110_01111111_110_010_0
+                call    #\i_setmodr8            ' a b c d e f g | | | | | | | | | q |   r:mov_rm_r8  %01101_01111111_011_001_0
                 call    #\i_writeopb            ' | | | | | | | | i j k l m n o | | r
-                jmp     #\i_flags8              ' a b c d e f g h i j k l m n o p | |
+                jmp     #\i_flags8              ' a b | | e f g | i j | | m n o | | |
+                jmp     #\i_flags8_sub          '     c d       h     k l       p | |
                 ret                             '                                 q r
 
 i_mathop16
                 call    #\i_setupmodrm          ' a b c d e f g h i j k l m n o p q r   a:add_r16_rm   %010_11111010_110_010_0
 i_mathop16_pre  ' src(r)                                                                b:adc_r16_rm   %010_11111001_110_010_0
-                call    #\i_readopw             ' a b c d e f g h | | | | | | | | q |   c:sub_r16_rm   %010_11110110_110_010_0
-                call    #\i_getmodr16           ' | | | | | | | | i j k l m n o p | r   d:sbb_r16_rm   %010_11110101_110_010_0
+                call    #\i_readopw             ' a b c d e f g h | | | | | | | | q |   c:sub_r16_rm  %0110_11110110_110_010_0
+                call    #\i_getmodr16           ' | | | | | | | | i j k l m n o p | r   d:sbb_r16_rm  %0110_11110101_110_010_0
                 mov     i_data1, i_data         ' a b c d e f g h i j k l m n o p q r   e:and_r16_rm   %010_11101111_110_010_0
                 ' dst(r)                                                                f: or_r16_rm   %010_11011111_110_010_0
                 call    #\i_getmodr16           ' a b c d e f g h | | | | | | | | q |   g:xor_r16_rm   %010_10111111_110_010_0
-                call    #\i_readopw             ' | | | | | | | | i j k l m n o p | r   h:cmp_r16_rm   %011_11110110_110_010_0
+                call    #\i_readopw             ' | | | | | | | | i j k l m n o p | r   h:cmp_r16_rm  %0111_11110110_110_010_0
 i_mathop16_op   mov     i_data0, i_data         ' a b c d e f g h i j k l m n o p q r
                 ' operation                                                             i:add_rm_r16   %001_11111010_101_001_0
                 modc    _clr                wc  ' a | c | | | | h i | k | | | | p | |   j:adc_rm_r16   %001_11111001_101_001_0
-                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   k:sub_rm_r16   %001_11110110_101_001_0
-                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   l:sbb_rm_r16   %001_11110101_101_001_0
+                testb   i_flags, #I_CF_BIT  wc  ' | b | d | | | | | j | l | | | | | |   k:sub_rm_r16  %0101_11110110_101_001_0
+                addx    i_data, i_data1         ' a b | | | | | | i j | | | | | | | |   l:sbb_rm_r16  %0101_11110101_101_001_0
                 subx    i_data, i_data1         ' | | c d | | | h | | k l | | | p | |   m:and_rm_r16   %001_11101111_101_001_0
                 and     i_data, i_data1         ' | | | | e | | | | | | | m | | | | |   n: or_rm_r16   %001_11011111_101_001_0
                 or      i_data, i_data1         ' | | | | | f | | | | | | | n | | | |   o:xor_rm_r16   %001_10111111_101_001_0
-                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o | | |   p:cmp_rm_r16   %011_11110110_101_001_0
+                xor     i_data, i_data1         ' | | | | | | g | | | | | | | o | | |   p:cmp_rm_r16  %0111_11110110_101_001_0
                 mov     i_data, i_data1         ' | | | | | | | | | | | | | | | | q r
-                ' dst(w)                                                                q:mov_r16_rm  %0110_01111111_110_010_0
-                call    #\i_setmodr16           ' a b c d e f g | | | | | | | | | q |   r:mov_rm_r16  %0101_01111111_011_001_0
+                ' dst(w)                                                                q:mov_r16_rm %01110_01111111_110_010_0
+                call    #\i_setmodr16           ' a b c d e f g | | | | | | | | | q |   r:mov_rm_r16 %01101_01111111_011_001_0
                 call    #\i_writeopw            ' | | | | | | | | i j k l m n o | | r
-                jmp     #\i_flags16             ' a b c d e f g h i j k l m n o p | |
+                jmp     #\i_flags16             ' a b | | e f g | i j | | m n o | | |
+                jmp     #\i_flags16_sub         '     c d       h     k l       p | |
                 ret                             '                                 q r
 
 i_incdec
@@ -1029,9 +1033,9 @@ i_incdec
                 sub     i_data, i_data1         ' | | c d
                                                 '
                 call    #\i_setr8               ' a | c |
-                jmp     #\i_flags8              ' a | c |
+                jmp     #\i_flags8_nc           ' a | c |
                 call    #\i_setr16              '   b   d
-                jmp     #\i_flags16             '   b   d
+                jmp     #\i_flags16_nc          '   b   d
 
 i_fe_pre
                 call    #\i_setupmodrm
@@ -1046,7 +1050,7 @@ i_fe_pre
         if_z    sub     i_data, i_data1
 
                 call    #\i_writeopb
-                jmp     #\i_flags8
+                jmp     #\i_flags8_nc
 
 i_push_es       getword i_data, i_es, #0        '     c         a=push r16
 i_push_cs       getword i_data, i_cs, #0        '     | d       b=pushf
@@ -1250,7 +1254,25 @@ i_nop
 i_hlt
         _ret_   decmod  i_ip, i_ffffh
 
+i_flags8_sub
+                testb   i_data, #7          wc
+                testb   i_data0, #7         xorc
+                testb   i_data1, #7         wz
+                testb   i_data0, #7         xorz
+                modz    _c_and_z            wz
+                bitz    i_flags, #I_OF_BIT
+                skipf   #%111111_00
 i_flags8
+                testb   i_data, #8          wz
+                bitz    i_flags, #I_CF_BIT
+i_flags8_nc
+                testb   i_data0, #7         wc
+                testb   i_data, #7          xorc
+                testb   i_data1, #7         wz
+                testb   i_data, #7          xorz
+                modz    _c_and_z            wz
+                bitz    i_flags, #I_OF_BIT
+
                 testb   i_data0, #4         wz
                 testb   i_data1, #4         xorz
                 testb   i_data, #4          xorz
@@ -1258,30 +1280,29 @@ i_flags8
 
                 testb   i_data, #7          wz
                 bitz    i_flags, #I_SF_BIT
-                testb   i_data, #8          wz
-                bitz    i_flags, #I_CF_BIT
                 and     i_data, #$FF        wcz
                 bitz    i_flags, #I_ZF_BIT
-                bitnc   i_flags, #I_PF_BIT
+        _ret_   bitnc   i_flags, #I_PF_BIT
 
-                bitl    i_flags, #I_OF_BIT
-                testb   i_data, #7          wz
-
-                testb   i_data0, #7         wc
-                testb   i_data1, #7         andc
-        if_1x   bitnz   i_flags, #I_OF_BIT
-        if_1x   ret
-                testb   i_data0, #7         wc
-                testb   i_data1, #7         orc
-        if_0x   bitz    i_flags, #I_OF_BIT
-        if_0x   ret
-
-                testb   i_data0, #7         wz
-                testb   i_data, #7          xorz
-        if_x1   testb   i_flags, #I_ZF_BIT  xorz
-        _ret_   bitz    i_flags, #I_OF_BIT
-
+i_flags16_sub
+                testb   i_data, #15         wc
+                testb   i_data0, #15        xorc
+                testb   i_data1, #15        wz
+                testb   i_data0, #15        xorz
+                modz    _c_and_z            wz
+                bitz    i_flags, #I_OF_BIT
+                skipf   #%111111_00
 i_flags16
+                testb   i_data, #16         wz
+                bitz    i_flags, #I_CF_BIT
+i_flags16_nc
+                testb   i_data0, #15        wc
+                testb   i_data, #15         xorc
+                testb   i_data1, #15        wz
+                testb   i_data, #15         xorz
+                modz    _c_and_z            wz
+                bitz    i_flags, #I_OF_BIT
+
                 testb   i_data0, #4         wz
                 testb   i_data1, #4         xorz
                 testb   i_data, #4          xorz
@@ -1289,25 +1310,9 @@ i_flags16
 
                 testb   i_data, #15         wz
                 bitz    i_flags, #I_SF_BIT
-                testb   i_data, #16         wz
-                bitz    i_flags, #I_CF_BIT
                 and     i_data, i_ffffh     wcz
                 bitz    i_flags, #I_ZF_BIT
-                bitnc   i_flags, #I_PF_BIT
-
-                testb   i_data0, #15        wc
-                testb   i_data1, #15        andc
-        if_1x   bitnz   i_flags, #I_OF_BIT
-        if_1x   ret
-                testb   i_data0, #15        wc
-                testb   i_data1, #15        orc
-        if_0x   bitz    i_flags, #I_OF_BIT
-        if_0x   ret
-
-                testb   i_data0, #15        wz
-                testb   i_data, #15         xorz
-        if_x1   testb   i_flags, #I_ZF_BIT  xorz
-        _ret_   bitz    i_flags, #I_OF_BIT
+        _ret_   bitnc   i_flags, #I_PF_BIT
 
 ' --------------------------------------------------------------------
 
@@ -1480,7 +1485,7 @@ i8086_optable
                 long    i_mathop8      |      %010_11111010_110_010_0 << 10 ' 02 rm    add r8, [rm]
                 long    i_mathop16     |      %010_11111010_110_010_0 << 10 ' 03 rm    add r16, [rm]
                 long    i_mathop_acc   |        %010_1111010_010_1100 << 10 ' 04 nn    add al, nn
-                long    i_mathop_acc   |       %0101_1111010_001_0000 << 10 ' 05 ll hh add ax, hhll
+                long    i_mathop_acc   |      %01101_1111010_001_0000 << 10 ' 05 ll hh add ax, hhll
                 long    i_push_es      |                    %111111_0 << 10 ' 06       push es
                 long    i_pop_r16      |                       %01110 << 10 ' 07       pop es
                 long    i_mathop8      |      %001_11011111_101_001_0 << 10 ' 08 rm    or [rm], r8
@@ -1488,7 +1493,7 @@ i8086_optable
                 long    i_mathop8      |      %010_11011111_110_010_0 << 10 ' 0A rm    or r8, [rm]
                 long    i_mathop16     |      %010_11011111_110_010_0 << 10 ' 0B rm    or r16, [rm]
                 long    i_mathop_acc   |        %010_1011111_010_1100 << 10 ' 0C nn    or al, nn
-                long    i_mathop_acc   |       %0101_1011111_001_0000 << 10 ' 0D ll hh or ax, hhll
+                long    i_mathop_acc   |      %01101_1011111_001_0000 << 10 ' 0D ll hh or ax, hhll
                 long    i_push_cs      |                     %11111_0 << 10 ' 0E       push cs
                 long    i_pop_r16      |                      %011110 << 10 ' 0F       pop cs
 
@@ -1497,15 +1502,15 @@ i8086_optable
                 long    i_mathop8      |      %010_11111001_110_010_0 << 10 ' 12 rm    adc r8, [rm]
                 long    i_mathop16     |      %010_11111001_110_010_0 << 10 ' 13 rm    adc r16, [rm]
                 long    i_mathop_acc   |        %010_1111001_010_1100 << 10 ' 14 nn    adc al nn
-                long    i_mathop_acc   |       %0101_1111001_001_0000 << 10 ' 15 ll hh adc ax, hhll
+                long    i_mathop_acc   |      %01101_1111001_001_0000 << 10 ' 15 ll hh adc ax, hhll
                 long    i_push_ss      |                      %1111_0 << 10 ' 16       push ss
                 long    i_pop_r16      |                     %0111110 << 10 ' 17       pop ss
-                long    i_mathop8      |      %001_11110101_101_001_0 << 10 ' 18 rm    sbb [rm], r8
-                long    i_mathop16     |      %001_11110101_101_001_0 << 10 ' 19 rm    sbb [rm], r16
-                long    i_mathop8      |      %010_11110101_110_010_0 << 10 ' 1A rm    sbb r8, [rm]
-                long    i_mathop16     |      %010_11110101_110_010_0 << 10 ' 1B rm    sbb r16, [rm]
-                long    i_mathop_acc   |        %010_1110101_010_1100 << 10 ' 1C nn    sbb al, nn
-                long    i_mathop_acc   |       %0101_1110101_001_0000 << 10 ' 1D ll hh sbb ax, hhll
+                long    i_mathop8      |     %0101_11110101_101_001_0 << 10 ' 18 rm    sbb [rm], r8
+                long    i_mathop16     |     %0101_11110101_101_001_0 << 10 ' 19 rm    sbb [rm], r16
+                long    i_mathop8      |     %0110_11110101_110_010_0 << 10 ' 1A rm    sbb r8, [rm]
+                long    i_mathop16     |     %0110_11110101_110_010_0 << 10 ' 1B rm    sbb r16, [rm]
+                long    i_mathop_acc   |       %0110_1110101_010_1100 << 10 ' 1C nn    sbb al, nn
+                long    i_mathop_acc   |     %011101_1110101_001_0000 << 10 ' 1D ll hh sbb ax, hhll
                 long    i_push_ds      |                       %111_0 << 10 ' 1E       push ds
                 long    i_pop_r16      |                    %01111110 << 10 ' 1F       pop ds
 
@@ -1514,15 +1519,15 @@ i8086_optable
                 long    i_mathop8      |      %010_11101111_110_010_0 << 10 ' 22 rm    and r8, [rm]
                 long    i_mathop16     |      %010_11101111_110_010_0 << 10 ' 23 rm    and r16, [rm]
                 long    i_mathop_acc   |        %010_1101111_010_1100 << 10 ' 24 nn    and al, nn
-                long    i_mathop_acc   |       %0101_1101111_001_0000 << 10 ' 25 ll hh and ax, hhll
+                long    i_mathop_acc   |      %01101_1101111_001_0000 << 10 ' 25 ll hh and ax, hhll
                 long    i_seg_es       |                      %0010__ << 10 ' 26       es:
                 long    i_daas         |                           %0 << 10 ' 27       daa
-                long    i_mathop8      |      %001_11110110_101_001_0 << 10 ' 28 rm    sub [rm], r8
-                long    i_mathop16     |      %001_11110110_101_001_0 << 10 ' 29 rm    sub [rm], r16
-                long    i_mathop8      |      %010_11110110_110_010_0 << 10 ' 2A rm    sub r8, [rm]
-                long    i_mathop16     |      %010_11110110_110_010_0 << 10 ' 2B rm    sub r16, [rm]
-                long    i_mathop_acc   |        %010_1110110_010_1100 << 10 ' 2C nn    sub al, nn
-                long    i_mathop_acc   |       %0101_1110110_001_0000 << 10 ' 2D ll hh sub ax, hhll
+                long    i_mathop8      |     %0101_11110110_101_001_0 << 10 ' 28 rm    sub [rm], r8
+                long    i_mathop16     |     %0101_11110110_101_001_0 << 10 ' 29 rm    sub [rm], r16
+                long    i_mathop8      |     %0110_11110110_110_010_0 << 10 ' 2A rm    sub r8, [rm]
+                long    i_mathop16     |     %0110_11110110_110_010_0 << 10 ' 2B rm    sub r16, [rm]
+                long    i_mathop_acc   |       %0110_1110110_010_1100 << 10 ' 2C nn    sub al, nn
+                long    i_mathop_acc   |     %011101_1110110_001_0000 << 10 ' 2D ll hh sub ax, hhll
                 long    i_seg_cs       |                      %001110 << 10 ' 2E       cs:
                 long    i_daas         |                           %0 << 10 ' 2F       das
 
@@ -1534,12 +1539,12 @@ i8086_optable
                 long    i_mathop_acc   |       %0101_0111111_001_0000 << 10 ' 35 ll hh xor ax, hhll
                 long    i_seg_ss       |                      %000___ << 10 ' 36       ss:
                 long    i_aaas         |                           %0 << 10 ' 37       aaa
-                long    i_mathop8      |      %011_11110110_101_001_0 << 10 ' 38 rm    cmp [rm], r8
-                long    i_mathop16     |      %011_11110110_101_001_0 << 10 ' 39 rm    cmp [rm], r16
-                long    i_mathop8      |      %011_11110110_110_010_0 << 10 ' 3A rm    cmp r8, [rm]
-                long    i_mathop16     |      %011_11110110_110_010_0 << 10 ' 3B rm    cmp r16, [rm]
-                long    i_mathop_acc   |        %011_1110110_010_1100 << 10 ' 3C nn    cmp al, nn
-                long    i_mathop_acc   |       %0111_1110110_001_0000 << 10 ' 3D ll hh cmp ax, hhll
+                long    i_mathop8      |     %0111_11110110_101_001_0 << 10 ' 38 rm    cmp [rm], r8
+                long    i_mathop16     |     %0111_11110110_101_001_0 << 10 ' 39 rm    cmp [rm], r16
+                long    i_mathop8      |     %0111_11110110_110_010_0 << 10 ' 3A rm    cmp r8, [rm]
+                long    i_mathop16     |     %0111_11110110_110_010_0 << 10 ' 3B rm    cmp r16, [rm]
+                long    i_mathop_acc   |       %0111_1110110_010_1100 << 10 ' 3C nn    cmp al, nn
+                long    i_mathop_acc   |     %011111_1110110_001_0000 << 10 ' 3D ll hh cmp ax, hhll
                 long    i_seg_ds       |                      %00110_ << 10 ' 3E       ds:
                 long    i_aaas         |                           %0 << 10 ' 3F       aas
 
@@ -1615,14 +1620,14 @@ i8086_optable
                 long    i_math_pre     |          %0011000_10000_01_0 << 10 ' 81 rm ll hh    add/or/adc/sbb/and/sub(xor/cmp [rm16], hhll
                 long    i_math_pre     |            %00000_01100_10_0 << 10 ' 82 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm8], sn
                 long    i_math_pre     |          %0011000_01100_01_0 << 10 ' 83 rm sn       add/or/adc/sbb/and/sub(xor/cmp [rm16], sn
-                long    i_mathop8      |      %011_11101111_110_010_0 << 10 ' 84 rm          test r8, [mm]
-                long    i_mathop16     |      %011_11101111_110_010_0 << 10 ' 85 rm          test r16, [mm]
+                long    i_mathop8      |     %0111_11101111_110_010_0 << 10 ' 84 rm          test r8, [mm]
+                long    i_mathop16     |     %0111_11101111_110_010_0 << 10 ' 85 rm          test r16, [mm]
                 long    i_xchg_rmod    |             %00100_010_010_0 << 10 ' 86 rm          xchg r8, [mm]
                 long    i_xchg_rmod    |            %010010_001_001_0 << 10 ' 87 rm          xchg r16, [mm]
-                long    i_mathop8      |     %0101_01111111_011_001_0 << 10 ' 88 rm          mov [rm], r8
-                long    i_mathop16     |     %0101_01111111_011_001_0 << 10 ' 89 rm          mov [rm], r16
-                long    i_mathop8      |     %0110_01111111_110_010_0 << 10 ' 8A rm          mov r8, [rm]
-                long    i_mathop16     |     %0110_01111111_110_010_0 << 10 ' 8B rm          mov r16, [rm]
+                long    i_mathop8      |    %01101_01111111_011_001_0 << 10 ' 88 rm          mov [rm], r8
+                long    i_mathop16     |    %01101_01111111_011_001_0 << 10 ' 89 rm          mov [rm], r16
+                long    i_mathop8      |    %01110_01111111_110_010_0 << 10 ' 8A rm          mov r8, [rm]
+                long    i_mathop16     |    %01110_01111111_110_010_0 << 10 ' 8B rm          mov r16, [rm]
                 long    i_mov_sreg     |                %000_111_0000 << 10 ' 8C mm          mov [rm], sreg
                 long    i_lea          |                           %0 << 10 ' 8D mm          lea r16, ofs
                 long    i_mov_sreg     |                    %000_0000 << 10 ' 8E mm          mov sregs, [rm]
@@ -1654,7 +1659,7 @@ i8086_optable
                 long    i_cmps         |    %0_0010010_0_10000_010000 << 10 ' A6             cmpsb
                 long    i_cmps         |   %01_0000000_0_01000_001000 << 10 ' A7             cmpsw
                 long    i_mathop_acc   |        %011_1101111_010_1100 << 10 ' A8 nn          test al, nn
-                long    i_mathop_acc   |       %0111_1101111_001_0000 << 10 ' A9 ll hh       test ax, hhll
+                long    i_mathop_acc   |      %01111_1101111_001_0000 << 10 ' A9 ll hh       test ax, hhll
                 long    i_stos         |              %0010_10_10_000 << 10 ' AA             stosb
                 long    i_stos         |              %0000_01_01_000 << 10 ' AB             stosw
                 long    i_lods         |            %0010_10_10_00000 << 10 ' AC             lodsb
