@@ -32,23 +32,9 @@ DAT             ' Startup
 
 int_io_A0       byte    $00
 
-                ' 8255 I/O
-ppa_io_60       byte    %00000000   ' I=Keyboard scancode O=Diagnostic output
-ppa_io_61       byte    %00000000   ' Output
-ppa_io_62       byte    %00001100   ' I
-                '            |||+--- Loop on POST
-                '            ||+---- 1=Co-processor installed
-                '            |+----- planar ram size 00=64k, 01=128k, 10=192k, 11=256k
-                '            +------ planar ram size
-                '
-                '
-                '
-                '
-ppa_io_63       byte    %00000000   ' Command / Mode register
-
 kbd_head        byte    $00
 kbd_tail        byte    $00
-kbd_buffer      byte    $00[8]
+kbd_buffer      byte    $FF[8]
 
                 ' CGA I/O registers
 cga_io_03D0     byte    $00
@@ -3557,6 +3543,24 @@ i_optable       long    @i8086_optable
 i_rambase       long    @ram_00000
 i_cgabase       long    @ram_00000 + RAM_SIZE
 
+ppi             long    %11111111_11111111_11111111_11111111
+                '        |||||||| |||||||| |||||||| ||||||||
+                '        |||||||| |||||||| |||||||| ++++++++-- I=KB. Scancode / O=Diagnostic
+                '        |||||||| |||||||| |||||||+----------- Timer 2 Gate Speaker
+                '        |||||||| |||||||| ||||||+------------ Speaker Data
+                '        |||||||| |||||||| |||||+------------- Spare
+                '        |||||||| |||||||| ||||+-------------- Read High / Low switched
+                '        |||||||| |||||||| |||+--------------- 0=Enable RAM parity check
+                '        |||||||| |||||||| ||+---------------- 0=Enable I/O channel check
+                '        |||||||| |||||||| |+----------------- 0=Hold keyboard clock low
+                '        |||||||| |||||||| +------------------ 0=Enable keyboard, 1=Clear keyboard
+                '        |||||||| ||||++++-------------------- Switches
+                '        |||||||| |||+------------------------ Spare
+                '        |||||||| ||+------------------------- Timer channel 2 out
+                '        |||||||| |+-------------------------- 1=I/O channel check
+                '        |||||||| +--------------------------- 1=Ram parity check
+                '        ++++++++----------------------------- CONTROL
+
 pic_icw         long    %00000000_00000000_00000000_00000000
                 '        |||||||| |||||||| |||||||| ||||||||
                 '        |||||||| |||||||| |||||||| ++++++++-- ICW1
@@ -4744,13 +4748,13 @@ i_readiob
         if_ae   jmp     #\nmi_mask_rd
 
                 cmp     i_ea, #$60      wcz
-        if_e    jmp     #\ppa_8255a_rd
+        if_e    jmp     #\ppi_60_rd
                 cmp     i_ea, #$61      wcz
-        if_e    jmp     #\ppa_8255b_rd
+        if_e    getbyte i_tmpb, ppi, #PPI_PB_BYTE
                 cmp     i_ea, #$62      wcz
-        if_e    jmp     #\ppa_8255c_rd
+        if_e    jmp     #ppi_62_rd
                 cmp     i_ea, #$63      wcz
-        if_e    jmp     #\ppa_8255_rd
+        if_e    getbyte i_tmpb, ppi, #PPI_CTL_BYTE
 
                 cmp     i_ea, ##$03DA   wcz
         if_e    jmp     #\cga_status_rd
@@ -4770,13 +4774,13 @@ i_writeiob
         if_ae   jmp     #\nmi_mask_wr
 
                 cmp     i_ea, #$60      wcz
-        if_e    jmp     #\ppa_8255a_wr
+        if_e    setbyte ppi, i_tmpb, #PPI_PA_BYTE
                 cmp     i_ea, #$61      wcz
-        if_e    jmp     #\ppa_8255b_wr
+        if_e    setbyte ppi, i_tmpb, #PPI_PB_BYTE
                 cmp     i_ea, #$62      wcz
-        if_e    jmp     #\ppa_8255c_wr
+        if_e    setbyte ppi, i_tmpb, #PPI_PC_BYTE
                 cmp     i_ea, #$63      wcz
-        if_e    jmp     #\ppa_8255_wr
+        if_e    setbyte ppi, i_tmpb, #PPI_CTL_BYTE
 
                 cmp     i_ea, ##$03D0   wcz
         if_ae   cmpr    i_ea, ##$03DF   wcz
@@ -4808,52 +4812,54 @@ cga_write
 cga_status_rd
         _ret_   rdbyte  i_tmpb, #@cga_io_03DA
 
-' PPA 8255A
+DAT             ' PPI 8255A
+                orgh
 
-ppa_8255a_rd
-                mov     i_tmpb, #$00
+ppi_60_rd
+                testb   ppi, #PPI_PA_INPUT          wz ' PA input ?
+        if_x0   getbyte i_tmpb, ppi, #PPI_PA_BYTE      ' no, return the out state
+        if_x0   ret     wcz
+
                 rdbyte  pa, #@kbd_tail
                 rdbyte  pb, #@kbd_head
-                cmp     pa, pb      wz
-        if_e    jmp     #.empty
 
+                testb   ppi, #(PPI_PB_BYTE * 8) + 7  wz ' Clear keyboard ?
+        if_x1   wrbyte  pb, #@kbd_tail                  ' yes, set tail=head
+        if_x1   ret     wcz
+
+                cmp     pa, pb      wz
+        if_e    ret     wcz
                 add     pa, #@kbd_buffer
                 rdbyte  i_tmpb, pa
                 sub     pa, #@kbd_buffer
                 incmod  pa, #7
                 wrbyte  pa, #@kbd_tail
-.empty
                 ret     wcz
 
-ppa_8255a_wr
-                wrbyte  i_tmpb, #@ppa_io_60
+ppi_62_rd
+                testb   ppi, #(PPI_PB_BYTE * 8) + 3  wz
+        if_x0   mov     i_tmpb, #%00001100 ' Low switches
+                '                     ||||
+                '                     |||+-- Loop on POST
+                '                     ||+--- 1=Co-Processor installed
+                '                     ++---- Planar RAM size (00=64K, 01=128K, 10=192K, 11=256K)
+        if_x1   mov     i_tmpb, #%00000010 ' High switches
+                '                     ||||
+                '                     ||++-- Display (10=CGA)
+                '                     ++---- Num. Floppy drives (00=1, 01=2, 10=3, 11=4)
                 ret     wcz
 
-ppa_8255b_rd
-                rdbyte  i_tmpb, #@ppa_io_61
-                ret     wcz
+CON ' PPI 8255A constants
 
-ppa_8255b_wr
-                wrbyte  i_tmpb, #@ppa_io_61
-                ret     wcz
+    PPI_PA_BYTE  = 0
+    PPI_PB_BYTE  = 1
+    PPI_PC_BYTE  = 2
+    PPI_CTL_BYTE = 3
 
-ppa_8255c_rd
-                rdbyte  i_tmpb, #@ppa_io_61
-                testb   i_tmpb, #3      wc
-        if_nc   mov     i_tmpb, #%00001100 ' Low switch
-        if_c    mov     i_tmpb, #%00000010 ' High switch
-                ret     wcz
-
-ppa_8255c_wr
-                ret     wcz
-
-ppa_8255_rd
-                rdbyte  i_tmpb, #@ppa_io_63
-                ret     wcz
-
-ppa_8255_wr
-                wrbyte  i_tmpb, #@ppa_io_63
-                ret     wcz
+    PPI_PA_INPUT  = (PPI_CTL_BYTE * 8) + 4
+    PPI_PCU_INPUT = (PPI_CTL_BYTE * 8) + 3
+    PPI_PB_INPUT  = (PPI_CTL_BYTE * 8) + 1
+    PPI_PCL_INPUT = (PPI_CTL_BYTE * 8) + 0
 
 DAT             ' PIC 8259A
                 orgh
