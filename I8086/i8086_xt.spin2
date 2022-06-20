@@ -3557,11 +3557,30 @@ i_optable       long    @i8086_optable
 i_rambase       long    @ram_00000
 i_cgabase       long    @ram_00000 + RAM_SIZE
 
-pic_icw         long    $00_00_00_00    ' byte 0=ICW1, 1=ICW2, 2=ICW3, 3=ICW4
-pic_ocw         long    $00_00_00_00    ' byte 0=OCW1, 1=OCW2, 2=OCW3
-                                        '  nib 6=IS
-                                        ' bit 31..27 internal state
-pic_irq         long    $00_00_00_00
+pic_icw         long    %00000000_00000000_00000000_00000000
+                '        |||||||| |||||||| |||||||| ||||||||
+                '        |||||||| |||||||| |||||||| ++++++++-- ICW1
+                '        |||||||| |||||||| ++++++++----------- ICW2
+                '        |||||||| ++++++++-------------------- ICW3
+                '        ++++++++----------------------------- ICW4
+
+pic_ocw         long    %00000000_00000000_00000000_00000000
+                '        |||      |||||||| |||||||| ||||||||
+                '        |||      |||||||| |||||||| ++++++++--   7..0: OCW1 (IMR)
+                '        |||      |||||||| ++++++++-----------  15..8: OCW2
+                '        |||      ++++++++-------------------- 23..16: OCW3
+                '        ||+---------------------------------      29: ICW2 received
+                '        |+-----------------------------------     30: ICW3 received
+                '        +------------------------------------     31: ICW4 received
+
+pic_irq         long    %00000000_00000000_00000000_00000000
+                '        |    |||          |||||||| ||||||||
+                '        |    |||          |||||||| ++++++++--   7..0: IRR
+                '        |    |||          ++++++++-----------  15..8: ISR
+                '        |    +++----------------------------- 26..24:  # served
+                '        +------------------------------------     31: IS
+
+acia_ctl_reg    long    0
 
 i_opcode        res     1
 i_modrm         res     1
@@ -4678,10 +4697,11 @@ i_run_interrupts
                 ' irq3 - serial interface 2
 
                 ' irq1 - keyboard
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 1    wc
                 rdbyte  pa, #@kbd_tail
                 rdbyte  pb, #@kbd_head
                 cmp     pa, pb          wz
-        if_nz   bith    pic_irq, #1         ' signal irq
+ if_nc_and_nz   bith    pic_irq, #(PIC_IRR_BYTE * 8) + 1 ' signal irq
 
                 ' irq0 - timer
                 pollct1                 wc
@@ -4689,23 +4709,23 @@ i_run_interrupts
         if_c    addct1  i_temp1, ##trunc(_CLKFREQ / 18.2)
         if_c    bith    pic_irq, #0         ' signal irq
 
-                testb   pic_ocw, #28        wc
-                testb   i_flags, #I_IF_BIT  wz
+                testb   pic_irq, #PIC_IS_BIT    wc
+                testb   i_flags, #I_IF_BIT      wz
    if_not_01    ret
 
-                getbyte i_temp0, pic_icw, #1
+                getbyte i_temp0, pic_irq, #PIC_ISR_BYTE
+                getbyte i_temp1, pic_irq, #PIC_IRR_BYTE
+                or      i_temp0, i_temp1
+                setbyte pic_irq, i_temp0, #PIC_ISR_BYTE
+                setbyte pic_irq, #0, #PIC_IRR_BYTE
 
-                getbyte i_temp0, pic_icw, #1
-                mov     i_temp1, #7
-                rep     @.irq_loop, #8
-                testb   pic_irq, i_temp1    wc
-                testb   pic_ocw, i_temp1    wz
-        if_10   bith    pic_ocw, #28        ' signal interrupt
-        if_10   setnib  pic_ocw, i_temp1, #6' set interrupt served
-        if_10   add     i_temp0, i_temp1
-        if_10   jmp     #\i_trap
-                sub     i_temp1, #1
-.irq_loop
+                call    #pic_intack
+
+                getbyte i_temp0, pic_icw, #PIC_ICW2_BYTE
+                testb   pic_irq, #PIC_IS_BIT    wz
+        if_x1   getnib  i_temp1, pic_irq, #PIC_IR_NIB
+        if_x1   add     i_temp0, i_temp1
+        if_x1   jmp     #\i_trap
 
                 ret
 
@@ -4715,9 +4735,9 @@ i_readiob
                 mov     i_tmpb, #$FF
 
                 cmp     i_ea, #$20      wcz
-        if_e    jmp     #\pic_command_rd
+        if_e    jmp     #\pic_20_rd
                 cmp     i_ea, #$21      wcz
-        if_e    jmp     #\pic_data_rd
+        if_e    jmp     #\pic_21_rd
 
                 cmp     i_ea, #$A0      wcz
         if_ae   cmpr    i_ea, #$AF      wcz
@@ -4741,9 +4761,9 @@ i_writeiob
                 ' i_ea   = address
                 ' i_tmpb = data
                 cmp     i_ea, #$20      wcz
-        if_e    jmp     #\pic_command_wr
+        if_e    jmp     #\pic_20_wr
                 cmp     i_ea, #$21      wcz
-        if_e    jmp     #\pic_data_wr
+        if_e    jmp     #\pic_21_wr
 
                 cmp     i_ea, #$A0      wcz
         if_ae   cmpr    i_ea, #$AF      wcz
@@ -4835,26 +4855,52 @@ ppa_8255_wr
                 wrbyte  i_tmpb, #@ppa_io_63
                 ret     wcz
 
-' PIC 8259A
+DAT             ' PIC 8259A
+                orgh
 
-pic_command_wr
+pic_20_wr
                 testb   i_tmpb, #4      wc
                 testb   i_tmpb, #3      wz
-        if_1x   mov     pic_icw, #0
-        if_1x   mov     pic_ocw, #0
-        if_1x   mov     pic_irq, #0
-        if_1x   setbyte pic_icw, i_tmpb, #0 ' ICW1
-        if_00   setbyte pic_ocw, i_tmpb, #1 ' OCW2
-        if_01   setbyte pic_ocw, i_tmpb, #2 ' OCW3
-    if_not_00   ret     wcz
-                testb   i_tmpb, #5      wz
-        if_x1   getnib  i_temp1, pic_ocw, #6
-        if_x1   bitl    pic_irq, i_temp1
-        if_x1   bitl    pic_ocw, #28        ' acknowledge interrupt
+        if_00   jmp     #.ocw2
+        if_01   setbyte pic_ocw, i_tmpb, #PIC_OCW3_BYTE ' OCW3
+        if_01   ret
+                mov     pic_icw, #0     ' ICW1
+                mov     pic_ocw, #0
+                mov     pic_irq, #0
+                setbyte pic_ocw, #%00001010, #PIC_OCW3_BYTE
+                setnib  pic_irq, #7, #PIC_IR_NIB
+                setbyte pic_icw, i_tmpb, #0
                 ret     wcz
 
-pic_data_wr
-                bith    pic_ocw, #31    wcz
+.ocw2
+                testb   i_tmpb, #5      wz  ' EOI
+        if_x1   getnib  i_temp0, pic_irq, #PIC_IR_NIB
+        if_x1   add     i_temp0, #PIC_ISR_BYTE * 8
+        if_x1   bitl    pic_irq, i_temp0
+        if_x1   bitl    pic_irq, #PIC_IS_BIT
+        if_x1   setnib  i_temp0, #7, #PIC_IR_NIB
+                ret     wcz
+
+pic_20_rd
+                mov     i_tmpb, #0
+
+                bitl    pic_ocw, #PIC_OCW3_POLL_BIT wcz
+                testb   pic_ocw, #PIC_OCW3_RR_BIT   wz
+        if_11   jmp     #.poll
+
+                testb   pic_ocw, #PIC_OCW3_RR_BIT   wc
+                testb   pic_ocw, #PIC_OCW3_RIS_BIT  wz
+        if_10   getbyte i_tmpb, pic_irq, #PIC_IRR_BYTE
+        if_11   getbyte i_tmpb, pic_irq, #PIC_ISR_BYTE
+                ret     wcz
+
+.poll
+                call    #pic_intack
+                getbyte i_tmpb, pic_irq, #PIC_POLL_BYTE
+                ret     wcz
+
+pic_21_wr
+                bith    pic_ocw, #29    wcz
         if_0x   setbyte pic_icw, i_tmpb, #1 ' ICW2
         if_0x   ret     wcz
 
@@ -4862,25 +4908,92 @@ pic_data_wr
                 testb   pic_icw, #1     wz
         if_00   setbyte pic_icw, i_tmpb, #2 ' ICW3
         if_01   setbyte pic_icw, i_tmpb, #3 ' ICW4
-        if_01   bith    pic_ocw, #29
+        if_01   bith    pic_ocw, #31
         if_0x   ret     wcz
 
-                bith    pic_ocw, #29    wcz
+                bith    pic_ocw, #31    wcz
         if_0x   setbyte pic_icw, i_tmpb, #3 ' ICW4
         if_0x   ret     wcz
 
                 setbyte pic_ocw, i_tmpb, #0 ' OCW1 (IMR)
                 ret     wcz
 
-pic_command_rd
-                testb   pic_ocw, #16 + 1    wc
-                testb   pic_ocw, #16 + 0    wz
-        if_11   getnib  i_tmpb, pic_ocw, #6
+pic_21_rd
+                getbyte i_tmpb, pic_ocw, #PIC_OCW1_BYTE ' OCW1 (IMR)
                 ret     wcz
 
-pic_data_rd
-                setbyte i_tmpb, pic_ocw, #0 ' OCW1 (IMR)
-                ret     wcz
+pic_intack
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 0    wz
+        if_x1   setnib  pic_irq, #0, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 1    wz
+        if_x1   setnib  pic_irq, #1, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 2    wz
+        if_x1   setnib  pic_irq, #2, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 3    wz
+        if_x1   setnib  pic_irq, #3, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 4    wz
+        if_x1   setnib  pic_irq, #4, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 5    wz
+        if_x1   setnib  pic_irq, #5, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 6    wz
+        if_x1   setnib  pic_irq, #6, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 7    wz
+                setnib  pic_irq, #7, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+
+                ret
+
+CON ' PIC 8259A Constants
+
+    ' pic_icw
+    PIC_ICW1_BYTE = 0
+    PIC_ICW2_BYTE = 1
+    PIC_ICW3_BYTE = 2
+    PIC_ICW4_BYTE = 3
+
+    ' pic_ocw
+    PIC_OCW1_BYTE = 0
+    PIC_OCW2_BYTE = 1
+    PIC_OCW3_BYTE = 2
+
+    PIC_OCW3_POLL_BIT = (PIC_OCW3_BYTE * 8) + 2
+    PIC_OCW3_RR_BIT   = (PIC_OCW3_BYTE * 8) + 1
+    PIC_OCW3_RIS_BIT  = (PIC_OCW3_BYTE * 8) + 0
+
+    PIC_ICW2_BIT  = 29
+    PIC_ICW3_BIT  = 30
+    PIC_ICW4_BIT  = 31
+
+    ' pic_irq
+    PIC_IRR_BYTE  = 0
+    PIC_ISR_BYTE  = 1
+    PIC_POLL_BYTE = 3
+    PIC_IS_BIT    = 31
+    PIC_IR_NIB    = 6
+
+DAT             ' ROM and RAM
+                orgh
 
 cga_charrom     file    "CGA.F08"
 
