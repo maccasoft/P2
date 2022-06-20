@@ -30,21 +30,12 @@ DAT             ' Startup
 
                 orgh
 
-int_io_A0       byte    $00
-
 kbd_head        byte    $00
 kbd_tail        byte    $00
 kbd_buffer      byte    $FF[8]
 
                 ' CGA I/O registers
-cga_io_03D0     byte    $00
-cga_io_03D1     byte    $00
-cga_io_03D2     byte    $00
-cga_io_03D3     byte    $00
 cga_io_03D4     byte    $00         ' MC6845 Address
-cga_io_03D5     byte    $00         ' MC6845 Data
-cga_io_03D6     byte    $00
-cga_io_03D7     byte    $00
 cga_io_03D8     byte    %00000000   ' Mode Select Register (BIOS keeps current value at 40:0065)
                                     '   0: width (text modes): 0=40 clms; 1=80 clms
                                     '   1: 1=enable graphics modes; 0=text modes
@@ -65,11 +56,6 @@ cga_io_03DA     byte    %00000000   ' Read: Status Register
                                     '   2: 1=light pen switch is open; 0=closed
                                     '   3: 1=vertical sync pulse is occurring.  Display is
                                     '                 in vertical retrace--access won't cause "snow"
-cga_io_03DB     byte    $00         ' Read/Write: Light Pen Latch Reset.  Any OUT clears light pen latch.
-cga_io_03DC     byte    $00         ' Read/Write: Light Pen Latch Set.  Any OUT sets the light pen latch.
-cga_io_03DD     byte    $00
-cga_io_03DE     byte    $00
-cga_io_03DF     byte    $00
 
                 ' MC6845 registers
 cga_io_mc6845                   '         Unit        R/W         Name                  Size    40x25   80x25   Graphics
@@ -4743,10 +4729,6 @@ i_readiob
                 cmp     i_ea, #$21      wcz
         if_e    jmp     #\pic_21_rd
 
-                cmp     i_ea, #$A0      wcz
-        if_ae   cmpr    i_ea, #$AF      wcz
-        if_ae   jmp     #\nmi_mask_rd
-
                 cmp     i_ea, #$60      wcz
         if_e    jmp     #\ppi_60_rd
                 cmp     i_ea, #$61      wcz
@@ -4757,7 +4739,7 @@ i_readiob
         if_e    getbyte i_tmpb, ppi, #PPI_CTL_BYTE
 
                 cmp     i_ea, ##$03DA   wcz
-        if_e    jmp     #\cga_status_rd
+        if_e    rdbyte  i_tmpb, #@cga_io_03DA
 
                 ret     wcz
 
@@ -4769,10 +4751,6 @@ i_writeiob
                 cmp     i_ea, #$21      wcz
         if_e    jmp     #\pic_21_wr
 
-                cmp     i_ea, #$A0      wcz
-        if_ae   cmpr    i_ea, #$AF      wcz
-        if_ae   jmp     #\nmi_mask_wr
-
                 cmp     i_ea, #$60      wcz
         if_e    setbyte ppi, i_tmpb, #PPI_PA_BYTE
                 cmp     i_ea, #$61      wcz
@@ -4782,35 +4760,25 @@ i_writeiob
                 cmp     i_ea, #$63      wcz
         if_e    setbyte ppi, i_tmpb, #PPI_CTL_BYTE
 
-                cmp     i_ea, ##$03D0   wcz
-        if_ae   cmpr    i_ea, ##$03DF   wcz
-        if_ae   jmp     #\cga_write
-                ret     wcz
-
-nmi_mask_wr
-                wrbyte  i_tmpb, #@int_io_A0
-                ret     wcz
-
-nmi_mask_rd
-                rdbyte  i_tmpb, #@int_io_A0
-                ret     wcz
-
-cga_write
-                mov     pa, i_ea
-                sub     pa, ##$03D0
-                add     pa, #@cga_io_03D0
-                wrbyte  i_tmpb, pa
+                cmp     i_ea, ##$03D4   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03D4
                 cmp     i_ea, ##$03D5   wcz
-        if_ne   ret     wcz
+        if_e    jmp     #\cga_03D5_wr
+                cmp     i_ea, ##$03D8   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03D8
+                cmp     i_ea, ##$03D9   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03D9
+                cmp     i_ea, ##$03DA   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03DA
+                ret     wcz
+
+cga_03D5_wr
                 rdbyte  pa, #@cga_io_03D4
                 cmp     pa, #17         wcz
         if_a    ret     wcz
                 add     pa, #@cga_io_mc6845
                 wrbyte  i_tmpb, pa
                 ret     wcz
-
-cga_status_rd
-        _ret_   rdbyte  i_tmpb, #@cga_io_03DA
 
 DAT             ' PPI 8255A
                 orgh
