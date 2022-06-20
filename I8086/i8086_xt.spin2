@@ -3026,6 +3026,10 @@ i_readcodeb
                 incmod  i_ip, i_ffffh
                 jmp     #\i_readmemb
 
+i_readimmb
+                call    #\i_readcodeb
+        _ret_   getbyte i_data, i_tmpb, #0
+
 i_readimmw
                 call    #\i_readcodeb
                 getbyte i_data, i_tmpb, #0
@@ -3371,8 +3375,7 @@ i_readopb
         if_11   mov     pa, i_modrm
         if_11   jmp     #\i_getr8
                 call    #\i_setupea
-                call    #\i_readmemb
-        _ret_   getbyte i_data, i_tmpb, #0
+                jmp     #\i_readb
 
 i_writeopb
                 testb   i_modrm, #7         wc
@@ -3380,8 +3383,7 @@ i_writeopb
         if_11   mov     pa, i_modrm
         if_11   jmp     #\i_setr8
                 call    #\i_setupea
-                getbyte i_tmpb, i_data, #0
-                jmp     #\i_writememb
+                jmp     #\i_writeb
 
 ' --------------------------------------------------------------------
 
@@ -3391,11 +3393,7 @@ i_readopw
         if_11   mov     pa, i_modrm
         if_11   jmp     #\i_getr16
                 call    #\i_setupea
-                call    #\i_readmemb
-                getbyte i_data, i_tmpb, #0
-                add     i_ea, #1
-                call    #\i_readmemb
-        _ret_   setbyte i_data, i_tmpb, #1
+                jmp     #\i_readw
 
 i_writeopw
                 testb   i_modrm, #7         wc
@@ -3403,11 +3401,7 @@ i_writeopw
         if_11   mov     pa, i_modrm
         if_11   jmp     #\i_setr16
                 call    #\i_setupea
-                getbyte i_tmpb, i_data, #0
-                call    #\i_writememb
-                add     i_ea, #1
-                getbyte i_tmpb, i_data, #1
-                jmp     #\i_writememb
+                jmp     #\i_writew
 
 ' --------------------------------------------------------------------
 
@@ -3692,27 +3686,6 @@ i_f6f7_mathw                                    '               b:not8     %00_1
                 call    #\i_writeopw            '       | e f
                 jmp     #\i_flags16             '       d e f
 
-i_aam
-                call    #\i_readcodeb
-                getbyte i_data, i_ax, #0
-                qdiv    i_data, i_tmpb
-                getqx   i_temp0
-                getqy   i_temp1
-                setbyte i_ax, i_temp0, #1
-                setbyte i_ax, i_temp1, #0
-                getword i_data, i_ax, #0
-                jmp     #\i_flags16
-
-i_aad
-                call    #\i_readcodeb
-                getbyte i_data, i_ax, #1
-                mul     i_data, i_tmpb
-                getbyte i_temp0, i_ax, #0
-                add     i_data, i_temp0
-                getbyte i_ax, i_data, #0
-                getword i_data, i_ax, #0
-                jmp     #\i_flags16
-
 i_lseg_reg
                 call    #\i_setupmodrm      ' a b   a: lds [rm]  %00_00_00
                 call    #\i_setupea         ' a b   b: les [rm] %010_00_00
@@ -3795,23 +3768,20 @@ i_div16
                 getword i_ax, i_temp0, #0           ' a b
         _ret_   getword i_dx, i_temp1, #0           ' a b
 
-i_mov_imm
-                call    #\i_readcodeb           ' a b   a:mov_r8_nn  %00_1100
-                getbyte i_data, i_tmpb, #0      ' a b   b:mov_16_nn %010_0000
-                call    #\i_readcodeb           ' | b
-                setbyte i_data, i_tmpb, #1      ' | b
-
+i_mov_immb
+                call    #\i_readimmb            ' a     a:mov_r8_nn  %00_1_0
+i_mov_immw                                      '
+                call    #\i_readimmw            ' | b   b:mov_16_nn %010_0
+                                                '
                 mov     pa, i_opcode            ' a b
                 jmp     #\i_setr8               ' a |
                 jmp     #\i_setr16              '   b
 
 i_mov_rmod_imm
-                call    #\i_setupmodrm          ' a b   a:mov_byte_rm_imm    %0_1100_0
-                                                '       b:mov_word_rm_imm   %01_0000_0
-                call    #\i_readcodeb           ' a b
-                getbyte i_data, i_tmpb, #0      ' a b
-                call    #\i_readcodeb           ' | b
-                setbyte i_data, i_tmpb, #1      ' | b
+                call    #\i_setupmodrm          ' a b   a:mov_byte_rm_imm    %0_10_0
+                                                '       b:mov_word_rm_imm   %01_01_0
+                call    #\i_readimmb            ' a |
+                call    #\i_readimmw            ' | b
 
                 jmp     #\i_writeopb            ' a |
                 jmp     #\i_writeopw            '   b
@@ -3994,41 +3964,6 @@ i_pop
                 setbyte i_data, i_tmpb, #1
         _ret_   incmod  i_sp, i_ffffh
 
-i_daas
-                getbyte i_data, i_ax, #0
-                mov     i_data0, i_data
-                mov     i_temp0, #$00
-                cmpr    i_data, #$99        wc
-                testb   i_flags, #I_CF_BIT  orc
-        if_c    add     i_temp0, #$60
-                bitc    i_flags, #I_CF_BIT
-                getnib  i_temp1, i_data, #0
-                cmpr    i_temp1, #$9        wc
-                testb   i_flags, #I_AF_BIT  orc
-        if_c    add     i_temp0, #$06
-                testb   i_opcode, #3        wz
-                sumz    i_data, i_temp0
-                setbyte i_ax, i_data, #0
-                jmp     #i_flags8
-
-i_aaas
-                getnib  i_temp1, i_ax, #0
-                cmpr    i_temp1, #$9        wc
-                testb   i_flags, #I_AF_BIT  orc
-
-                testb   i_opcode, #3        wz
-                getbyte i_data, i_ax, #0
-        if_c    sumz    i_data, #6
-        if_c    setnib  i_data, #0, #1
-                setbyte i_ax, i_data, #0
-
-                getbyte i_data, i_ax, #1
-        if_c    sumz    i_data, #1
-                setbyte i_ax, i_data, #1
-
-                bitc    i_flags, #I_CF_BIT
-        _ret_   bitc    i_flags, #I_AF_BIT
-
 i_lods
                 cmp     i_override, #0      wz  ' a b   a=lodsb %0010_10_10_00000
         if_nz   getword i_ea, i_override, #0    ' a b   b=lodsw %0000_01_01_00000
@@ -4146,6 +4081,11 @@ i_nop
 
 i_hlt
         _ret_   decmod  i_ip, i_ffffh
+
+i_aam           jmp     #\i_aam_impl
+i_aad           jmp     #\i_aad_impl
+i_daas          jmp     #\i_daas_impl
+i_aaas          jmp     #\i_aaas
 
 i_flags8_sub
                 testb   i_data, #7          wc
@@ -4367,6 +4307,62 @@ i_rep_loop
 .ret            djnz    i_rep_cnt, #.loop
         _ret_   getword i_cx, i_rep_cnt, #0
 
+i_aam_impl
+                call    #\i_readcodeb
+                getbyte i_data, i_ax, #0
+                qdiv    i_data, i_tmpb
+                getqx   i_temp0
+                getqy   i_temp1
+                setbyte i_ax, i_temp0, #1
+                setbyte i_ax, i_temp1, #0
+                getword i_data, i_ax, #0
+                jmp     #\i_flags16
+
+i_aad_impl
+                call    #\i_readcodeb
+                getbyte i_data, i_ax, #1
+                mul     i_data, i_tmpb
+                getbyte i_temp0, i_ax, #0
+                add     i_data, i_temp0
+                getbyte i_ax, i_data, #0
+                getword i_data, i_ax, #0
+                jmp     #\i_flags16
+
+i_daas_impl
+                getbyte i_data, i_ax, #0
+                mov     i_data0, i_data
+                mov     i_temp0, #$00
+                cmpr    i_data, #$99        wc
+                testb   i_flags, #I_CF_BIT  orc
+        if_c    add     i_temp0, #$60
+                bitc    i_flags, #I_CF_BIT
+                getnib  i_temp1, i_data, #0
+                cmpr    i_temp1, #$9        wc
+                testb   i_flags, #I_AF_BIT  orc
+        if_c    add     i_temp0, #$06
+                testb   i_opcode, #3        wz
+                sumz    i_data, i_temp0
+                setbyte i_ax, i_data, #0
+                jmp     #i_flags8
+
+i_aaas_impl
+                getnib  i_temp1, i_ax, #0
+                cmpr    i_temp1, #$9        wc
+                testb   i_flags, #I_AF_BIT  orc
+
+                testb   i_opcode, #3        wz
+                getbyte i_data, i_ax, #0
+        if_c    sumz    i_data, #6
+        if_c    setnib  i_data, #0, #1
+                setbyte i_ax, i_data, #0
+
+                getbyte i_data, i_ax, #1
+        if_c    sumz    i_data, #1
+                setbyte i_ax, i_data, #1
+
+                bitc    i_flags, #I_CF_BIT
+        _ret_   bitc    i_flags, #I_AF_BIT
+
 DAT             ' 8086 Opcode Table
                 orgh
 
@@ -4561,22 +4557,22 @@ i8086_optable
                 long    i_scas         |        %0_0100_0_010_010_000 << 10 ' AE             scasb
                 long    i_scas         |       %01_0000_0_001_001_000 << 10 ' AF             scasw
 
-                long    i_mov_imm      |                     %00_1100 << 10 ' B0 nn          mov al, nn
-                long    i_mov_imm      |                     %00_1100 << 10 ' B1 nn          mov cl, nn
-                long    i_mov_imm      |                     %00_1100 << 10 ' B2 nn          mov dl, nn
-                long    i_mov_imm      |                     %00_1100 << 10 ' B3 nn          mov bl, nn
-                long    i_mov_imm      |                     %00_1100 << 10 ' B4 nn          mov ah, nn
-                long    i_mov_imm      |                     %00_1100 << 10 ' B5 nn          mov ch, nn
-                long    i_mov_imm      |                     %00_1100 << 10 ' B6 nn          mov dh, nn
-                long    i_mov_imm      |                     %00_1100 << 10 ' B7 nn          mov bh, nn
-                long    i_mov_imm      |                    %010_0000 << 10 ' B8 ll hh       mov ax, hhll
-                long    i_mov_imm      |                    %010_0000 << 10 ' B9 ll hh       mov cx, hhll
-                long    i_mov_imm      |                    %010_0000 << 10 ' BA ll hh       mov dx, hhll
-                long    i_mov_imm      |                    %010_0000 << 10 ' BB ll hh       mov bx, hhll
-                long    i_mov_imm      |                    %010_0000 << 10 ' BC ll hh       mov sp, hhll
-                long    i_mov_imm      |                    %010_0000 << 10 ' BD ll hh       mov bp, hhll
-                long    i_mov_imm      |                    %010_0000 << 10 ' BE ll hh       mov si, hhll
-                long    i_mov_imm      |                    %010_0000 << 10 ' BF ll hh       mov di, hhll
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B0 nn          mov al, nn
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B1 nn          mov cl, nn
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B2 nn          mov dl, nn
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B3 nn          mov bl, nn
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B4 nn          mov ah, nn
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B5 nn          mov ch, nn
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B6 nn          mov dh, nn
+                long    i_mov_immb     |                      %00_1_0 << 10 ' B7 nn          mov bh, nn
+                long    i_mov_immw     |                       %010_0 << 10 ' B8 ll hh       mov ax, hhll
+                long    i_mov_immw     |                       %010_0 << 10 ' B9 ll hh       mov cx, hhll
+                long    i_mov_immw     |                       %010_0 << 10 ' BA ll hh       mov dx, hhll
+                long    i_mov_immw     |                       %010_0 << 10 ' BB ll hh       mov bx, hhll
+                long    i_mov_immw     |                       %010_0 << 10 ' BC ll hh       mov sp, hhll
+                long    i_mov_immw     |                       %010_0 << 10 ' BD ll hh       mov bp, hhll
+                long    i_mov_immw     |                       %010_0 << 10 ' BE ll hh       mov si, hhll
+                long    i_mov_immw     |                       %010_0 << 10 ' BF ll hh       mov di, hhll
 
                 long    i_ret_d16      |              %00_11_11_00_00 << 10 ' C0 dl dh       ret (SP+dhdl)
                 long    i_ret          |                 %01_11_11_00 << 10 ' C1             ret
@@ -4584,8 +4580,8 @@ i8086_optable
                 long    i_ret          |                 %01_11_11_00 << 10 ' C3             ret
                 long    i_lseg_reg     |                   %010_00_00 << 10 ' C4 rm          les [rm]
                 long    i_lseg_reg     |                    %00_00_00 << 10 ' C5 rm          lds [rm]
-                long    i_mov_rmod_imm |                    %0_1100_0 << 10 ' C6 rm nn       mov byte [rmod], nn
-                long    i_mov_rmod_imm |                   %01_0000_0 << 10 ' C7 rm ll hh    mov word [rmod], hhll
+                long    i_mov_rmod_imm |                      %0_10_0 << 10 ' C6 rm nn       mov byte [rmod], nn
+                long    i_mov_rmod_imm |                     %01_01_0 << 10 ' C7 rm ll hh    mov word [rmod], hhll
                 long    i_ret_d16      |              %00_11_00_00_00 << 10 ' C8 dl dh       retf (SP+dhdl)
                 long    i_ret          |                 %01_11_00_00 << 10 ' C9             retf
                 long    i_ret_d16      |              %00_11_00_00_00 << 10 ' CA dl dh       retf (SP+dhdl)
