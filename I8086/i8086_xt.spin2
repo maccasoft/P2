@@ -19,8 +19,6 @@ DAT             ' Startup
                 org     $000
 
                 asmclk
-                drvl    #56
-                drvl    #57
 
                 coginit #3, ##@video_driver
                 coginit #1, ##@usb_host_start
@@ -575,16 +573,16 @@ host_error
 .spin
                 cmp     cmd_data, #CMD_RESET    wz
         if_z    mov     cmd_data, #ERR_NONE             ' Acknowledge client reset cmd received
-        if_z    drvl    host_error_led
+'        if_z    drvl    host_error_led
         if_z    jmp     #host_reset                     ' See if it works...
-                drvnot  host_error_led
+'                drvnot  host_error_led
                 mov     hctwait, _100ms_                ' Blink the error LED
                 call    #poll_waitx
                 rqpin   urx, dm
                 testb   urx, #SE0_RESETB        wc
         if_nc   jmp     #.spin
                 djnz    hrep, #.spin
-        if_c    drvl    host_error_led                  ' Clear the error LED
+'        if_c    drvl    host_error_led                  ' Clear the error LED
         if_c    ret                             wc      ' Handle disconnect?
                 mov     hrep, #5
                 jmp     #.spin
@@ -605,8 +603,8 @@ usb_err_code    long    ERR_NONE
 dm              long    USB_BASE_PIN + 2    ' Client defines the basepin for four consecutive USB port pins
 dp              long    USB_BASE_PIN + 3
 usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
-host_active_led long    57                  ' Client defines the LED pin# for host bus activity
-host_error_led  long    56                  ' Client defines the LED pin# to light on error
+'host_active_led long    57                  ' Client defines the LED pin# for host bus activity
+'host_error_led  long    56                  ' Client defines the LED pin# to light on error
 kb_cur_report_p long    @kb_cur_report
 kb_pre_report_p long    @kb_pre_report
 urx_buff_p      long    @urx_buff
@@ -1185,7 +1183,7 @@ disconnected
                 shr     hr1, #3                         ' Pulse the activity LED every two seconds but break
                 waitx   hr1                             ' it down to smaller wait chunks
                 incmod  mod_cnt, #8             wc
-        if_c    drvnot  host_active_led
+'        if_c    drvnot  host_active_led
                 rqpin   urx, dm
                 and     urx, #J_IDLEF | K_RESUMEF wcz   ' Wait for rise of J or K, mutually exclusive
         if_z    jmp     #disconnected                   ' J and K still low, so keep waiting for connect
@@ -1245,7 +1243,7 @@ hidle
         if_z    jmp     #host_reset                     ' See if it works...
                 getct   hr0
                 cmp     hr0, _pulse_time_       wcz     ' Connected "heartbeat"
-        if_ae   drvnot  host_active_led
+'        if_ae   drvnot  host_active_led
         if_ae   getct   _pulse_time_
         if_ae   add     _pulse_time_, _500ms_
                 jmp     #hidle
@@ -1276,7 +1274,7 @@ hwait_resume
                 shr     hr1, #2
                 waitx   hr1                             ' Pulse the activity LED every two seconds but break
                 incmod  mod_cnt, #8             wc      ' it down to smaller wait chunks
-        if_c    drvnot  host_active_led
+'        if_c    drvnot  host_active_led
                 cmp     cmd_data, #CMD_RESUME   wz
         if_nz   jmp     #hwait_resume
                 mov     htmp, ##_CLKFREQ                ' Check to see if the system frequency has changed
@@ -1323,7 +1321,7 @@ DAT             ' USB Host HUB execution
 ' USB host cog initialization.
 '------------------------------------------------------------------------------
 usb_host_init
-                drvl    host_error_led                  ' Ensure fatal error LED is inactive
+'                drvl    host_error_led                  ' Ensure fatal error LED is inactive
 '                mov     p2rev_val, ptrb                 ' Running on P2RevA or P2RevB+ silicon?
 '                setq    #1
 '                rdlong  $1e0, ptrb++
@@ -1728,7 +1726,7 @@ hget_kbd_in_report
                 rdbyte  hpar2, kb_cur_report_p
                 jmp     #\hkbd_translate                ' Repeat the key being held down and return to caller
 .data
-                drvnot  host_active_led                 ' Show keypress activity on the feedback LED
+'                drvnot  host_active_led                 ' Show keypress activity on the feedback LED
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
                 mov     hpar1, kb_next_datax
@@ -3570,7 +3568,24 @@ pic_irq         long    %00000000_00000000_00000000_00000000
                 '        |    +++----------------------------- 26..24:  # served
                 '        +------------------------------------     31: IS
 
-acia_ctl_reg    long    0
+pit_tmr0        long    %01000100_00110000_0000000000000000
+pit_tmr1        long    %01000100_00110000_0000000000000000
+pit_tmr2        long    %01000100_00110000_0000000000000000
+                '        |||  ||| |||||||| ||||||||||||||||
+                '        |||  ||| |||||||| ++++++++++++++++-  15..0: RELOAD COUNT
+                '        |||  ||| ++++++++------------------ 23..16: CONTROL REGISTER
+                '        |||  ||+---------------------------     24: 0=L / 1=H BYTE FLAG
+                '        |||  |+----------------------------     25: 1=RELOAD COUNTER
+                '        |||  +-----------------------------     26: NULL COUNTER
+                '        ||+--------------------------------     29: LATCH
+                '        |+---------------------------------     30: GATE
+                '        +----------------------------------     31: OUT
+pit_cnt0        long    %0000000000000000_0000000000000000
+pit_cnt1        long    %0000000000000000_0000000000000000
+pit_cnt2        long    %0000000000000000_0000000000000000
+                '        ||||||||||||||||| ||||||||||||||||
+                '        ||||||||||||||||| ++++++++++++++++-  15..0: COUNTER
+                '        +++++++++++++++++------------------ 31..16: LATCHED COUNT
 
 i_opcode        res     1
 i_modrm         res     1
@@ -3592,6 +3607,7 @@ i_temp1         res     1
 i_cycles        res     1
 i_opimpl        res     1
 i_rep_cnt       res     1
+i_isrt0         res     1
 
 DAT             ' 8086 LUT
                 org     $200
@@ -4670,8 +4686,11 @@ DAT ' System
                 orgh
 
 system_init
-                getct   i_temp1
-                addct1  i_temp1, ##trunc(_CLKFREQ / 18.2)
+                mov     ijmp3, ##@pit_tick
+                getct   i_temp0
+                addct3  i_temp0, #_CLKFREQ / 1_193_180
+                setint3 #EVENT_CT3
+
                 ret
 
 i_run_interrupts
@@ -4692,12 +4711,6 @@ i_run_interrupts
                 rdbyte  pb, #@kbd_head
                 cmp     pa, pb          wz
  if_nc_and_nz   bith    pic_irq, #(PIC_IRR_BYTE * 8) + 1 ' signal irq
-
-                ' irq0 - timer
-                pollct1                 wc
-        if_c    getct   i_temp1
-        if_c    addct1  i_temp1, ##trunc(_CLKFREQ / 18.2)
-        if_c    bith    pic_irq, #0         ' signal irq
 
                 testb   pic_irq, #PIC_IS_BIT    wc
                 testb   i_flags, #I_IF_BIT      wz
@@ -4729,6 +4742,11 @@ i_readiob
                 cmp     i_ea, #$21      wcz
         if_e    jmp     #\pic_21_rd
 
+                cmp     i_ea, #$40      wcz
+        if_e    jmp     #\pit_40_rd
+                cmp     i_ea, #$41      wcz
+        if_e    jmp     #\pit_41_rd
+
                 cmp     i_ea, #$60      wcz
         if_e    jmp     #\ppi_60_rd
                 cmp     i_ea, #$61      wcz
@@ -4750,6 +4768,13 @@ i_writeiob
         if_e    jmp     #\pic_20_wr
                 cmp     i_ea, #$21      wcz
         if_e    jmp     #\pic_21_wr
+
+                cmp     i_ea, #$40      wcz
+        if_e    jmp     #\pit_40_wr
+                cmp     i_ea, #$41      wcz
+        if_e    jmp     #\pit_41_wr
+                cmp     i_ea, #$43      wcz
+        if_e    jmp     #\pit_43_wr
 
                 cmp     i_ea, #$60      wcz
         if_e    setbyte ppi, i_tmpb, #PPI_PA_BYTE
@@ -4965,6 +4990,246 @@ CON ' PIC 8259A Constants
     PIC_POLL_BYTE = 3
     PIC_IS_BIT    = 31
     PIC_IR_NIB    = 6
+
+DAT             ' PIT 8254
+                orgh
+
+pit_40_wr
+                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb))
+                testb   pit_tmr0, #16 + 5   wc
+                testb   pit_tmr0, #16 + 4   wz
+        if_01   jmp     #.ctl_01 ' write counter bits 0-7 only
+        if_10   jmp     #.ctl_10 ' write counter bits 8-15 only
+        if_11   jmp     #.ctl_11 ' write counter bits 0-7 first, then 8-15
+                ret
+.ctl_01
+                setbyte pit_tmr0, i_tmpb, #0
+                setbyte pit_tmr0, #0, #1
+                bitl    pit_tmr0, #TMR_OUT
+                bitl    pit_tmr0, #TMR_NULL
+        _ret_   bith    pit_tmr0, #TMR_RELOAD   ' signal reload counter
+.ctl_10
+                setbyte pit_tmr0, #0, #0
+                setbyte pit_tmr0, i_tmpb, #1
+                bitl    pit_tmr0, #TMR_OUT
+                bitl    pit_tmr0, #TMR_NULL
+        _ret_   bith    pit_tmr0, #TMR_RELOAD   ' signal reload counter
+.ctl_11
+                bitnot  pit_tmr0, #TMR_HL   wcz
+        if_0x   setbyte pit_tmr0, i_tmpb, #0
+        if_1x   setbyte pit_tmr0, i_tmpb, #1
+        if_1x   bitl    pit_tmr0, #TMR_OUT
+        if_1x   bitl    pit_tmr0, #TMR_NULL
+        if_1x   bith    pit_tmr0, #TMR_RELOAD   ' signal reload counter
+                ret
+
+pit_40_rd
+                testb   pit_tmr0, #16 + 5   wc
+                testb   pit_tmr0, #16 + 4   wz
+        if_01   jmp     #.ctl_01 ' read counter bits 0-7 only
+        if_10   jmp     #.ctl_10 ' read counter bits 8-15 only
+        if_11   jmp     #.ctl_11 ' read counter bits 0-7 first, then 8-15
+                ret     wcz
+.ctl_01
+                bitl    pit_tmr0, #TMR_LATCH wcz
+        if_x0   getbyte i_tmpb, pit_cnt0, #0
+        if_x1   getbyte i_tmpb, pit_cnt0, #2
+                'debug("PIT  (R) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb), dly(#200))
+                ret     wcz
+.ctl_10
+        if_x0   getbyte i_tmpb, pit_cnt0, #1
+        if_x1   getbyte i_tmpb, pit_cnt0, #3
+                ret     wcz
+.ctl_11
+                bitnot  pit_tmr0, #TMR_HL   wcz
+                testb   pit_tmr0, #TMR_LATCH wz
+        if_00   getbyte i_tmpb, pit_cnt0, #0
+        if_01   getbyte i_tmpb, pit_cnt0, #2
+        if_10   getbyte i_tmpb, pit_cnt0, #1
+        if_11   getbyte i_tmpb, pit_cnt0, #3
+        if_11   bitl    pit_tmr0, #TMR_LATCH
+                ret     wcz
+
+pit_41_wr
+                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb))
+                testb   pit_tmr1, #16 + 5   wc
+                testb   pit_tmr1, #16 + 4   wz
+        if_01   jmp     #.ctl_01 ' write counter bits 0-7 only
+        if_10   jmp     #.ctl_10 ' write counter bits 8-15 only
+        if_11   jmp     #.ctl_11 ' write counter bits 0-7 first, then 8-15
+                ret
+.ctl_01
+                setbyte pit_tmr1, i_tmpb, #0
+                setbyte pit_tmr1, #0, #1
+                bitl    pit_tmr1, #TMR_OUT
+                bitl    pit_tmr1, #TMR_NULL
+        _ret_   bith    pit_tmr1, #TMR_RELOAD   ' signal reload counter
+.ctl_10
+                setbyte pit_tmr1, #0, #0
+                setbyte pit_tmr1, i_tmpb, #1
+                bitl    pit_tmr1, #TMR_OUT
+                bitl    pit_tmr1, #TMR_NULL
+        _ret_   bith    pit_tmr1, #TMR_RELOAD   ' signal reload counter
+.ctl_11
+                bitnot  pit_tmr1, #TMR_HL   wcz
+        if_0x   setbyte pit_tmr1, i_tmpb, #0
+        if_1x   setbyte pit_tmr1, i_tmpb, #1
+        if_1x   bitl    pit_tmr1, #TMR_OUT
+        if_1x   bitl    pit_tmr1, #TMR_NULL
+        if_1x   bith    pit_tmr1, #TMR_RELOAD   ' signal reload counter
+                ret
+
+pit_41_rd
+                testb   pit_tmr1, #16 + 5   wc
+                testb   pit_tmr1, #16 + 4   wz
+        if_01   jmp     #.ctl_01 ' read counter bits 0-7 only
+        if_10   jmp     #.ctl_10 ' read counter bits 8-15 only
+        if_11   jmp     #.ctl_11 ' read counter bits 0-7 first, then 8-15
+                ret     wcz
+.ctl_01
+                bitl    pit_tmr1, #TMR_LATCH wcz
+        if_x0   getbyte i_tmpb, pit_cnt1, #0
+        if_x1   getbyte i_tmpb, pit_cnt1, #2
+                'debug("PIT  (R) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb), dly(#200))
+                ret     wcz
+.ctl_10
+        if_x0   getbyte i_tmpb, pit_cnt1, #1
+        if_x1   getbyte i_tmpb, pit_cnt1, #3
+                ret     wcz
+.ctl_11
+                bitnot  pit_tmr1, #TMR_HL   wcz
+                testb   pit_tmr1, #TMR_LATCH wz
+        if_00   getbyte i_tmpb, pit_cnt1, #0
+        if_01   getbyte i_tmpb, pit_cnt1, #2
+        if_10   getbyte i_tmpb, pit_cnt1, #1
+        if_11   getbyte i_tmpb, pit_cnt1, #3
+        if_11   bitl    pit_tmr1, #TMR_LATCH
+                ret     wcz
+
+pit_43_wr
+                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb))
+                testb   i_tmpb, #5          wc
+                testb   i_tmpb, #4          wz
+        if_00   jmp     #.latch
+                testb   i_tmpb, #7          wc
+                testb   i_tmpb, #6          wz
+        if_00   setbyte pit_tmr0, i_tmpb, #2
+        if_00   bith    pit_tmr0, #TMR_NULL
+        if_01   setbyte pit_tmr1, i_tmpb, #2
+        if_01   bith    pit_tmr1, #TMR_NULL
+        if_10   setbyte pit_tmr2, i_tmpb, #2
+        if_10   bith    pit_tmr2, #TMR_NULL
+                ret     wcz
+.latch
+                testb   i_tmpb, #7          wc
+                testb   i_tmpb, #6          wz
+        if_00   setword pit_cnt0, pit_cnt0, #1
+        if_00   bith    pit_tmr0, #TMR_LATCH
+        if_01   setword pit_cnt1, pit_cnt1, #1
+        if_01   bith    pit_tmr1, #TMR_LATCH
+        if_10   setword pit_cnt2, pit_cnt1, #1
+        if_10   bith    pit_tmr2, #TMR_LATCH
+                ret     wcz
+
+pit_tick
+                getct   i_isrt0
+                addct3  i_isrt0, #_CLKFREQ / 1_193_180
+
+pit_tick0
+                testb   pit_tmr0, #TMR_GATE     wc
+                testb   pit_tmr0, #TMR_NULL     wz
+   if_nc_or_z   jmp     #pit_tick1
+
+                bitl    pit_tmr0, #TMR_RELOAD   wcz
+        if_x1   getword i_isrt0, pit_tmr0, #0
+        if_x1   setword pit_cnt0, i_isrt0, #0
+        if_x1   jmp     #pit_tick1
+
+                getbyte i_isrt0, pit_tmr0, #2
+                and     i_isrt0, #%0000_111_0
+                cmp     i_isrt0, #%0000_000_0   wz
+        if_e    jmp     #.mode0
+                cmp     i_isrt0, #%0000_010_0   wz
+        if_ne   cmp     i_isrt0, #%0000_110_0   wz
+        if_e    jmp     #.mode2
+                cmp     i_isrt0, #%0000_011_0   wz
+        if_ne   cmp     i_isrt0, #%0000_111_0   wz
+        if_e    jmp     #.mode3
+                cmp     i_isrt0, #%0000_101_0   wz
+        if_e    jmp     #.mode4
+                jmp     #pit_tick1
+
+.mode0
+                getword i_isrt0, pit_cnt0, #0
+                sub     i_isrt0, #1         wcz
+                setword pit_cnt0, i_isrt0, #0
+        if_nz   jmp     #pit_tick1
+        if_z    bith    pic_irq, #0         ' signal irq
+                jmp     #pit_tick1
+.mode2
+.mode3
+                getword i_isrt0, pit_cnt0, #0
+                sub     i_isrt0, #1         wcz
+                setword pit_cnt0, i_isrt0, #0
+        if_nz   jmp     #pit_tick1
+        if_z    bith    pit_tmr0, #TMR_RELOAD
+        if_z    bith    pic_irq, #0         ' signal irq
+                jmp     #pit_tick1
+.mode4
+                jmp     #pit_tick1
+
+pit_tick1
+                testb   pit_tmr1, #TMR_GATE     wc
+                testb   pit_tmr1, #TMR_NULL     wz
+   if_nc_or_z   jmp     #pit_tick_end
+
+                bitl    pit_tmr1, #TMR_RELOAD   wcz
+        if_x1   getword i_isrt0, pit_tmr1, #0
+        if_x1   setword pit_cnt1, i_isrt0, #0
+        if_x1   jmp     #pit_tick_end
+
+                getbyte i_isrt0, pit_tmr1, #2
+                and     i_isrt0, #%0000_111_0
+                cmp     i_isrt0, #%0000_000_0   wz
+        if_e    jmp     #.mode0
+                cmp     i_isrt0, #%0000_010_0   wz
+        if_ne   cmp     i_isrt0, #%0000_110_0   wz
+        if_e    jmp     #.mode2
+                cmp     i_isrt0, #%0000_011_0   wz
+        if_ne   cmp     i_isrt0, #%0000_111_0   wz
+        if_e    jmp     #.mode3
+                cmp     i_isrt0, #%0000_101_0   wz
+        if_e    jmp     #.mode4
+                jmp     #pit_tick_end
+
+.mode0
+                getword i_isrt0, pit_cnt1, #0
+                sub     i_isrt0, #1         wcz
+                setword pit_cnt1, i_isrt0, #0
+        'if_nz   jmp     #pit_tick_end
+                jmp     #pit_tick_end
+.mode2
+.mode3
+                getword i_isrt0, pit_cnt1, #0
+                sub     i_isrt0, #1         wcz
+                setword pit_cnt1, i_isrt0, #0
+        'if_nz   jmp     #pit_tick_end
+        if_z    bith    pit_tmr1, #TMR_RELOAD
+                jmp     #pit_tick_end
+.mode4
+                jmp     #pit_tick_end
+
+pit_tick_end
+                reti3
+
+CON ' PIT 8254 Constants
+
+    TMR_HL     = 24
+    TMR_RELOAD = 25
+    TMR_NULL   = 26
+    TMR_LATCH  = 29
+    TMR_GATE   = 30
+    TMR_OUT    = 31
 
 DAT             ' ROM and RAM
                 orgh
