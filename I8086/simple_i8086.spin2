@@ -1641,7 +1641,7 @@ i8086_optable
                 long    i_cwd          |                           %0 << 10 ' 99             cwd
                 long    i_branch       |             %00_1_0000_00_00 << 10 ' 9A ol oh sl sh call shsl:ohol
                 long    i_nop          |                           %0 << 10 ' 9B             wait
-                long    i_pushf        |                           %0 << 10 ' 9C             pushf
+                long    i_pushf        |                         %110 << 10 ' 9C             pushf
                 long    i_pop_r16      |                        %0110 << 10 ' 9D             popf
                 long    i_sahf         |                           %0 << 10 ' 9E             sahf
                 long    i_lahf         |                           %0 << 10 ' 9F             lahf
