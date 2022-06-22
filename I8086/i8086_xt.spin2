@@ -79,9 +79,7 @@ cga_io_mc6845                   '         Unit        R/W         Name          
                 byte    $00     ' R17                 Read        Light Pen (L)         8       XX      XX      XX
 
                 ' Keyboard
-kbd_head        byte    $00
-kbd_tail        byte    $00
-kbd_buffer      byte    $FF[8]
+kbd_data        byte    $00
 
                 alignl
 
@@ -1732,7 +1730,7 @@ hget_kbd_in_report
                 add     hkbd_repeat, #KBD_REPEAT_RATE   ' Set the next repeat interval
                 modc    _clr                    wc      ' Signal key pressed
                 rdbyte  hpar2, kb_cur_report_p
-                jmp     #\hkbd_translate                ' Repeat the key being held down and return to caller
+                jmp     #\hkbd_key                      ' Repeat the key being held down and return to caller
 .data
 '                drvnot  host_active_led                 ' Show keypress activity on the feedback LED
                 cmp     hpar3, #0               wz
@@ -1776,7 +1774,7 @@ hkbd_compare
                 rdbyte  hpar2, kb_cur_report_p
                 rdbyte  hpar3, kb_pre_report_p
                 cmp     hpar2, hpar3    wz
-        if_nz   call    #hkbd_translate
+        if_nz   call    #hkbd_shift
 
 .release        modc    _set    wc
                 mov     ptra, kb_pre_report_p
@@ -1792,7 +1790,7 @@ hkbd_compare
         if_z    jmp     #.rl3
                 djnz    pb, #.rl2
                 mov     hkbd_scancode, #0
-                call    #\hkbd_translate
+                call    #\hkbd_key
 .rl3            djnz    pa, #.rl1
 
                 mov     hpar3, #0
@@ -1812,7 +1810,7 @@ hkbd_compare
         if_z    jmp     #.pl3
                 djnz    pb, #.pl2
                 mov     hkbd_scancode, hpar1
-                call    #\hkbd_translate
+                call    #\hkbd_key
 .pl3            djnz    pa, #.pl1
 
 .copy           mov     ptra, kb_cur_report_p
@@ -1832,39 +1830,50 @@ hkbd_compare
 '   hpar2 - key modifiers state
 '       c - pressed (0) or released (1) flag
 '------------------------------------------------------------------------------
-hkbd_translate
-                testb   hpar2, #LEFT_SHIFTB wz
-        if_x1   mov     htmp, #$2A
-        if_x1   jmp     #\hkbd_out_char
-
-                testb   hpar2, #RIGHT_SHIFTB wz
-        if_x1   mov     htmp, #$36
-        if_x1   jmp     #\hkbd_out_char
-
-                testb   hpar2, #LEFT_CTRLB  wz
-                testb   hpar2, #RIGHT_CTRLB orz
-        if_x1   mov     htmp, #$1D
-        if_x1   jmp     #\hkbd_out_char
-
-                testb   hpar2, #LEFT_ALTB  wz
-                testb   hpar2, #RIGHT_ALTB orz
-        if_x1   mov     htmp, #$38
-        if_x1   jmp     #\hkbd_out_char
-
+hkbd_key
                 mov     htmp, hpar1
                 add     htmp, ##@kbd_table
                 rdbyte  htmp, htmp      wz
-        if_z    ret
+        if_nz   jmp     #\hkbd_out_char
+                ret
+
+hkbd_shift
+                testb   hpar3, #LEFT_SHIFTB     wc
+                testb   hpar2, #LEFT_SHIFTB     wz
+    if_c_or_z   mov     htmp, #$2A
+    if_c_or_z   jmp     #\hkbd_out_char
+
+                testb   hpar3, #RIGHT_SHIFTB    wc
+                testb   hpar2, #RIGHT_SHIFTB    wz
+    if_c_or_z   mov     htmp, #$36
+    if_c_or_z   jmp     #\hkbd_out_char
+
+                testb   hpar3, #LEFT_CTRLB      wc
+                testb   hpar2, #LEFT_CTRLB      wz
+    if_c_or_z   mov     htmp, #$1D
+    if_c_or_z   jmp     #\hkbd_out_char
+
+                testb   hpar3, #RIGHT_CTRLB     wc
+                testb   hpar2, #RIGHT_CTRLB     wz
+    if_c_or_z   mov     htmp, #$1D
+    if_c_or_z   jmp     #\hkbd_out_char
+
+                testb   hpar3, #LEFT_ALTB       wc
+                testb   hpar2, #LEFT_ALTB       wz
+    if_c_or_z   mov     htmp, #$38
+    if_c_or_z   jmp     #\hkbd_out_char
+
+                testb   hpar3, #RIGHT_ALTB      wc
+                testb   hpar2, #RIGHT_ALTB      wz
+    if_c_or_z   mov     htmp, #$38
+    if_c_or_z   jmp     #\hkbd_out_char
+
+                ret
 
 hkbd_out_char
                 'debug(uhex_byte(hpar1),ubin_byte(hpar2),uhex_byte(htmp))
                 bitc    htmp, #7
-                rdbyte  pa, #@kbd_head
-                add     pa, #@kbd_buffer
-                wrbyte  htmp, pa
-                sub     pa, #@kbd_buffer
-                incmod  pa, #7
-                wrbyte  pa, #@kbd_head
+                wrbyte  htmp, #@kbd_data
         _ret_   cogatn  #%00000001
 
 kbd_table ' Index is the key scan code
@@ -3438,8 +3447,8 @@ i_cmps
                 sumz    i_si, #1                ' a b
                 getword i_si, i_si, #0          ' a b
 
-                jmp     #\i_flags8              ' a |
-                jmp     #\i_flags16             '   b
+                jmp     #\i_flags8_sub          ' a |
+                jmp     #\i_flags16_sub         '   b
 
 i_prefixed_op
                 call    #\i_setupmodrm              ' a b c a:i_f6  %0_110_0000
@@ -3536,7 +3545,7 @@ i_optable       long    @i8086_optable
 i_rambase       long    @ram_00000
 i_cgabase       long    @ram_00000 + RAM_SIZE
 
-ppi             long    %11111111_11111111_11111111_11111111
+ppi             long    %00000000_00000000_00000000_00000000
                 '        |||||||| |||||||| |||||||| ||||||||
                 '        |||||||| |||||||| |||||||| ++++++++-- I=KB. Scancode / O=Diagnostic
                 '        |||||||| |||||||| |||||||+----------- Timer 2 Gate Speaker
@@ -3762,7 +3771,7 @@ i_mul16
                 bitz    i_flags, #I_ZF_BIT          ' a b c d
                 getbyte i_temp0, i_ax, #0           ' a | c |
                 getword i_temp0, i_dx, #0           ' | b | d
-                cmp     i_temp0, #0             wz  ' a b c d
+                testn   i_data, #$FF            wz  ' a b c d
         _ret_   bitnz   i_flags, #I_CF_BIT          ' a b c d
 
 i_div8
@@ -4061,8 +4070,8 @@ i_scas
                 sumz    i_di, #1                ' | b
                 getword i_di, i_di, #0          ' a b
 
-                jmp     #\i_flags8              ' a |
-                jmp     #\i_flags16             '   b
+                jmp     #\i_flags8_sub          ' a |
+                jmp     #\i_flags16_sub         '   b
 
 i_xlatb
                 getbyte i_temp0, i_ax, #0
@@ -4697,6 +4706,8 @@ CON             ' 8086 Constants
     I_DF_BIT = 10   ' Direction
     I_OF_BIT = 11   ' Overflow
 
+    I_KB_RESET   = 17
+
     I_LOCK_BIT   = 30
     I_NO_INT_BIT = 31
 
@@ -4833,7 +4844,7 @@ i_writeiob
                 cmp     i_ea, #$60      wcz
         if_e    setbyte ppi, i_tmpb, #PPI_PA_BYTE
                 cmp     i_ea, #$61      wcz
-        if_e    setbyte ppi, i_tmpb, #PPI_PB_BYTE
+        if_e    jmp     #ppi_61_wr
                 cmp     i_ea, #$62      wcz
         if_e    setbyte ppi, i_tmpb, #PPI_PC_BYTE
                 cmp     i_ea, #$63      wcz
@@ -4866,26 +4877,27 @@ DAT             ' PPI 8255A
 ppi_60_rd
                 testb   ppi, #PPI_PA_INPUT          wz ' PA input ?
         if_x0   getbyte i_tmpb, ppi, #PPI_PA_BYTE      ' no, return the out state
-        if_x0   ret     wcz
-
-                rdbyte  pa, #@kbd_tail
-                rdbyte  pb, #@kbd_head
-
-'                testb   ppi, #(PPI_PB_BYTE * 8) + 7  wz ' Clear keyboard ?
-'        if_x1   jmp     #.reset
-
-                cmp     pa, pb      wz
-                add     pa, #@kbd_buffer
-                rdbyte  i_tmpb, pa
-                sub     pa, #@kbd_buffer
-        if_ne   incmod  pa, #7
-                wrbyte  pa, #@kbd_tail
+        if_x1   rdbyte  i_tmpb, #@kbd_data
                 ret     wcz
+
+ppi_61_wr
+                testb   ppi, #(PPI_PB_BYTE * 8) + 6 wc
+                testb   i_tmpb, #6                  wz
+        if_01   bitnz   i_flags, #I_KB_RESET
+
+                testb   ppi, #(PPI_PB_BYTE * 8) + 7 wc
+                testb   i_tmpb, #7                  wz
+                setbyte ppi, i_tmpb, #PPI_PB_BYTE
+        if_10   jmp     #.reset
+
+                testb   i_tmpb, #(PPI_PB_BYTE * 8) + 7 wz
+        if_x1   wrbyte  #$00, #@kbd_data
+                ret     wcz
+
 .reset
-                wrbyte  #$00, #@kbd_buffer
-                wrbyte  #1, #@kbd_head
-                wrbyte  #0, #@kbd_tail
-                mov     i_tmpb, #$AA
+                bitl    i_flags, #I_KB_RESET        wcz
+        if_x1   wrbyte  #$AA, #@kbd_data
+        if_x1   bith    pic_irq, #1     ' signal irq
                 ret     wcz
 
 ppi_62_rd
