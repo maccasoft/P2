@@ -2523,8 +2523,10 @@ video_driver
         if_x0   incmod  cga_ccnt, #16 - 1   wc
         if_x1   incmod  cga_ccnt, #32 - 1   wc
         if_c    bitnot  cga_flags, #CGA_BLINK2_ON
+
                 testb   cga_mc6845_10, #6   wc
-        if_0x   bitnz   cga_flags, #CGA_BLINK2_ON
+        if_01   bitl    cga_flags, #CGA_BLINK2_ON
+        if_10   bitl    cga_flags, #CGA_BLINK2_ON
 
                 and     cga_mc6845_10, #%000_11111
                 and     cga_mc6845_11, #%000_11111
