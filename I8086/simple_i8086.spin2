@@ -624,6 +624,7 @@ i_data1         res     1
 
 i_temp0         res     1
 i_temp1         res     1
+i_temp2         res     1
 i_opimpl        res     1
 i_rep_cnt       res     1
 i_ip_start      res     1
@@ -1643,9 +1644,11 @@ i_f6_prefix
                 getqx   i_temp0
                 getqy   i_temp1
     if_c_ne_z   neg     i_temp0
-    if_c_ne_z   neg     i_temp1
+    if_z        neg     i_temp1
 
-                testn   i_temp0, #$FF           wz
+                getbyte i_temp2, i_temp0, #0
+                signx   i_temp2, #7
+                cmp     i_temp0, i_temp2        wz
         if_nz   jmp     #i_divzero
 
                 setbyte i_ax, i_temp0, #0
@@ -1786,9 +1789,11 @@ i_f7_prefix
                 getqx   i_temp0
                 getqy   i_temp1
     if_c_ne_z   neg     i_temp0
-    if_c_ne_z   neg     i_temp1
+    if_z        neg     i_temp1
 
-                testn   i_temp0, i_ffffh        wz
+                getword i_temp2, i_temp0, #0
+                signx   i_temp2, #15
+                cmp     i_temp0, i_temp2        wz
         if_nz   jmp     #i_divzero
 
                 getword i_ax, i_temp0, #0
@@ -1912,27 +1917,43 @@ i_pop_sreg
 ' --------------------------------------------------------------------
 
 i_daas
+                getbyte i_data, i_ax, #0
+
+                getword i_temp0, i_flags, #0    ' save flags
+                bitl    i_temp0, #I_AF_BIT
+                bitl    i_temp0, #I_CF_BIT
+
                 getnib  i_temp1, i_ax, #0
                 cmpr    i_temp1, #$9        wc
                 testb   i_flags, #I_AF_BIT  orc
+        if_nc   jmp     #.l1
 
                 testb   i_opcode, #3        wz
-                getbyte i_data, i_ax, #0
-        if_c    sumz    i_data, #6
-                setbyte i_ax, i_data, #0
-                bitc    i_flags, #I_AF_BIT
+                getbyte i_data1, i_ax, #0
+                sumz    i_data1, #6
+                setbyte i_data, i_data1, #0
 
-                cmpr    i_data, #$9F        wc
+                testb   i_flags, #I_CF_BIT  wc
+                testn   i_data, #$FF        wz
+   if_c_or_nz   bith    i_temp0, #I_CF_BIT
+
+                bith    i_temp0, #I_AF_BIT
+
+.l1
+                getbyte i_data1, i_ax, #0
+                cmpr    i_data1, #$99       wc
                 testb   i_flags, #I_CF_BIT  orc
+
+                testb   i_opcode, #3        wz
         if_c    sumz    i_data, #$60
+                bitc    i_temp0, #I_CF_BIT
+
                 setbyte i_ax, i_data, #0
-                bitc    i_flags, #I_CF_BIT
+                setword i_flags, i_temp0, #0
 
-                bitl    i_flags, #I_OF_BIT
-
-                testb   i_ax, #7            wz
+                testb   i_data, #7          wz
                 bitz    i_flags, #I_SF_BIT
-                test    i_ax, #$FF          wcz
+                test    i_data, #$FF        wcz
                 bitz    i_flags, #I_ZF_BIT
         _ret_   bitnc   i_flags, #I_PF_BIT
 
@@ -1951,6 +1972,8 @@ i_aaas
                 setbyte i_ax, i_data, #1
 
                 muxc    i_flags, #(1 << I_CF_BIT) | (1 << I_AF_BIT)
+
+                setnib  i_ax, #0, #1
 
                 test    i_ax, #$0F          wcz
                 bitz    i_flags, #I_ZF_BIT
@@ -2396,7 +2419,9 @@ i_cmpsb
                 call    #\i_readb
                 mov     i_data1, i_data
 
-                getword i_ea, i_ds, #0
+                testb   i_flags, #I_SEG_BIT wz
+        if_x1   getword i_ea, i_override, #0
+        if_x0   getword i_ea, i_ds, #0
                 shl     i_ea, #4
                 add     i_ea, i_si
                 call    #\i_readb
@@ -2419,7 +2444,9 @@ i_cmpsw
                 call    #\i_readw
                 mov     i_data1, i_data
 
-                getword i_ea, i_ds, #0
+                testb   i_flags, #I_SEG_BIT wz
+        if_x1   getword i_ea, i_override, #0
+        if_x0   getword i_ea, i_ds, #0
                 shl     i_ea, #4
                 add     i_ea, i_si
                 call    #\i_readw
@@ -2454,6 +2481,8 @@ i_int3          mov     i_temp0, #3
 i_int           call    #\i_readcodeb
                 mov     i_temp0, i_tmpb
 i_trap          getword i_data, i_flags, #0
+                and     i_data, ##ALL_FLAGS
+                or      i_data, i_flags_pre
                 call    #i_push
                 getword i_data, i_cs, #0
                 call    #i_push
@@ -2487,6 +2516,7 @@ i_d0_prefix
 
                 call    #\i_setupmodrm
                 call    #\i_readopb
+                mov     i_data0, i_data
 
                 cmp     i_rep_cnt, #0           wz
         if_z    ret
@@ -2596,15 +2626,17 @@ i_d0_prefix
                 jmp     #\i_writeopb
 
 .shr
+                cmp     i_rep_cnt, #1       wz  ' check count=1 for overflow
+.shr_loop
                 testb   i_data, #0          wc
                 shr     i_data, #1
-                djnz    i_rep_cnt, #.shr
+                djnz    i_rep_cnt, #.shr_loop
 
                 bitc    i_flags, #I_CF_BIT
 
-                testb   i_data0, #7         wz
-                testb   i_data, #7          xorz
-                bitz    i_flags, #I_OF_BIT
+        if_z    testb   i_data0, #7         wc  ' overflow defined only if count=1
+        if_z    bitc    i_flags, #I_OF_BIT
+        if_nz   bitl    i_flags, #I_OF_BIT
 
                 test    i_data, #$FF        wcz
                 bitz    i_flags, #I_ZF_BIT
@@ -2643,6 +2675,7 @@ i_d1_prefix
 
                 call    #\i_setupmodrm
                 call    #\i_readopw
+                mov     i_data0, i_data
 
                 cmp     i_rep_cnt, #0           wz
         if_z    ret
@@ -2754,15 +2787,17 @@ i_d1_prefix
                 jmp     #\i_writeopw
 
 .shr
+                cmp     i_rep_cnt, #1       wz  ' check count=1 for overflow
+.shr_loop
                 testb   i_data, #0          wc
                 shr     i_data, #1
-                djnz    i_rep_cnt, #.shr
+                djnz    i_rep_cnt, #.shr_loop
 
                 bitc    i_flags, #I_CF_BIT
 
-                testb   i_data0, #15        wz
-                testb   i_data, #15         xorz
-                bitz    i_flags, #I_OF_BIT
+        if_z    testb   i_data0, #15        wc  ' overflow defined only if count=1
+        if_z    bitc    i_flags, #I_OF_BIT
+        if_nz   bitl    i_flags, #I_OF_BIT
 
                 test    i_data, i_ffffh     wz
                 bitz    i_flags, #I_ZF_BIT
