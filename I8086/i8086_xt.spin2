@@ -20,7 +20,13 @@ DAT             ' Startup
 
                 asmclk
 
+                rep     @.lockmadness,#16   ' allocate all locks, to be safe...
+                locknew pb
+                nop
+.lockmadness
+
                 coginit #3, ##@video_driver
+                coginit #2, ##@pit_cog
                 coginit #1, ##@usb_host_start
                 waitx   ##_CLKFREQ * 1
                 coginit #0, ##@i8086
@@ -33,6 +39,15 @@ dma             long    $0000_0000[4] ' DMA Address / Counter registers
                 '        |||| ||||
                 '        |||| ++++------- Address
                 '        ++++------------ Count
+
+dma_ctl         long    %0_00000000000_1111_00000100_00000000
+                '        |             |||| |||||||| ||||||||
+                '        |             |||| |||||||| ||||++++-- Channel 3..0 has reached TC
+                '        |             |||| |||||||| ++++------ Channel 3..0 request
+                '        |             |||| ++++++++----------- Command register
+                '        |             ++++-------------------- Mask bits
+                '        +------------------------------------- Byte flip-flop
+dma_mode        long    %00000000_00000000_00000000_00000000 ' DMA mode registers
 
                 ' CGA I/O registers
 cga_io_03D4     byte    $00         ' MC6845 Address
@@ -81,7 +96,54 @@ cga_io_mc6845                   '         Unit        R/W         Name          
                 ' Keyboard
 kbd_data        byte    $00
 
+irq             byte    %00000000
+                '         | || ||
+                '         | || |+-- 0: Timer0
+                '         | || +--- 1: Keyboard
+                '         | |+----- 3: Serial Interface 2
+                '         | +------ 4: Serial Interface 1
+                '         +-------- 6: Floppy Disk Controller
+
                 alignl
+
+tmr0            word    %01000100_00110000
+                '        |||  ||| ||||||||
+                '        |||  ||| ++++++++------------------ 7..0: CONTROL REGISTER
+                '        |||  ||+---------------------------    8: 0=L / 1=H BYTE FLAG
+                '        |||  |+----------------------------    9: 1=RELOAD COUNTER
+                '        |||  +-----------------------------   10: 1=NULL COUNTER
+                '        ||+--------------------------------   13: 1=LATCH
+                '        |+---------------------------------   14: GATE
+                '        +----------------------------------   15: OUT
+tmr0_cnt        word    $0000
+tmr0_latch      word    $0000
+tmr0_reload     word    $0000
+
+tmr1            word    %01000100_00110000
+                '        |||  ||| ||||||||
+                '        |||  ||| ++++++++------------------ 7..0: CONTROL REGISTER
+                '        |||  ||+---------------------------    8: 0=L / 1=H BYTE FLAG
+                '        |||  |+----------------------------    9: 1=RELOAD COUNTER
+                '        |||  +-----------------------------   10: 1=NULL COUNTER
+                '        ||+--------------------------------   13: 1=LATCH
+                '        |+---------------------------------   14: GATE
+                '        +----------------------------------   15: OUT
+tmr1_cnt        word    $0000
+tmr1_latch      word    $0000
+tmr1_reload     word    $0000
+
+tmr2            word    %01000100_00110000
+                '        |||  ||| ||||||||
+                '        |||  ||| ++++++++------------------ 7..0: CONTROL REGISTER
+                '        |||  ||+---------------------------    8: 0=L / 1=H BYTE FLAG
+                '        |||  |+----------------------------    9: 1=RELOAD COUNTER
+                '        |||  +-----------------------------   10: 1=NULL COUNTER
+                '        ||+--------------------------------   13: 1=LATCH
+                '        |+---------------------------------   14: GATE
+                '        +----------------------------------   15: OUT
+tmr2_cnt        word    $0000
+tmr2_latch      word    $0000
+tmr2_reload     word    $0000
 
 DAT             ' USB Host driver
                 org     $000
@@ -1874,7 +1936,15 @@ hkbd_out_char
                 'debug(uhex_byte(hpar1),ubin_byte(hpar2),uhex_byte(htmp))
                 bitc    htmp, #7
                 wrbyte  htmp, #@kbd_data
-        _ret_   cogatn  #%00000001
+
+.wl1            locktry #0              wc
+        if_nc   jmp     #.wl1
+
+                rdbyte  htmp1, #@irq
+                bith    htmp1, #1
+                wrbyte  htmp1, #@irq
+
+        _ret_   lockrel #0
 
 kbd_table ' Index is the key scan code
           {$00} byte    $00, $00, $00, $00                      ' $03
@@ -3529,34 +3599,6 @@ pic_irq         long    %00000000_00000000_00000000_00000000
                 '        |    +++----------------------------- 26..24:  # served
                 '        +------------------------------------     31: IS
 
-pit_tmr0        long    %01000100_00110000_0000000000000000
-pit_tmr1        long    %01000100_00110000_0000000000000000
-pit_tmr2        long    %01000100_00110000_0000000000000000
-                '        |||  ||| |||||||| ||||||||||||||||
-                '        |||  ||| |||||||| ++++++++++++++++-  15..0: RELOAD COUNT
-                '        |||  ||| ++++++++------------------ 23..16: CONTROL REGISTER
-                '        |||  ||+---------------------------     24: 0=L / 1=H BYTE FLAG
-                '        |||  |+----------------------------     25: 1=RELOAD COUNTER
-                '        |||  +-----------------------------     26: NULL COUNTER
-                '        ||+--------------------------------     29: LATCH
-                '        |+---------------------------------     30: GATE
-                '        +----------------------------------     31: OUT
-pit_cnt0        long    %0000000000000000_0000000000000000
-pit_cnt1        long    %0000000000000000_0000000000000000
-pit_cnt2        long    %0000000000000000_0000000000000000
-                '        ||||||||||||||||| ||||||||||||||||
-                '        ||||||||||||||||| ++++++++++++++++-  15..0: COUNTER
-                '        +++++++++++++++++------------------ 31..16: LATCHED COUNT
-
-dma_ctl         long    %0_00000000000_1111_00000100_00000000
-                '        |             |||| |||||||| ||||||||
-                '        |             |||| |||||||| ||||++++-- Channel 3..0 has reached TC
-                '        |             |||| |||||||| ++++------ Channel 3..0 request
-                '        |             |||| ++++++++----------- Command register
-                '        |             ++++-------------------- Mask bits
-                '        +------------------------------------- Byte flip-flop
-dma_mode        long    %00000000_00000000_00000000_00000000 ' DMA mode registers
-
 i_opcode        res     1
 i_modrm         res     1
 i_modrm0        res     1
@@ -3578,8 +3620,6 @@ i_opimpl        res     1
 i_rep_cnt       res     1
 i_ip_start      res     1
 i_lastwait      res     1
-
-i_isrt0         res     1
 
 DAT             ' 8086 LUT
                 org     $200
@@ -3651,10 +3691,12 @@ i_readiob
                 ' i_tmpb = data
                 mov     i_tmpb, #$FF
 
-                cmp     i_ea, #$07      wcz
+.wl1            locktry #0              wc
+        if_nc   jmp     #.wl1
+                push    ##@@.ret
+
+                cmp     i_ea, #$0F      wcz
         if_be   jmp     #dma_rd
-                cmp     i_ea, #$08      wcz ' read status register
-        if_e    getbyte i_tmpb, dma_ctl, #0
 
                 cmp     i_ea, #$20      wcz
         if_e    jmp     #\pic_20_rd
@@ -3680,27 +3722,19 @@ i_readiob
 
                 ret     wcz
 
+.ret
+        _ret_   lockrel #0
+
 i_writeiob
                 ' i_ea   = address
                 ' i_tmpb = data
-                cmp     i_ea, #$07      wcz
+
+.wl1            locktry #0              wc
+        if_nc   jmp     #.wl1
+                push    ##@@.ret
+
+                cmp     i_ea, #$0F      wcz
         if_be   jmp     #dma_wr
-                cmp     i_ea, #$08      wcz ' write command register
-        if_e    setbyte dma_ctl, i_tmpb, #1
-                cmp     i_ea, #$09      wcz ' write request register
-        if_e    jmp     #dma_request_wr
-                cmp     i_ea, #$0A      wcz ' write single mask register
-        if_e    jmp     #dma_mask_wr
-                cmp     i_ea, #$0B      wcz ' write mode register
-        if_e    jmp     #dma_mode_wr
-                cmp     i_ea, #$0C      wcz ' clear byte pointer flip-flop
-        if_e    bitl    dma_ctl, #31
-                cmp     i_ea, #$0D      wcz ' master clear
-        if_e    jmp     #dma_clear_wr
-                cmp     i_ea, #$0E      wcz ' clear mask register
-        if_e    setnib  dma_ctl, #0, #4
-                cmp     i_ea, #$0F      wcz ' write all mask register
-        if_e    jmp     #dma_allmask_wr
 
                 cmp     i_ea, #$20      wcz
         if_e    jmp     #\pic_20_wr
@@ -3735,6 +3769,9 @@ i_writeiob
         if_e    wrbyte  i_tmpb, #@cga_io_03DA
 
                 ret     wcz
+
+.ret
+        _ret_   lockrel #0
 
 i8086_lut_end
 
@@ -4016,7 +4053,11 @@ i8086_optable
 
 i_hlt
                 bith    i_flags, #I_HALT_BIT
-        _ret_   decmod  i_ip, i_ffffh
+        {_ret_}   decmod  i_ip, i_ffffh
+                debug("**** i_hlt ****")
+                debug(uhex_word(i_cs, i_ip))
+                cogid   pa
+                cogstop pa
 
 '   add [modrm], r8
 '   or  [modrm], r8
@@ -5987,11 +6028,6 @@ DAT ' System
                 orgh
 
 system_init
-                mov     ijmp3, ##@pit_tick
-                getct   i_temp0
-                addct3  i_temp0, #_CLKFREQ / 1_193_180
-                setint3 #EVENT_CT3
-
                 ret
 
 i_run_interrupts
@@ -6007,13 +6043,17 @@ i_run_interrupts
                 ' irq3 - serial interface 2
 
                 ' irq1 - keyboard
-                pollatn             wz
-        if_x1   bith    pic_irq, #1     ' signal irq
-'                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 1    wc
-'                rdbyte  pa, #@kbd_tail
-'                rdbyte  pb, #@kbd_head
-'                cmp     pa, pb          wz
-' if_nc_and_nz   bith    pic_irq, #(PIC_IRR_BYTE * 8) + 1 ' signal irq
+'                pollatn             wz
+'        if_x1   bith    pic_irq, #1     ' signal irq
+
+.lw1            locktry #0              wc
+        if_nc   jmp     #.lw1
+
+                rdbyte  i_temp0, #@irq  wz
+                or      pic_irq, i_temp0
+                wrbyte  #0, #@irq
+
+                lockrel #0
 
                 testb   pic_irq, #PIC_IS_BIT    wc
                 testb   i_flags, #I_IF_BIT      wz
@@ -6178,34 +6218,40 @@ pic_intack
         if_01   bith    pic_irq, #PIC_IS_BIT
         if_01   ret
 
+                testb   pic_ocw, #2    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 2    wz
-        if_x1   setnib  pic_irq, #2, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
+        if_01   setnib  pic_irq, #2, #PIC_IR_NIB
+        if_01   bith    pic_irq, #PIC_IS_BIT
+        if_01   ret
 
+                testb   pic_ocw, #3    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 3    wz
-        if_x1   setnib  pic_irq, #3, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
+        if_01   setnib  pic_irq, #3, #PIC_IR_NIB
+        if_01   bith    pic_irq, #PIC_IS_BIT
+        if_01   ret
 
+                testb   pic_ocw, #4    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 4    wz
-        if_x1   setnib  pic_irq, #4, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
+        if_01   setnib  pic_irq, #4, #PIC_IR_NIB
+        if_01   bith    pic_irq, #PIC_IS_BIT
+        if_01   ret
 
+                testb   pic_ocw, #5    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 5    wz
-        if_x1   setnib  pic_irq, #5, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
+        if_01   setnib  pic_irq, #5, #PIC_IR_NIB
+        if_01   bith    pic_irq, #PIC_IS_BIT
+        if_01   ret
 
+                testb   pic_ocw, #6    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 6    wz
-        if_x1   setnib  pic_irq, #6, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
+        if_01   setnib  pic_irq, #6, #PIC_IR_NIB
+        if_01   bith    pic_irq, #PIC_IS_BIT
+        if_01   ret
 
+                testb   pic_ocw, #7    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 7    wz
                 setnib  pic_irq, #7, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_01   bith    pic_irq, #PIC_IS_BIT
 
                 ret
 
@@ -6241,186 +6287,282 @@ DAT             ' PIT 8254
                 orgh
 
 pit_40_wr
-                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb))
-                testb   pit_tmr0, #16 + 5   wc
-                testb   pit_tmr0, #16 + 4   wz
+                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb),dly(#500))
+                rdword  i_temp0, #@tmr0
+                testb   i_temp0, #5         wc
+                testb   i_temp0, #4         wz
         if_01   jmp     #.ctl_01 ' write counter bits 0-7 only
         if_10   jmp     #.ctl_10 ' write counter bits 8-15 only
         if_11   jmp     #.ctl_11 ' write counter bits 0-7 first, then 8-15
-                ret
+                ret     wcz
 .ctl_01
-                setbyte pit_tmr0, i_tmpb, #0
-                setbyte pit_tmr0, #0, #1
-                bitl    pit_tmr0, #TMR_OUT
-                bitl    pit_tmr0, #TMR_NULL
-        _ret_   bith    pit_tmr0, #TMR_RELOAD   ' signal reload counter
+                wrword  i_tmpb, #@tmr0_reload
+                'bitl    i_temp0, #TMR_OUT
+                bitl    i_temp0, #TMR_NULL
+                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
+                wrword  i_temp0, #@tmr0
+                ret     wcz
 .ctl_10
-                setbyte pit_tmr0, #0, #0
-                setbyte pit_tmr0, i_tmpb, #1
-                bitl    pit_tmr0, #TMR_OUT
-                bitl    pit_tmr0, #TMR_NULL
-        _ret_   bith    pit_tmr0, #TMR_RELOAD   ' signal reload counter
+                shl     i_tmpb, #8
+                wrword  i_tmpb, #@tmr0_reload
+                'bitl    i_temp0, #TMR_OUT
+                bitl    i_temp0, #TMR_NULL
+                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
+                wrword  i_temp0, #@tmr0
+                ret     wcz
 .ctl_11
-                bitnot  pit_tmr0, #TMR_HL   wcz
-        if_0x   setbyte pit_tmr0, i_tmpb, #0
-        if_1x   setbyte pit_tmr0, i_tmpb, #1
-        if_1x   bitl    pit_tmr0, #TMR_OUT
-        if_1x   bitl    pit_tmr0, #TMR_NULL
-        if_1x   bith    pit_tmr0, #TMR_RELOAD   ' signal reload counter
-                ret
+                bitnot  i_temp0, #TMR_HL   wcz
+                rdword  i_temp1, #@tmr0_reload
+        if_0x   setbyte i_temp1, i_tmpb, #0
+        if_1x   setbyte i_temp1, i_tmpb, #1
+                wrword  i_temp1, #@tmr0_reload
+
+                'bitl    i_temp0, #TMR_OUT
+                bitl    i_temp0, #TMR_NULL
+                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
+                wrword  i_temp0, #@tmr0
+                ret     wcz
 
 pit_40_rd
-                testb   pit_tmr0, #16 + 5   wc
-                testb   pit_tmr0, #16 + 4   wz
+                rdword  i_temp0, #@tmr0
+                testb   i_temp0, #5             wc
+                testb   i_temp0, #4             wz
         if_01   jmp     #.ctl_01 ' read counter bits 0-7 only
         if_10   jmp     #.ctl_10 ' read counter bits 8-15 only
         if_11   jmp     #.ctl_11 ' read counter bits 0-7 first, then 8-15
                 ret     wcz
 .ctl_01
-                bitl    pit_tmr0, #TMR_LATCH wcz
-        if_x0   getbyte i_tmpb, pit_cnt0, #0
-        if_x1   getbyte i_tmpb, pit_cnt0, #2
+                bitl    i_temp0, #TMR_LATCH     wcz
+        if_x0   rdword  i_temp1, #@tmr0_cnt
+        if_x1   rdword  i_temp1, #@tmr0_latch
+                getbyte i_tmpb, i_temp1, #0
+                wrword  i_temp0, #@tmr0
                 'debug("PIT  (R) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb), dly(#200))
                 ret     wcz
 .ctl_10
-        if_x0   getbyte i_tmpb, pit_cnt0, #1
-        if_x1   getbyte i_tmpb, pit_cnt0, #3
+                bitl    i_temp0, #TMR_LATCH     wcz
+        if_x0   rdword  i_temp1, #@tmr0_cnt
+        if_x1   rdword  i_temp1, #@tmr0_latch
+                getbyte i_tmpb, i_temp1, #1
+                wrword  i_temp0, #@tmr0
                 ret     wcz
 .ctl_11
-                bitnot  pit_tmr0, #TMR_HL   wcz
-                testb   pit_tmr0, #TMR_LATCH wz
-        if_00   getbyte i_tmpb, pit_cnt0, #0
-        if_01   getbyte i_tmpb, pit_cnt0, #2
-        if_10   getbyte i_tmpb, pit_cnt0, #1
-        if_11   getbyte i_tmpb, pit_cnt0, #3
-        if_11   bitl    pit_tmr0, #TMR_LATCH
+                bitnot  i_temp0, #TMR_HL        wcz
+                testb   i_temp0, #TMR_LATCH     wz
+        if_x0   rdword  i_temp1, #@tmr0_cnt
+        if_x1   rdword  i_temp1, #@tmr0_latch
+
+        if_0x   getbyte i_tmpb, i_temp1, #0
+        if_1x   getbyte i_tmpb, i_temp1, #1
+        if_11   bitl    i_temp0, #TMR_LATCH
+                wrword  i_temp0, #@tmr0
+
                 ret     wcz
 
 pit_41_wr
-                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb))
-                testb   pit_tmr1, #16 + 5   wc
-                testb   pit_tmr1, #16 + 4   wz
+                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb),dly(#500))
+                rdword  i_temp0, #@tmr1
+                testb   i_temp0, #5         wc
+                testb   i_temp0, #4         wz
         if_01   jmp     #.ctl_01 ' write counter bits 0-7 only
         if_10   jmp     #.ctl_10 ' write counter bits 8-15 only
         if_11   jmp     #.ctl_11 ' write counter bits 0-7 first, then 8-15
-                ret
+                ret     wcz
 .ctl_01
-                setbyte pit_tmr1, i_tmpb, #0
-                setbyte pit_tmr1, #0, #1
-                bitl    pit_tmr1, #TMR_OUT
-                bitl    pit_tmr1, #TMR_NULL
-        _ret_   bith    pit_tmr1, #TMR_RELOAD   ' signal reload counter
+                wrword  i_tmpb, #@tmr1_reload
+                'bitl    i_temp0, #TMR_OUT
+                bitl    i_temp0, #TMR_NULL
+                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
+                wrword  i_temp0, #@tmr1
+                ret     wcz
 .ctl_10
-                setbyte pit_tmr1, #0, #0
-                setbyte pit_tmr1, i_tmpb, #1
-                bitl    pit_tmr1, #TMR_OUT
-                bitl    pit_tmr1, #TMR_NULL
-        _ret_   bith    pit_tmr1, #TMR_RELOAD   ' signal reload counter
+                shl     i_tmpb, #8
+                wrword  i_tmpb, #@tmr1_reload
+                'bitl    i_temp0, #TMR_OUT
+                bitl    i_temp0, #TMR_NULL
+                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
+                wrword  i_temp0, #@tmr1
+                ret     wcz
 .ctl_11
-                bitnot  pit_tmr1, #TMR_HL   wcz
-        if_0x   setbyte pit_tmr1, i_tmpb, #0
-        if_1x   setbyte pit_tmr1, i_tmpb, #1
-        if_1x   bitl    pit_tmr1, #TMR_OUT
-        if_1x   bitl    pit_tmr1, #TMR_NULL
-        if_1x   bith    pit_tmr1, #TMR_RELOAD   ' signal reload counter
-                ret
+                bitnot  i_temp0, #TMR_HL   wcz
+                rdword  i_temp1, #@tmr1_reload
+        if_0x   setbyte i_temp1, i_tmpb, #0
+        if_1x   setbyte i_temp1, i_tmpb, #1
+                wrword  i_temp1, #@tmr1_reload
+
+                'bitl    i_temp0, #TMR_OUT
+                bitl    i_temp0, #TMR_NULL
+                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
+                wrword  i_temp0, #@tmr1
+                ret     wcz
 
 pit_41_rd
-                testb   pit_tmr1, #16 + 5   wc
-                testb   pit_tmr1, #16 + 4   wz
+                rdword  i_temp0, #@tmr1
+                testb   i_temp0, #5             wc
+                testb   i_temp0, #4             wz
         if_01   jmp     #.ctl_01 ' read counter bits 0-7 only
         if_10   jmp     #.ctl_10 ' read counter bits 8-15 only
         if_11   jmp     #.ctl_11 ' read counter bits 0-7 first, then 8-15
                 ret     wcz
 .ctl_01
-                bitl    pit_tmr1, #TMR_LATCH wcz
-        if_x0   getbyte i_tmpb, pit_cnt1, #0
-        if_x1   getbyte i_tmpb, pit_cnt1, #2
+                bitl    i_temp0, #TMR_LATCH     wcz
+        if_x0   rdword  i_temp1, #@tmr1_cnt
+        if_x1   rdword  i_temp1, #@tmr1_latch
+                getbyte i_tmpb, i_temp1, #0
+                wrword  i_temp0, #@tmr1
                 'debug("PIT  (R) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb), dly(#200))
                 ret     wcz
 .ctl_10
-        if_x0   getbyte i_tmpb, pit_cnt1, #1
-        if_x1   getbyte i_tmpb, pit_cnt1, #3
+                bitl    i_temp0, #TMR_LATCH     wcz
+        if_x0   rdword  i_temp1, #@tmr1_cnt
+        if_x1   rdword  i_temp1, #@tmr1_latch
+                getbyte i_tmpb, i_temp1, #1
+                wrword  i_temp0, #@tmr1
                 ret     wcz
 .ctl_11
-                bitnot  pit_tmr1, #TMR_HL   wcz
-                testb   pit_tmr1, #TMR_LATCH wz
-        if_00   getbyte i_tmpb, pit_cnt1, #0
-        if_01   getbyte i_tmpb, pit_cnt1, #2
-        if_10   getbyte i_tmpb, pit_cnt1, #1
-        if_11   getbyte i_tmpb, pit_cnt1, #3
-        if_11   bitl    pit_tmr1, #TMR_LATCH
+                bitnot  i_temp0, #TMR_HL        wcz
+                testb   i_temp0, #TMR_LATCH     wz
+        if_x0   rdword  i_temp1, #@tmr1_cnt
+        if_x1   rdword  i_temp1, #@tmr1_latch
+
+        if_0x   getbyte i_tmpb, i_temp1, #0
+        if_1x   getbyte i_tmpb, i_temp1, #1
+        if_11   bitl    i_temp0, #TMR_LATCH
+                wrword  i_temp0, #@tmr1
+
                 ret     wcz
 
 pit_43_wr
-                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb))
+                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb),dly(#500))
                 testb   i_tmpb, #5          wc
                 testb   i_tmpb, #4          wz
         if_00   jmp     #.latch
+
                 testb   i_tmpb, #7          wc
                 testb   i_tmpb, #6          wz
-        if_00   setbyte pit_tmr0, i_tmpb, #2
-        if_00   bith    pit_tmr0, #TMR_NULL
-        if_01   setbyte pit_tmr1, i_tmpb, #2
-        if_01   bith    pit_tmr1, #TMR_NULL
-        if_10   setbyte pit_tmr2, i_tmpb, #2
-        if_10   bith    pit_tmr2, #TMR_NULL
+
+        if_00   rdword  i_temp0, #@tmr0
+        if_00   setbyte i_temp0, i_tmpb, #0
+        if_00   bith    i_temp0, #TMR_NULL
+        if_00   wrword  i_temp0, #@tmr0
+
+        if_01   rdword  i_temp0, #@tmr1
+        if_01   setbyte i_temp0, i_tmpb, #0
+        if_01   bith    i_temp0, #TMR_NULL
+        if_01   wrword  i_temp0, #@tmr1
+
+        if_10   rdword  i_temp0, #@tmr2
+        if_10   setbyte i_temp0, i_tmpb, #0
+        if_10   bith    i_temp0, #TMR_NULL
+        if_10   wrword  i_temp0, #@tmr2
                 ret     wcz
 .latch
                 testb   i_tmpb, #7          wc
                 testb   i_tmpb, #6          wz
-        if_00   setword pit_cnt0, pit_cnt0, #1
-        if_00   bith    pit_tmr0, #TMR_LATCH
-        if_01   setword pit_cnt1, pit_cnt1, #1
-        if_01   bith    pit_tmr1, #TMR_LATCH
-        if_10   setword pit_cnt2, pit_cnt1, #1
-        if_10   bith    pit_tmr2, #TMR_LATCH
+
+        if_00   rdword  i_temp0, #@tmr0_cnt
+        if_00   wrword  i_temp0, #@tmr0_latch
+        if_00   rdword  i_temp0, #@tmr0
+        if_00   bith    i_temp0, #TMR_LATCH
+        if_00   wrword  i_temp0, #@tmr0
+
+        if_01   rdword  i_temp0, #@tmr1_cnt
+        if_01   wrword  i_temp0, #@tmr1_latch
+        if_01   rdword  i_temp0, #@tmr1
+        if_01   bith    i_temp0, #TMR_LATCH
+        if_01   wrword  i_temp0, #@tmr1
+
+        if_10   rdword  i_temp0, #@tmr2_cnt
+        if_10   wrword  i_temp0, #@tmr2_latch
+        if_10   rdword  i_temp0, #@tmr2
+        if_10   bith    i_temp0, #TMR_LATCH
+        if_10   wrword  i_temp0, #@tmr2
                 ret     wcz
 
-pit_tick
-                getct   i_isrt0
-                addct3  i_isrt0, #_CLKFREQ / 1_193_180
+DAT
+                org     $000
 
-pit_tick0
+pit_cog
+                mov     ijmp1, ##@pit_tick
+                getct   pit_ct
+                addct1  pit_ct, #_CLKFREQ / 1_193_180
+                setint1 #EVENT_CT1
+
+.loop
+                jmp     #.loop
+
+{
+                getct   pit_ct
+                addct1  pit_ct, #_CLKFREQ / 1_193_180
+.loop
+                pollct1             wc
+        if_nc   jmp     #.loop
+
+.lw1            locktry #0                          wc
+        if_nc   jmp     #.lw1
+                call    #pit_tick
+                lockrel #0
+
+                addct1  pit_ct, #_CLKFREQ / 1_193_180
+                jmp     #.loop
+}
+
+pit_tick
+                addct1  pit_ct, #_CLKFREQ / 1_193_180
+
 '                testb   pit_tmr0, #TMR_GATE     wc
 '                testb   pit_tmr0, #TMR_NULL     wz
 '   if_nc_or_z   jmp     #pit_tick1
 
-                testb   pit_tmr0, #TMR_NULL     wz
+                rdword  pit_tmr0, #@tmr0
+                'debug("pit_tick : ", ubin_word(pit_tmr), dly(#500))
+                testb   pit_tmr0, #TMR_NULL      wz
         if_x1   jmp     #pit_tick1
 
-                bitl    pit_tmr0, #TMR_RELOAD   wcz
-        if_x1   getword i_isrt0, pit_tmr0, #0
-        if_x1   setword pit_cnt0, i_isrt0, #0
-        if_x1   jmp     #pit_tick1
+                bitl    pit_tmr0, #TMR_RELOAD    wcz
+        if_x0   jmp     #.l1
+                rdword  pit_temp0, #@tmr0_reload
+                wrword  pit_temp0, #@tmr0_cnt
+                wrword  pit_tmr0, #@tmr0
+                jmp     #pit_tick1
 
-                getbyte i_isrt0, pit_tmr0, #2
-                and     i_isrt0, #%0000_111_0
-                cmp     i_isrt0, #%0000_000_0   wz
-        if_e    jmp     #.mode0
-                cmp     i_isrt0, #%0000_010_0   wz
-        if_ne   cmp     i_isrt0, #%0000_110_0   wz
+.l1
+                getbyte pit_temp0, pit_tmr0, #0
+                and     pit_temp0, #%0000_111_0 wz
+        if_z    jmp     #.mode0
+                cmp     pit_temp0, #%0000_010_0 wz
+        if_ne   cmp     pit_temp0, #%0000_110_0 wz
         if_e    jmp     #.mode2
-                cmp     i_isrt0, #%0000_011_0   wz
-        if_ne   cmp     i_isrt0, #%0000_111_0   wz
+                cmp     pit_temp0, #%0000_011_0 wz
+        if_ne   cmp     pit_temp0, #%0000_111_0 wz
         if_e    jmp     #.mode3
-                cmp     i_isrt0, #%0000_101_0   wz
+                cmp     pit_temp0, #%0000_101_0 wz
+                jmp     #pit_tick1
 
 .mode0
-                getword i_isrt0, pit_cnt0, #0
-                sub     i_isrt0, #1         wcz
-                setword pit_cnt0, i_isrt0, #0
+                rdword  pit_temp0, #@tmr0_cnt
+                sub     pit_temp0, #1           wcz
+                wrword  pit_temp0, #@tmr0_cnt
         if_nz   jmp     #pit_tick1
-        if_z    bith    pic_irq, #0         ' signal irq
+
+                rdbyte  pit_temp0, #@irq
+                bith    pit_temp0, #0
+                wrbyte  pit_temp0, #@irq
+
                 jmp     #pit_tick1
 .mode2
 .mode3
-                getword i_isrt0, pit_cnt0, #0
-                sub     i_isrt0, #1         wcz
-                setword pit_cnt0, i_isrt0, #0
+                rdword  pit_temp0, #@tmr0_cnt
+                sub     pit_temp0, #1           wcz
+                wrword  pit_temp0, #@tmr0_cnt
         if_nz   jmp     #pit_tick1
-        if_z    bith    pit_tmr0, #TMR_RELOAD
-        if_z    bith    pic_irq, #0         ' signal irq
+                bith    pit_tmr0, #TMR_RELOAD
+                wrword  pit_tmr0, #@tmr0
+
+                rdbyte  pit_temp0, #@irq
+                bith    pit_temp0, #0
+                wrbyte  pit_temp0, #@irq
+
                 jmp     #pit_tick1
 
 pit_tick1
@@ -6428,133 +6570,205 @@ pit_tick1
 '                testb   pit_tmr1, #TMR_NULL     wz
 '   if_nc_or_z   jmp     #pit_tick_end
 
-                testb   pit_tmr1, #TMR_NULL     wz
-        if_x1   jmp     #pit_tick_end
+                rdword  pit_tmr1, #@tmr1
+                'debug("*** pit_tick1 *** ", ubin_word(pit_tmr),dly(#200))
+                testb   pit_tmr1, #TMR_NULL      wz
+        if_x1   jmp     #pit_tick2
 
-                bitl    pit_tmr1, #TMR_RELOAD   wcz
-        if_x1   getword i_isrt0, pit_tmr1, #0
-        if_x1   setword pit_cnt1, i_isrt0, #0
-        if_x1   jmp     #pit_tick_end
+                bitl    pit_tmr1, #TMR_RELOAD    wcz
+        if_x0   jmp     #.l1
+                rdword  pit_temp0, #@tmr1_reload
+                wrword  pit_temp0, #@tmr1_cnt
+                wrword  pit_tmr1, #@tmr1
+                jmp     #pit_tick2
 
-                getbyte i_isrt0, pit_tmr1, #2
-                and     i_isrt0, #%0000_111_0
-                cmp     i_isrt0, #%0000_000_0   wz
-        if_e    jmp     #.mode0
-                cmp     i_isrt0, #%0000_010_0   wz
-        if_ne   cmp     i_isrt0, #%0000_110_0   wz
+.l1             getbyte pit_temp0, pit_tmr1, #0
+                and     pit_temp0, #%0000_111_0 wz
+        if_z    jmp     #.mode0
+                cmp     pit_temp0, #%0000_010_0 wz
+        if_ne   cmp     pit_temp0, #%0000_110_0 wz
         if_e    jmp     #.mode2
-                cmp     i_isrt0, #%0000_011_0   wz
-        if_ne   cmp     i_isrt0, #%0000_111_0   wz
+                cmp     pit_temp0, #%0000_011_0 wz
+        if_ne   cmp     pit_temp0, #%0000_111_0 wz
         if_e    jmp     #.mode3
-                jmp     #pit_tick_end
+                cmp     pit_temp0, #%0000_101_0 wz
+                jmp     #pit_tick2
 
 .mode0
-                getword i_isrt0, pit_cnt1, #0
-                sub     i_isrt0, #1         wcz
-                setword pit_cnt1, i_isrt0, #0
-                jmp     #pit_tick_end
+                rdword  pit_temp0, #@tmr1_cnt
+                sub     pit_temp0, #1           wcz
+                wrword  pit_temp0, #@tmr1_cnt
+                'debug("*** pit_tick1.mode0 *** ", ubin_word(pit_temp0),dly(#200))
+                jmp     #pit_tick2
 .mode2
 .mode3
-                getword i_isrt0, pit_cnt1, #0
-                sub     i_isrt0, #1         wcz
-                setword pit_cnt1, i_isrt0, #0
-        if_nz   jmp     #pit_tick_end
+                rdword  pit_temp0, #@tmr1_cnt
+                sub     pit_temp0, #1           wcz
+                wrword  pit_temp0, #@tmr1_cnt
+                'debug("*** pit_tick1.mode0 *** ", ubin_word(pit_temp0),dly(#200))
+        if_nz   jmp     #pit_tick2
                 bith    pit_tmr1, #TMR_RELOAD
+                wrword  pit_tmr1, #@tmr1
+                'debug("DMA TMR0 : ", ubin_long(dma_ctl),dly(#500))
 
                 ' DMA
-                testb   dma_ctl, #8 + 2     wz  ' controller enable
-        if_x1   jmp     #pit_tick_end
-                testb   dma_ctl, #16 + 0    wz  ' ch0 mask
-        if_x1   jmp     #pit_tick_end
-                bitl    dma_ctl, #4 + 0     wcz ' ch0 request
+                rdlong  pit_dma_ctl, #@dma_ctl
+                testb   pit_dma_ctl, #8 + 2     wz  ' controller enable
+        if_x1   jmp     #pit_tick2
+                testb   pit_dma_ctl, #16 + 0    wz  ' ch0 mask
+        if_x1   jmp     #pit_tick2
+                bitl    pit_dma_ctl, #4 + 0     wcz ' ch0 request
         'if_x0   jmp     #pit_tick_end
-                testb   dma_mode, #4        wz  ' auto init
-        if_x0   jmp     #pit_tick_end
-                'debug("DMA TMR0 : ", ubin_long(dma_ctl))
 
-                rdword  i_isrt0, #@dma          ' ch0 address
-                incmod  i_isrt0, i_ffffh
-                wrword  i_isrt0, #@dma
-                rdword  i_isrt0, #@dma + 2      ' ch0 counter
-                sub     i_isrt0, #1         wz
-                wrword  i_isrt0, #@dma + 2
-        if_z    bith    dma_ctl, #0             ' signal ch0 end
+                rdlong  pit_dma_mode, #@dma_mode
+                testb   pit_dma_mode, #4        wz  ' auto init
+        if_x0   jmp     #pit_tick2
 
-                jmp     #pit_tick_end
+                rdword  pit_temp0, #@dma            ' ch0 address
+                incmod  pit_temp0, i_ffffh
+                wrword  pit_temp0, #@dma
+                rdword  pit_temp0, #@dma + 2        ' ch0 counter
+                sub     pit_temp0, #1           wz
+                wrword  pit_temp0, #@dma + 2
+        if_z    bith    pit_dma_ctl, #0             ' signal ch0 end
 
+                wrlong  pit_dma_ctl, #@dma_ctl
+
+                jmp     #pit_tick2
+
+pit_tick2
 pit_tick_end
-                reti3
+                reti1
+
+pit_ct          res     1
+pit_tmr0        res     1
+pit_tmr1        res     1
+pit_tmr2        res     1
+
+pit_temp0       res     1
+pit_temp1       res     1
+pit_temp2       res     1
+
+pit_dma_ctl     res     1
+pit_dma_mode    res     1
+
+                fit     $1F0
 
 CON ' PIT 8254 Constants
 
-    TMR_HL     = 24
-    TMR_RELOAD = 25
-    TMR_NULL   = 26
-    TMR_LATCH  = 29
-    TMR_GATE   = 30
-    TMR_OUT    = 31
+    TMR_HL     =  8
+    TMR_RELOAD =  9
+    TMR_NULL   = 10
+    TMR_LATCH  = 13
+    TMR_GATE   = 14
+    TMR_OUT    = 15
 
 DAT             ' DMA 8237A
                 orgh
 
-dma_wr
-                bitnot  dma_ctl, #31    wcz
-                mov     i_temp0, i_ea
-                rcl     i_temp0, #1
-                add     i_temp0, #@dma
-                wrbyte  i_tmpb, i_temp0
+dma_rd
+                rdlong  i_temp0, #@dma_ctl
+
+                cmp     i_ea, #$07      wcz
+        if_be   jmp     #dma_addr_rd
+                cmp     i_ea, #$08      wcz ' read status register
+        if_e    getbyte i_tmpb, i_temp0, #0
                 ret     wcz
 
-dma_rd
-                bitnot  dma_ctl, #31    wcz
-                mov     i_temp0, i_ea
-                rcl     i_temp0, #1
-                add     i_temp0, #@dma
-                rdbyte  i_tmpb, i_temp0
+dma_addr_rd
+                bitnot  i_temp0, #31    wcz
+                wrlong  i_temp0, #@dma_ctl
+
+                mov     i_temp2, i_ea
+                rcl     i_temp2, #1
+                add     i_temp2, #@dma
+                rdbyte  i_tmpb, i_temp2
+
+                ret     wcz
+
+dma_wr
+                rdlong  i_temp0, #@dma_ctl
+
+                cmp     i_ea, #$07      wcz
+        if_be   jmp     #dma_addr_wr
+                cmp     i_ea, #$09      wcz ' write request register
+        if_e    jmp     #dma_request_wr
+                cmp     i_ea, #$0A      wcz ' write single mask register
+        if_e    jmp     #dma_mask_wr
+                cmp     i_ea, #$0B      wcz ' write mode register
+        if_e    jmp     #dma_mode_wr
+                cmp     i_ea, #$0D      wcz ' master clear
+        if_e    jmp     #dma_clear_wr
+                cmp     i_ea, #$0F      wcz ' write all mask register
+        if_e    jmp     #dma_allmask_wr
+
+                cmp     i_ea, #$08      wcz ' write command register
+        if_e    setbyte i_temp0, i_tmpb, #1
+                cmp     i_ea, #$0C      wcz ' clear byte pointer flip-flop
+        if_e    bitl    i_temp0, #31
+                cmp     i_ea, #$0E      wcz ' clear mask register
+        if_e    setnib  i_temp0, #0, #4
+                wrlong  i_temp0, #@dma_ctl
+                ret     wcz
+
+dma_addr_wr
+                bitnot  i_temp0, #31    wcz
+                wrlong  i_temp0, #@dma_ctl
+
+                mov     i_temp2, i_ea
+                rcl     i_temp2, #1
+                add     i_temp2, #@dma
+                wrbyte  i_tmpb, i_temp2
+
                 ret     wcz
 
 dma_request_wr
                 testb   i_tmpb, #1      wc
                 testb   i_tmpb, #0      wz
-        if_00   mov     i_temp0, #%0001_0000
-        if_00   bitl    dma_ctl, #0
-        if_01   mov     i_temp0, #%0010_0000
-        if_01   bitl    dma_ctl, #1
-        if_10   mov     i_temp0, #%0100_0000
-        if_10   bitl    dma_ctl, #2
-        if_11   mov     i_temp0, #%1000_0000
-        if_11   bitl    dma_ctl, #3
+        if_00   mov     i_temp2, #%0001_0000
+        if_00   bitl    i_temp0, #0
+        if_01   mov     i_temp2, #%0010_0000
+        if_01   bitl    i_temp0, #1
+        if_10   mov     i_temp2, #%0100_0000
+        if_10   bitl    i_temp0, #2
+        if_11   mov     i_temp2, #%1000_0000
+        if_11   bitl    i_temp0, #3
                 testb   i_tmpb, #2      wz
-                muxz    dma_ctl, i_temp0
+                muxz    i_temp0, i_temp2
+                wrlong  i_temp0, #@dma_ctl
                 ret     wcz
 
 dma_mask_wr
                 testb   i_tmpb, #1      wc
                 testb   i_tmpb, #0      wz
-        if_00   mov     i_temp0, #%0001
-        if_01   mov     i_temp0, #%0010
-        if_10   mov     i_temp0, #%0100
-        if_11   mov     i_temp0, #%1000
-                shl     i_temp0, #16
+        if_00   mov     i_temp2, #%0001
+        if_01   mov     i_temp2, #%0010
+        if_10   mov     i_temp2, #%0100
+        if_11   mov     i_temp2, #%1000
+                shl     i_temp2, #16
                 testb   i_tmpb, #2      wz
-                muxz    dma_ctl, i_temp0
+                muxz    i_temp0, i_temp2
+                wrlong  i_temp0, #@dma_ctl
                 ret     wcz
 
 dma_allmask_wr
-                setnib  dma_ctl, i_tmpb, #4
+                setnib  i_temp0, i_tmpb, #4
+                wrlong  i_temp0, #@dma_ctl
                 ret     wcz
 
 dma_mode_wr
                 testb   i_tmpb, #1      wc
                 testb   i_tmpb, #0      wz
-        if_00   setbyte dma_mode, i_tmpb, #0
-        if_01   setbyte dma_mode, i_tmpb, #1
-        if_10   setbyte dma_mode, i_tmpb, #2
-        if_11   setbyte dma_mode, i_tmpb, #3
+                rdlong  i_temp1, #@dma_mode
+        if_00   setbyte i_temp1, i_tmpb, #0
+        if_01   setbyte i_temp1, i_tmpb, #1
+        if_10   setbyte i_temp1, i_tmpb, #2
+        if_11   setbyte i_temp1, i_tmpb, #3
+                wrlong  i_temp1, #@dma_mode
                 ret     wcz
 
 dma_clear_wr
-                mov     dma_ctl, ##%0_00000000000_1111_00000100_00000000
+                wrlong  ##%0_00000000000_1111_00000100_00000000, #@dma_ctl
                 wrlong  #0, #@dma
                 wrlong  #0, #@dma + 4
                 ret     wcz
