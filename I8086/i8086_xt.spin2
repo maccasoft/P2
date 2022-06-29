@@ -35,19 +35,22 @@ DAT             ' Startup
                 orgh
 
                 ' DMA
-dma             long    $0000_0000[4] ' DMA Address / Counter registers
+dma             long    $0000_0000[4]   ' DMA Address / Counter registers
                 '        |||| ||||
                 '        |||| ++++------- Address
                 '        ++++------------ Count
 
-dma_ctl         long    %0_00000000000_1111_00000100_00000000
+dma_page        byte    $00[4]          ' DMA Page registers
+
+dma_ctl         long    %0_00000000000_1111_00000100_00000000   ' DMA control registers
                 '        |             |||| |||||||| ||||||||
-                '        |             |||| |||||||| ||||++++-- Channel 3..0 has reached TC
-                '        |             |||| |||||||| ++++------ Channel 3..0 request
-                '        |             |||| ++++++++----------- Command register
-                '        |             ++++-------------------- Mask bits
-                '        +------------------------------------- Byte flip-flop
-dma_mode        long    %00000000_00000000_00000000_00000000 ' DMA mode registers
+                '        |             |||| |||||||| ||||++++------ Channel 3..0 has reached TC
+                '        |             |||| |||||||| ++++---------- Channel 3..0 request
+                '        |             |||| ++++++++--------------- Command register
+                '        |             ++++------------------------ Mask bits
+                '        +----------------------------------------- Byte flip-flop
+
+dma_mode        long    %00000000_00000000_00000000_00000000    ' DMA mode registers
 
                 ' CGA I/O registers
 cga_io_03D4     byte    $00         ' MC6845 Address
@@ -104,7 +107,7 @@ irq             byte    %00000000
                 '         | +------ 4: Serial Interface 1
                 '         +-------- 6: Floppy Disk Controller
 
-                alignl
+                alignw
 
 tmr0            word    %01000100_00110000
                 '        |||  ||| ||||||||
@@ -144,6 +147,18 @@ tmr2            word    %01000100_00110000
 tmr2_cnt        word    $0000
 tmr2_latch      word    $0000
 tmr2_reload     word    $0000
+
+fdc_dor         byte    %00000000
+fdc_msr         byte    %00000000
+
+fdc_fifo        byte    $00[16]
+fdc_fifo_head   byte    0
+fdc_fifo_tail   byte    0
+
+fdc_cmd         byte    $00[16]
+fdc_cmd_len     byte    0
+
+                alignl
 
 DAT             ' USB Host driver
                 org     $000
@@ -3538,14 +3553,14 @@ i_bp            long    $0000
 i_si            long    $0000
 i_di            long    $0000
 
-i_cs            long    $F000
+i_cs            long    $FFFF
 i_ds            long    $0000
 i_es            long    $0000
 i_ss            long    $0000
 
 i_flags         long    $0000
 i_flags_pre     long    $F002
-i_ip            long    $FFF0
+i_ip            long    $0000
 
 i_cycles        long    0
 i_total         long    0
@@ -3697,6 +3712,13 @@ i_readiob
 
                 cmp     i_ea, #$0F      wcz
         if_be   jmp     #dma_rd
+        if_e    rdbyte  i_tmpb, #@dma_page + 2
+                cmp     i_ea, #$82      wcz
+        if_e    rdbyte  i_tmpb, #@dma_page + 3
+                cmp     i_ea, #$83      wcz
+        if_e    rdbyte  i_tmpb, #@dma_page + 1
+                cmp     i_ea, #$87      wcz
+        if_e    rdbyte  i_tmpb, #@dma_page + 0
 
                 cmp     i_ea, #$20      wcz
         if_e    jmp     #\pic_20_rd
@@ -3720,6 +3742,13 @@ i_readiob
                 cmp     i_ea, ##$03DA   wcz
         if_e    rdbyte  i_tmpb, #@cga_io_03DA
 
+                cmp     i_ea, ##$03F1   wcz
+        if_e    mov     i_tmpb, #%01010000
+                cmp     i_ea, ##$03F4   wcz
+        if_e    jmp     #fdc_status_rd
+                cmp     i_ea, ##$03F5   wcz
+        if_e    jmp     #fdc_data_rd
+
                 ret     wcz
 
 .ret
@@ -3735,6 +3764,14 @@ i_writeiob
 
                 cmp     i_ea, #$0F      wcz
         if_be   jmp     #dma_wr
+                cmp     i_ea, #$81      wcz
+        if_e    wrbyte  i_tmpb, #@dma_page + 2
+                cmp     i_ea, #$82      wcz
+        if_e    wrbyte  i_tmpb, #@dma_page + 3
+                cmp     i_ea, #$83      wcz
+        if_e    wrbyte  i_tmpb, #@dma_page + 1
+                cmp     i_ea, #$87      wcz
+        if_e    wrbyte  i_tmpb, #@dma_page + 0
 
                 cmp     i_ea, #$20      wcz
         if_e    jmp     #\pic_20_wr
@@ -3768,10 +3805,49 @@ i_writeiob
                 cmp     i_ea, ##$03DA   wcz
         if_e    wrbyte  i_tmpb, #@cga_io_03DA
 
+                cmp     i_ea, ##$03F2   wcz
+        if_e    jmp     #fdc_dor_wr
+                cmp     i_ea, ##$03F5   wcz
+        if_e    jmp     #fdc_data_wr
+
                 ret     wcz
 
 .ret
         _ret_   lockrel #0
+
+fdc_status_rd
+                rdbyte  i_tmpb, #@fdc_msr
+                ret     wcz
+
+fdc_data_rd
+                mov     i_tmpb, #$00
+                rdbyte  i_temp0, #@fdc_fifo_tail
+                rdbyte  i_temp1, #@fdc_fifo_head
+                cmp     i_temp0, i_temp1    wcz
+        if_e    ret     wcz
+                add     i_temp0, #@fdc_fifo
+                rdbyte  i_tmpb, i_temp0
+                sub     i_temp0, #@fdc_fifo
+                incmod  i_temp0, #16 - 1
+                wrbyte  i_temp0, #@fdc_fifo_tail
+                ret     wcz
+
+fdc_dor_wr
+                wrbyte  i_tmpb, #@fdc_dor
+                ret     wcz
+
+fdc_data_wr
+                rdbyte  i_temp0, #@fdc_msr
+                testb   i_temp0, #MSR_BUSY      wz
+        if_x1   ret     wcz
+                rdbyte  i_temp0, #@fdc_cmd_len
+                cmp     i_temp0, #9             wcz
+        if_ae   ret     wcz
+                add     i_temp0, #@fdc_cmd
+                wrbyte  i_tmpb, i_temp0
+                sub     i_temp0, #@fdc_cmd - 1
+                wrbyte  i_temp0, #@fdc_cmd_len
+                ret     wcz
 
 i8086_lut_end
 
@@ -6483,29 +6559,348 @@ DAT
                 org     $000
 
 pit_cog
-                mov     ijmp1, ##@pit_tick
                 getct   pit_ct
                 addct1  pit_ct, #_CLKFREQ / 1_193_180
-                setint1 #EVENT_CT1
 
 .loop
+                pollct1 wc
+        if_c    call    #pit_tick
+                call    #fdc_nec765
                 jmp     #.loop
 
-{
-                getct   pit_ct
-                addct1  pit_ct, #_CLKFREQ / 1_193_180
-.loop
-                pollct1             wc
-        if_nc   jmp     #.loop
+fdc_nec765
+                rdbyte  fdc_tmp0, ##@@fdc_dor
 
-.lw1            locktry #0                          wc
-        if_nc   jmp     #.lw1
-                call    #pit_tick
-                lockrel #0
+                testb   _fdc_dor, #DOR_RESET    wc
+                testb   fdc_tmp0, #DOR_RESET    wz
+                setbyte _fdc_dor, fdc_tmp0, #0
+        if_01   jmp     #.reset
 
-                addct1  pit_ct, #_CLKFREQ / 1_193_180
-                jmp     #.loop
-}
+                testb   fdc_drive+0, #30        wz
+                bitz    _fdc_msr, #MSR_DRIVE1_POS_MODE
+                testb   fdc_drive+1, #30        wz
+                bitz    _fdc_msr, #MSR_DRIVE2_POS_MODE
+                testb   fdc_drive+2, #30        wz
+                bitz    _fdc_msr, #MSR_DRIVE3_POS_MODE
+                testb   fdc_drive+3, #30        wz
+                bitz    _fdc_msr, #MSR_DRIVE4_POS_MODE
+
+                rdbyte  fdc_tmp0, ##@@fdc_fifo_tail
+                rdbyte  fdc_tmp1, ##@@fdc_fifo_head
+                cmp     fdc_tmp0, fdc_tmp1      wz
+                bitnz   _fdc_msr, #MSR_BUSY
+                bitnz   _fdc_msr, #MSR_DATAIO
+
+                wrbyte  _fdc_msr, ##@@fdc_msr
+        if_nz   ret
+
+                rdbyte  _len, ##@@fdc_cmd_len   wz
+        if_z    ret
+
+                rdbyte  _cmd, ##@@fdc_cmd
+                and     _cmd, #$0F
+                cmp     _cmd, #CMD_READ_TRACK   wz
+        if_e    jmp     #.read_track
+                cmp     _cmd, #CMD_SPECIFY      wz
+        if_e    jmp     #.specify
+                cmp     _cmd, #CMD_CHECK_STAT   wz
+        if_e    jmp     #.check_stat
+                cmp     _cmd, #CMD_WRITE_SECT   wz
+        if_e    jmp     #.write_sect
+                cmp     _cmd, #CMD_READ_SECT    wz
+        if_e    jmp     #.read_sect
+                cmp     _cmd, #CMD_CALIBRATE    wz
+        if_e    jmp     #.calibrate
+                cmp     _cmd, #CMD_CHECK_INT    wz
+        if_e    jmp     #.check_int
+                cmp     _cmd, #CMD_WRITE_DEL_S  wz
+        if_e    jmp     #.write_del_s
+                cmp     _cmd, #CMD_READ_ID_S    wz
+        if_e    jmp     #.read_id_s
+                cmp     _cmd, #CMD_READ_DEL_S   wz
+        if_e    jmp     #.read_del_s
+                cmp     _cmd, #CMD_FORMAT_TRACK wz
+        if_e    jmp     #.format_track
+                cmp     _cmd, #CMD_SEEK         wz
+        if_e    jmp     #.seek
+
+                mov     pa, #STATUS0_INT_INVALID
+                call    #fdc_fifo_write
+
+                bitl    _fdc_msr, #MSR_BUSY
+                bith    _fdc_msr, #MSR_DATAIO
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.reset
+                mov     _fdc_msr, #(1<<MSR_DATAREG)|(1<<MSR_BUSY)|(1<<MSR_NDMA)
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+                wrword  #0, ##@@fdc_fifo_head
+                wrbyte  #0, ##@@fdc_cmd_len
+
+                setbyte fdc_status, #STATUS0_INT_ABNORMAL_POLL, #0
+
+                mov     fdc_drvnum, #0              ' reset current drive numer
+                bitl    fdc_drive+0, #30            ' stop seeking for all drives
+                bitl    fdc_drive+1, #30            ' |
+                bitl    fdc_drive+2, #30            ' |
+                bitl    fdc_drive+3, #30            ' |
+
+                getct   fdc_tmp1                    ' delay a bit
+                addct3  fdc_tmp1, ##_CLKFREQ / 1000 ' |
+.l1             pollct3 wc                          ' |
+        if_nc   jmp     #.l1                        ' |
+
+                bitl    _fdc_msr, #MSR_BUSY
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+                testb   _fdc_dor, #DOR_INT_ENABLE   wz ' generate interrupt 6
+        if_x1   rdbyte  fdc_tmp0, #@irq
+        if_x1   bith    fdc_tmp0, #6
+        if_x1   wrbyte  fdc_tmp0, #@irq
+
+                ret
+
+.read_track
+                cmp     _len, #9                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.specify
+                cmp     _len, #3                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+                rdbyte  fdc_tmp0, ##@fdc_cmd+2
+                testb   fdc_tmp0, #0            wz
+                bitnz   _fdc_msr, #MSR_NDMA
+                bitz    _fdc_dor, #31
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.check_stat
+                cmp     _len, #2                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.write_sect
+                cmp     _len, #9                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.read_sect
+                cmp     _len, #9                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+                rdbyte  pa, ##@@fdc_cmd+1           ' drive number
+                and     pa, #%00000011              ' |
+
+                alts    pa, #fdc_drive              ' get drive data
+                getbyte fdc_tmp0, 0-0, #0           ' | (keep current track position)
+
+                rdbyte  fdc_tmp1, ##@@fdc_cmd+2     ' request track
+                setbyte fdc_tmp0, fdc_tmp1, #2      ' | to byte 2
+
+                rdbyte  fdc_tmp1, ##@@fdc_cmd+3     ' head
+                testb   fdc_tmp1, #0            wz  ' |
+                bitz    fdc_tmp0, #24               ' |
+
+                rdbyte  fdc_tmp1, ##@@fdc_cmd+4     ' sector
+                setbyte fdc_tmp0, fdc_tmp1, #1      ' | to byte 1
+
+                bith    fdc_tmp0, #30               ' seeking
+                bith    _fdc_msr, #MSR_BUSY         ' busy
+
+                altd    pa, #fdc_drive              ' update drive data
+                mov     0-0, fdc_tmp0               ' |
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.calibrate
+                cmp     _len, #2                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+                rdbyte  fdc_drvnum, ##@@fdc_cmd+1   ' drive number
+                and     fdc_drvnum, #%00000011      ' |
+
+                alts    fdc_drvnum, #fdc_drive      ' get drive data
+                mov     fdc_tmp0, 0-0               ' |
+
+                setbyte fdc_tmp0, #0, #2            ' request track 0
+                bith    fdc_tmp0, #30               ' seeking
+                bith    _fdc_msr, #MSR_BUSY         ' busy
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+                altd    fdc_drvnum, #fdc_drive      ' update drive data
+                mov     0-0, fdc_tmp0               ' |
+
+                wrbyte  #$00, ##@@fdc_cmd_len
+
+                getct   fdc_tmp1
+                addct3  fdc_tmp1, ##_CLKFREQ / 1000
+.l2             pollct3                         wc
+        if_nc   jmp     #.l2
+
+                bith    fdc_status, #STATUS0_SE
+                bith    fdc_status, #STATUS3_TRK0
+
+                bitl    _fdc_msr, #MSR_BUSY         ' ready
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+                testb   _fdc_dor, #DOR_INT_ENABLE   wz
+        if_x1   rdbyte  fdc_tmp0, #@irq
+        if_x1   bith    fdc_tmp0, #6
+        if_x1   wrbyte  fdc_tmp0, #@irq
+
+                ret
+
+.check_int
+                getbyte pa, fdc_status, #0
+                call    #fdc_fifo_write
+
+                alts    fdc_drvnum, #fdc_drive      ' get current drive track number
+                getbyte pa, 0-0, #0                 ' | (from byte 0)
+                call    #fdc_fifo_write
+
+                bith    _fdc_msr, #MSR_BUSY
+                bith    _fdc_msr, #MSR_DATAIO
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.write_del_s
+                cmp     _len, #9                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.read_id_s
+                cmp     _len, #2                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.read_del_s
+                cmp     _len, #9                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.format_track
+                cmp     _len, #6                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+
+.seek
+                cmp     _len, #3                wcz
+        if_lt   ret
+
+                call    #fdc_set_status
+
+                rdbyte  fdc_drvnum, ##@@fdc_cmd+1   ' drive number
+                and     fdc_drvnum, #%00000011      ' |
+
+                alts    fdc_drvnum, #fdc_drive      ' get drive data
+                mov     fdc_tmp0, 0-0               ' |
+
+                rdbyte  fdc_tmp1, ##@@fdc_cmd+1     ' head
+                testb   fdc_tmp1, #2            wz  ' |
+                bitz    fdc_tmp0, #24               ' |
+
+                rdbyte  fdc_tmp1, ##@@fdc_cmd+2     ' request track
+                setbyte fdc_tmp0, fdc_tmp1, #2      ' | to byte 2
+
+                bith    fdc_tmp0, #30               ' seeking
+                bith    _fdc_msr, #MSR_BUSY         ' busy
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+                altd    fdc_drvnum, #fdc_drive      ' update drive data
+                mov     0-0, fdc_tmp0               ' |
+
+                wrbyte  #$00, ##@@fdc_cmd_len
+
+                getct   fdc_tmp1
+                addct3  fdc_tmp1, ##_CLKFREQ / 1000
+.l3             pollct3 wc
+        if_nc   jmp     #.l3
+
+                getbyte fdc_tmp1, fdc_tmp0, #2      ' requested track
+                setbyte fdc_tmp0, fdc_tmp1, #0      ' | to byte 0
+                bith    fdc_status, #STATUS0_SE
+                cmp     fdc_tmp1, #0            wz
+                bitz    fdc_status, #STATUS3_TRK0
+
+                bitl    _fdc_msr, #MSR_BUSY         ' ready
+                wrbyte  _fdc_msr, ##@@fdc_msr
+
+                testb   _fdc_dor, #DOR_INT_ENABLE   wz
+        if_x1   rdbyte  fdc_tmp0, #@irq
+        if_x1   bith    fdc_tmp0, #6
+        if_x1   wrbyte  fdc_tmp0, #@irq
+
+                ret
+
+fdc_set_status
+                mov     fdc_status, #STATUS0_INT_NORMAL
+                or      fdc_status, fdc_drvnum      ' drive number
+
+                bith    fdc_status, #STATUS0_NR     ' no media?
+
+                alts    fdc_drvnum, #fdc_drive      ' get drive data
+                mov     fdc_tmp1, 0-0               ' |
+                testb   fdc_tmp1, #24           wz  ' head
+                bitz    fdc_tmp0, #3                ' |
+
+                ret
+
+fdc_fifo_write
+                rdbyte  fdc_tmp0, ##@@fdc_fifo_head
+                add     fdc_tmp0, ##@@fdc_fifo
+                wrbyte  pa, fdc_tmp0
+                sub     fdc_tmp0, ##@@fdc_fifo
+                incmod  fdc_tmp0, #16 - 1
+        _ret_   wrbyte  fdc_tmp0, ##@@fdc_fifo_head
+
+
+_fdc_msr        long    (1<<MSR_DATAREG)|(1<<MSR_NDMA)
+_fdc_dor        long    0
+
+fdc_drvnum      long    0
+fdc_drive       long    %00000000_00000000_00000000_00000000[4]
+                '         |||   | |||||||| |||||||| ++++++++--- Track
+                '         |||   | |||||||| ++++++++------------ Sector
+                '         |||   | ++++++++--------------------- Req. Track
+                '         |||   +------------------------------ Head
+                '         ||+---------------------------------- Reading
+                '         |+----------------------------------- Transfer
+                '         +------------------------------------ Seeking
+
+fdc_status      long    STATUS0_INT_ABNORMAL_POLL
 
 pit_tick
                 addct1  pit_ct, #_CLKFREQ / 1_193_180
@@ -6515,7 +6910,6 @@ pit_tick
 '   if_nc_or_z   jmp     #pit_tick1
 
                 rdword  pit_tmr0, #@tmr0
-                'debug("pit_tick : ", ubin_word(pit_tmr), dly(#500))
                 testb   pit_tmr0, #TMR_NULL      wz
         if_x1   jmp     #pit_tick1
 
@@ -6571,7 +6965,6 @@ pit_tick1
 '   if_nc_or_z   jmp     #pit_tick_end
 
                 rdword  pit_tmr1, #@tmr1
-                'debug("*** pit_tick1 *** ", ubin_word(pit_tmr),dly(#200))
                 testb   pit_tmr1, #TMR_NULL      wz
         if_x1   jmp     #pit_tick2
 
@@ -6598,18 +6991,15 @@ pit_tick1
                 rdword  pit_temp0, #@tmr1_cnt
                 sub     pit_temp0, #1           wcz
                 wrword  pit_temp0, #@tmr1_cnt
-                'debug("*** pit_tick1.mode0 *** ", ubin_word(pit_temp0),dly(#200))
                 jmp     #pit_tick2
 .mode2
 .mode3
                 rdword  pit_temp0, #@tmr1_cnt
                 sub     pit_temp0, #1           wcz
                 wrword  pit_temp0, #@tmr1_cnt
-                'debug("*** pit_tick1.mode0 *** ", ubin_word(pit_temp0),dly(#200))
         if_nz   jmp     #pit_tick2
                 bith    pit_tmr1, #TMR_RELOAD
                 wrword  pit_tmr1, #@tmr1
-                'debug("DMA TMR0 : ", ubin_long(dma_ctl),dly(#500))
 
                 ' DMA
                 rdlong  pit_dma_ctl, #@dma_ctl
@@ -6638,7 +7028,7 @@ pit_tick1
 
 pit_tick2
 pit_tick_end
-                reti1
+                ret
 
 pit_ct          res     1
 pit_tmr0        res     1
@@ -6652,6 +7042,13 @@ pit_temp2       res     1
 pit_dma_ctl     res     1
 pit_dma_mode    res     1
 
+_cmd            res     1
+_len            res     1
+
+fdc_tmp0        res     1
+fdc_tmp1        res     1
+fdc_tmp2        res     1
+
                 fit     $1F0
 
 CON ' PIT 8254 Constants
@@ -6662,6 +7059,73 @@ CON ' PIT 8254 Constants
     TMR_LATCH  = 13
     TMR_GATE   = 14
     TMR_OUT    = 15
+
+CON ' NEC765 Constants
+
+    DOR_DRIVE0 = $00
+    DOR_DRIVE1 = $01
+    DOR_DRIVE2 = $02
+    DOR_DRIVE3 = $03
+    #2, DOR_RESET,
+        DOR_INT_ENABLE,
+        DOR_DRIVE0_MOTOR,
+        DOR_DRIVE1_MOTOR,
+        DOR_DRIVE2_MOTOR
+        DOR_DRIVE3_MOTOR
+
+    STATUS0_INT_NORMAL        = $00_00_00_00
+    STATUS0_INT_ABNORMAL_POLL = $00_00_00_C0
+
+    STATUS0_HD   = encod($00_00_00_04)
+    STATUS0_NR   = encod($00_00_00_08)
+    STATUS0_UC   = encod($00_00_00_10)
+    STATUS0_SE   = encod($00_00_00_20)
+    STATUS0_INT_ABNORMAL = encod($00_00_00_40)
+    STATUS0_INT_INVALID  = encod($00_00_00_80)
+
+    STATUS1_NID  = encod($00_00_01_00)
+    STATUS1_NW   = encod($00_00_02_00)
+    STATUS1_NDAT = encod($00_00_04_00)
+    STATUS1_TO   = encod($00_00_10_00)
+    STATUS1_DE   = encod($00_00_20_00)
+    STATUS1_EN   = encod($00_00_80_00)
+
+    STATUS2_NDAM = encod($00_01_00_00)
+    STATUS2_BCYL = encod($00_02_00_00)
+    STATUS2_SERR = encod($00_04_00_00)
+    STATUS2_SEQ  = encod($00_08_00_00)
+    STATUS2_WCYL = encod($00_10_00_00)
+    STATUS2_CRCE = encod($00_20_00_00)
+    STATUS2_DADM = encod($00_40_00_00)
+
+    STATUS3_HDDR = encod($04_00_00_00)
+    STATUS3_DSDR = encod($08_00_00_00)
+    STATUS3_TRK0 = encod($10_00_00_00)
+    STATUS3_RDY  = encod($20_00_00_00)
+    STATUS3_WPDR = encod($40_00_00_00)
+    STATUS3_ESIG = encod($80_00_00_00)
+
+    #0, MSR_DRIVE1_POS_MODE,
+        MSR_DRIVE2_POS_MODE,
+        MSR_DRIVE3_POS_MODE,
+        MSR_DRIVE4_POS_MODE,
+        MSR_BUSY,
+        MSR_NDMA,
+        MSR_DATAIO,
+        MSR_DATAREG
+
+    CMD_READ_TRACK   = $02
+    CMD_SPECIFY      = $03
+    CMD_CHECK_STAT   = $04
+    CMD_WRITE_SECT   = $05
+    CMD_READ_SECT    = $06
+    CMD_CALIBRATE    = $07
+    CMD_CHECK_INT    = $08
+    CMD_WRITE_DEL_S  = $09
+    CMD_READ_ID_S    = $0A
+    CMD_READ_DEL_S   = $0C
+    CMD_FORMAT_TRACK = $0D
+    CMD_SEEK         = $0F
 
 DAT             ' DMA 8237A
                 orgh
