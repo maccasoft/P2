@@ -20,17 +20,18 @@ DAT             ' Startup
 
                 asmclk
 
-                rep     @.lockmadness,#16   ' allocate all locks, to be safe...
+                rep     @.l1,#16            ' allocate all locks, to be safe...
                 locknew pb
                 nop
-.lockmadness
+.l1
 
                 coginit #3, ##@video_driver
-                coginit #2, ##@pit_cog
-                coginit #1, ##@usb_host_start
-                waitx   ##_CLKFREQ * 1
+                coginit #2, ##@usb_host_start
+
+                wrword  #0, ##@ram_00000 + $00472 ' force cold boot
+
+                coginit #1, ##@pit_cog
                 coginit #0, ##@i8086
-                jmp     #$
 
                 orgh
 
@@ -1917,33 +1918,33 @@ hkbd_key
 hkbd_shift
                 testb   hpar3, #LEFT_SHIFTB     wc
                 testb   hpar2, #LEFT_SHIFTB     wz
-    if_c_or_z   mov     htmp, #$2A
-    if_c_or_z   jmp     #\hkbd_out_char
+    if_c_ne_z   mov     htmp, #$2A
+    if_c_ne_z   jmp     #\hkbd_out_char
 
                 testb   hpar3, #RIGHT_SHIFTB    wc
                 testb   hpar2, #RIGHT_SHIFTB    wz
-    if_c_or_z   mov     htmp, #$36
-    if_c_or_z   jmp     #\hkbd_out_char
+    if_c_ne_z   mov     htmp, #$36
+    if_c_ne_z   jmp     #\hkbd_out_char
 
                 testb   hpar3, #LEFT_CTRLB      wc
                 testb   hpar2, #LEFT_CTRLB      wz
-    if_c_or_z   mov     htmp, #$1D
-    if_c_or_z   jmp     #\hkbd_out_char
+    if_c_ne_z   mov     htmp, #$1D
+    if_c_ne_z   jmp     #\hkbd_out_char
 
                 testb   hpar3, #RIGHT_CTRLB     wc
                 testb   hpar2, #RIGHT_CTRLB     wz
-    if_c_or_z   mov     htmp, #$1D
-    if_c_or_z   jmp     #\hkbd_out_char
+    if_c_ne_z   mov     htmp, #$1D
+    if_c_ne_z   jmp     #\hkbd_out_char
 
                 testb   hpar3, #LEFT_ALTB       wc
                 testb   hpar2, #LEFT_ALTB       wz
-    if_c_or_z   mov     htmp, #$38
-    if_c_or_z   jmp     #\hkbd_out_char
+    if_c_ne_z   mov     htmp, #$38
+    if_c_ne_z   jmp     #\hkbd_out_char
 
                 testb   hpar3, #RIGHT_ALTB      wc
                 testb   hpar2, #RIGHT_ALTB      wz
-    if_c_or_z   mov     htmp, #$38
-    if_c_or_z   jmp     #\hkbd_out_char
+    if_c_ne_z   mov     htmp, #$38
+    if_c_ne_z   jmp     #\hkbd_out_char
 
                 ret
 
@@ -6131,16 +6132,19 @@ i_run_interrupts
 
                 lockrel #0
 
-                testb   pic_irq, #PIC_IS_BIT    wc
-                testb   i_flags, #I_IF_BIT      wz
-   if_not_01    ret
-
                 getbyte i_temp0, pic_irq, #PIC_ISR_BYTE
                 getbyte i_temp1, pic_irq, #PIC_IRR_BYTE
+
                 or      i_temp0, i_temp1
+                getbyte i_temp1, pic_ocw, #PIC_OCW1_BYTE
+                andn    i_temp0, i_temp1
+
                 setbyte pic_irq, i_temp0, #PIC_ISR_BYTE
                 setbyte pic_irq, #0, #PIC_IRR_BYTE
 
+                testb   pic_irq, #PIC_IS_BIT    wc
+                testb   i_flags, #I_IF_BIT      wz
+   if_not_01    ret
                 call    #pic_intack
 
                 getbyte i_temp0, pic_icw, #PIC_ICW2_BYTE
@@ -6166,6 +6170,7 @@ ppi_60_rd
                 testb   ppi, #PPI_PA_INPUT          wz ' PA input ?
         if_x0   getbyte i_tmpb, ppi, #PPI_PA_BYTE      ' no, return the out state
         if_x1   rdbyte  i_tmpb, #@kbd_data
+        if_x1   wrbyte  #0, #@kbd_data
                 ret     wcz
 
 ppi_61_wr
@@ -6274,7 +6279,6 @@ pic_21_wr
         if_0x   ret     wcz
 
                 setbyte pic_ocw, i_tmpb, #0 ' OCW1 (IMR)
-                'debug("PIC 21 (W): ", ubin_byte(i_tmpb),ubin_long(pic_ocw))
                 ret     wcz
 
 pic_21_rd
@@ -6282,52 +6286,44 @@ pic_21_rd
                 ret     wcz
 
 pic_intack
-                testb   pic_ocw, #0    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 0    wz
-        if_01   setnib  pic_irq, #0, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
-        if_01   ret
+        if_x1   setnib  pic_irq, #0, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
 
-                testb   pic_ocw, #1    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 1    wz
-        if_01   setnib  pic_irq, #1, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
-        if_01   ret
+        if_x1   setnib  pic_irq, #1, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
 
-                testb   pic_ocw, #2    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 2    wz
-        if_01   setnib  pic_irq, #2, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
-        if_01   ret
+        if_x1   setnib  pic_irq, #2, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
 
-                testb   pic_ocw, #3    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 3    wz
-        if_01   setnib  pic_irq, #3, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
-        if_01   ret
+        if_x1   setnib  pic_irq, #3, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
 
-                testb   pic_ocw, #4    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 4    wz
-        if_01   setnib  pic_irq, #4, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
-        if_01   ret
+        if_x1   setnib  pic_irq, #4, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
 
-                testb   pic_ocw, #5    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 5    wz
-        if_01   setnib  pic_irq, #5, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
-        if_01   ret
+        if_x1   setnib  pic_irq, #5, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
 
-                testb   pic_ocw, #6    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 6    wz
-        if_01   setnib  pic_irq, #6, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
-        if_01   ret
+        if_x1   setnib  pic_irq, #6, #PIC_IR_NIB
+        if_x1   bith    pic_irq, #PIC_IS_BIT
+        if_x1   ret
 
-                testb   pic_ocw, #7    wc
                 testb   pic_irq, #(PIC_ISR_BYTE * 8) + 7    wz
                 setnib  pic_irq, #7, #PIC_IR_NIB
-        if_01   bith    pic_irq, #PIC_IS_BIT
+        if_x1   bith    pic_irq, #PIC_IS_BIT
 
                 ret
 
@@ -6363,7 +6359,6 @@ DAT             ' PIT 8254
                 orgh
 
 pit_40_wr
-                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb),dly(#500))
                 rdword  i_temp0, #@tmr0
                 testb   i_temp0, #5         wc
                 testb   i_temp0, #4         wz
@@ -6413,7 +6408,6 @@ pit_40_rd
         if_x1   rdword  i_temp1, #@tmr0_latch
                 getbyte i_tmpb, i_temp1, #0
                 wrword  i_temp0, #@tmr0
-                'debug("PIT  (R) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb), dly(#200))
                 ret     wcz
 .ctl_10
                 bitl    i_temp0, #TMR_LATCH     wcz
@@ -6436,7 +6430,6 @@ pit_40_rd
                 ret     wcz
 
 pit_41_wr
-                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb),dly(#500))
                 rdword  i_temp0, #@tmr1
                 testb   i_temp0, #5         wc
                 testb   i_temp0, #4         wz
@@ -6486,7 +6479,6 @@ pit_41_rd
         if_x1   rdword  i_temp1, #@tmr1_latch
                 getbyte i_tmpb, i_temp1, #0
                 wrword  i_temp0, #@tmr1
-                'debug("PIT  (R) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb), dly(#200))
                 ret     wcz
 .ctl_10
                 bitl    i_temp0, #TMR_LATCH     wcz
@@ -6509,7 +6501,6 @@ pit_41_rd
                 ret     wcz
 
 pit_43_wr
-                'debug("PIT  (W) : ", uhex_long(i_cs,i_ip,i_ea),uhex_byte(i_tmpb),dly(#500))
                 testb   i_tmpb, #5          wc
                 testb   i_tmpb, #4          wz
         if_00   jmp     #.latch
@@ -6559,14 +6550,10 @@ DAT
                 org     $000
 
 pit_cog
+                mov     ijmp1, #pit_tick
                 getct   pit_ct
                 addct1  pit_ct, #_CLKFREQ / 1_193_180
-
-.loop
-                pollct1 wc
-        if_c    call    #pit_tick
-                call    #fdc_nec765
-                jmp     #.loop
+                setint1 #EVENT_CT1
 
 fdc_nec765
                 rdbyte  fdc_tmp0, ##@@fdc_dor
@@ -6592,10 +6579,10 @@ fdc_nec765
                 bitnz   _fdc_msr, #MSR_DATAIO
 
                 wrbyte  _fdc_msr, ##@@fdc_msr
-        if_nz   ret
+        if_nz   jmp     #fdc_nec765
 
                 rdbyte  _len, ##@@fdc_cmd_len   wz
-        if_z    ret
+        if_z    jmp     #fdc_nec765
 
                 rdbyte  _cmd, ##@@fdc_cmd
                 and     _cmd, #$0F
@@ -6631,7 +6618,8 @@ fdc_nec765
                 bith    _fdc_msr, #MSR_DATAIO
                 wrbyte  _fdc_msr, ##@@fdc_msr
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .reset
                 mov     _fdc_msr, #(1<<MSR_DATAREG)|(1<<MSR_BUSY)|(1<<MSR_NDMA)
@@ -6661,19 +6649,20 @@ fdc_nec765
         if_x1   bith    fdc_tmp0, #6
         if_x1   wrbyte  fdc_tmp0, #@irq
 
-                ret
+                jmp     #fdc_nec765
 
 .read_track
                 cmp     _len, #9                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .specify
                 cmp     _len, #3                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
@@ -6682,27 +6671,30 @@ fdc_nec765
                 bitnz   _fdc_msr, #MSR_NDMA
                 bitz    _fdc_dor, #31
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .check_stat
                 cmp     _len, #2                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .write_sect
                 cmp     _len, #9                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .read_sect
                 cmp     _len, #9                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
@@ -6728,11 +6720,12 @@ fdc_nec765
                 altd    pa, #fdc_drive              ' update drive data
                 mov     0-0, fdc_tmp0               ' |
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .calibrate
                 cmp     _len, #2                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
@@ -6768,7 +6761,7 @@ fdc_nec765
         if_x1   bith    fdc_tmp0, #6
         if_x1   wrbyte  fdc_tmp0, #@irq
 
-                ret
+                jmp     #fdc_nec765
 
 .check_int
                 getbyte pa, fdc_status, #0
@@ -6782,43 +6775,48 @@ fdc_nec765
                 bith    _fdc_msr, #MSR_DATAIO
                 wrbyte  _fdc_msr, ##@@fdc_msr
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .write_del_s
                 cmp     _len, #9                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .read_id_s
                 cmp     _len, #2                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .read_del_s
                 cmp     _len, #9                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .format_track
                 cmp     _len, #6                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
-        _ret_   wrbyte  #$00, ##@@fdc_cmd_len
+                wrbyte  #$00, ##@@fdc_cmd_len
+                jmp     #fdc_nec765
 
 .seek
                 cmp     _len, #3                wcz
-        if_lt   ret
+        if_lt   jmp     #fdc_nec765
 
                 call    #fdc_set_status
 
@@ -6863,7 +6861,7 @@ fdc_nec765
         if_x1   bith    fdc_tmp0, #6
         if_x1   wrbyte  fdc_tmp0, #@irq
 
-                ret
+                jmp     #fdc_nec765
 
 fdc_set_status
                 mov     fdc_status, #STATUS0_INT_NORMAL
@@ -6903,8 +6901,6 @@ fdc_drive       long    %00000000_00000000_00000000_00000000[4]
 fdc_status      long    STATUS0_INT_ABNORMAL_POLL
 
 pit_tick
-                addct1  pit_ct, #_CLKFREQ / 1_193_180
-
 '                testb   pit_tmr0, #TMR_GATE     wc
 '                testb   pit_tmr0, #TMR_NULL     wz
 '   if_nc_or_z   jmp     #pit_tick1
@@ -7028,7 +7024,8 @@ pit_tick1
 
 pit_tick2
 pit_tick_end
-                ret
+                addct1  pit_ct, #_CLKFREQ / 1_193_180
+                reti1
 
 pit_ct          res     1
 pit_tmr0        res     1
