@@ -19,8 +19,8 @@ CON
 
     _CLKFREQ = 160_000_000
 
-    ACIA_RX     = 8 '63 '8  { I }
-    ACIA_TX     = 9 '62 '9  { O }
+    ACIA_RX     = 63 '8  { I }
+    ACIA_TX     = 62 '9  { O }
     ACIA_BAUD   = 115_200
 
 DAT             ' 8086
@@ -33,9 +33,9 @@ i8086
                 setq2   #(@i8086_lut_end - @i8086_lut) / 4 -1
                 rdlong  0, ptrb
 
-                call    #\@@system_init
+                call    #\@system_init
 
-                mov     i_optable, ##@@i8086_optable
+                mov     i_optable, ##@i8086_optable
                 getct   i_lastwait
 
 .nextop
@@ -45,12 +45,12 @@ i8086
                 'add     i_total, i_cycles
                 bitl    i_flags, #I_SEG_BIT
 
-                call    #\@@system_run
+                call    #\@system_run
 
                 bitl    i_flags, #I_NO_INT_BIT  wcz
                 testb   i_flags, #I_TF_BIT      wz
         if_01   mov     i_temp0, #1
-        if_01   call    #\@@i_trap
+        if_01   call    #\@i_trap
 
                 getct   i_lastwait
                 mov     i_cycles, #0
@@ -680,18 +680,18 @@ i_readiob
                 ' i_tmpb = data
                 mov     i_tmpb, #$FF
                 cmp     i_ea, #$F6      wcz
-        if_e    jmp     #\@@acia_data_rd
+        if_e    jmp     #\@acia_data_rd
                 cmp     i_ea, #$F7      wcz
-        if_e    jmp     #\@@acia_ctl_rd
+        if_e    jmp     #\@acia_ctl_rd
                 ret     wcz
 
 i_writeiob
                 ' i_ea   = address
                 ' i_tmpb = data
                 cmp     i_ea, #$F6      wcz
-        if_e    jmp     #\@@acia_data_wr
+        if_e    jmp     #\@acia_data_wr
                 cmp     i_ea, #$F7      wcz
-        if_e    jmp     #\@@acia_ctl_wr
+        if_e    jmp     #\@acia_ctl_wr
                 ret     wcz
 
 i8086_lut_end
@@ -700,235 +700,235 @@ DAT             ' 8086 HUB
                 orgh
 
 i8086_optable
-                long    @@i_math_modrm_r8       ' 00 rm                 add [rm], r8
-                long    @@i_math_modrm_r16      ' 01 rm                 add [rm], r16
-                long    @@i_math_r8_modrm       ' 02 rm                 add r16, [rm]
-                long    @@i_math_r16_modrm      ' 03 rm                 add r8, [rm]
-                long    @@i_math_al_imm8        ' 04 nn                 add al, nn
-                long    @@i_math_ax_imm16       ' 05 ll hh              add ax, hhll
-                long    @@i_push_sreg           ' 06                    push es
-                long    @@i_pop_sreg            ' 07                    pop es
-                long    @@i_math_modrm_r8       ' 08 rm                 or  [rm], r8
-                long    @@i_math_modrm_r16      ' 09 rm                 or  [rm], r16
-                long    @@i_math_r8_modrm       ' 0A rm                 or  r16, [rm]
-                long    @@i_math_r16_modrm      ' 0B rm                 or  r8, [rm]
-                long    @@i_math_al_imm8        ' 0C nn                 or  al, nn
-                long    @@i_math_ax_imm16       ' 0D ll hh              or  ax, hhll
-                long    @@i_push_sreg           ' 0E                    push cs
-                long    @@i_pop_sreg            ' 0F                    pop cs
+                long    @i_math_modrm_r8        ' 00 rm                 add [rm], r8
+                long    @i_math_modrm_r16       ' 01 rm                 add [rm], r16
+                long    @i_math_r8_modrm        ' 02 rm                 add r16, [rm]
+                long    @i_math_r16_modrm       ' 03 rm                 add r8, [rm]
+                long    @i_math_al_imm8         ' 04 nn                 add al, nn
+                long    @i_math_ax_imm16        ' 05 ll hh              add ax, hhll
+                long    @i_push_sreg            ' 06                    push es
+                long    @i_pop_sreg             ' 07                    pop es
+                long    @i_math_modrm_r8        ' 08 rm                 or  [rm], r8
+                long    @i_math_modrm_r16       ' 09 rm                 or  [rm], r16
+                long    @i_math_r8_modrm        ' 0A rm                 or  r16, [rm]
+                long    @i_math_r16_modrm       ' 0B rm                 or  r8, [rm]
+                long    @i_math_al_imm8         ' 0C nn                 or  al, nn
+                long    @i_math_ax_imm16        ' 0D ll hh              or  ax, hhll
+                long    @i_push_sreg            ' 0E                    push cs
+                long    @i_pop_sreg             ' 0F                    pop cs
 
-                long    @@i_math_modrm_r8       ' 10 rm                 adc [rm], r8
-                long    @@i_math_modrm_r16      ' 11 rm                 adc [rm], r16
-                long    @@i_math_r8_modrm       ' 12 rm                 adc r16, [rm]
-                long    @@i_math_r16_modrm      ' 13 rm                 adc r8, [rm]
-                long    @@i_math_al_imm8        ' 14 nn                 adc al, nn
-                long    @@i_math_ax_imm16       ' 15 ll hh              adc ax, hhll
-                long    @@i_push_sreg           ' 16                    push ss
-                long    @@i_pop_sreg            ' 17                    pop ss
-                long    @@i_math_modrm_r8       ' 18 rm                 sbb [rm], r8
-                long    @@i_math_modrm_r16      ' 19 rm                 sbb [rm], r16
-                long    @@i_math_r8_modrm       ' 1A rm                 sbb r16, [rm]
-                long    @@i_math_r16_modrm      ' 1B rm                 sbb r8, [rm]
-                long    @@i_math_al_imm8        ' 1C nn                 sbb al, nn
-                long    @@i_math_ax_imm16       ' 1D ll hh              sbb ax, hhll
-                long    @@i_push_sreg           ' 1E                    push ds
-                long    @@i_pop_sreg            ' 1F                    pop ds
+                long    @i_math_modrm_r8        ' 10 rm                 adc [rm], r8
+                long    @i_math_modrm_r16       ' 11 rm                 adc [rm], r16
+                long    @i_math_r8_modrm        ' 12 rm                 adc r16, [rm]
+                long    @i_math_r16_modrm       ' 13 rm                 adc r8, [rm]
+                long    @i_math_al_imm8         ' 14 nn                 adc al, nn
+                long    @i_math_ax_imm16        ' 15 ll hh              adc ax, hhll
+                long    @i_push_sreg            ' 16                    push ss
+                long    @i_pop_sreg             ' 17                    pop ss
+                long    @i_math_modrm_r8        ' 18 rm                 sbb [rm], r8
+                long    @i_math_modrm_r16       ' 19 rm                 sbb [rm], r16
+                long    @i_math_r8_modrm        ' 1A rm                 sbb r16, [rm]
+                long    @i_math_r16_modrm       ' 1B rm                 sbb r8, [rm]
+                long    @i_math_al_imm8         ' 1C nn                 sbb al, nn
+                long    @i_math_ax_imm16        ' 1D ll hh              sbb ax, hhll
+                long    @i_push_sreg            ' 1E                    push ds
+                long    @i_pop_sreg             ' 1F                    pop ds
 
-                long    @@i_math_modrm_r8       ' 20 rm                 and [rm], r8
-                long    @@i_math_modrm_r16      ' 21 rm                 and [rm], r16
-                long    @@i_math_r8_modrm       ' 22 rm                 and r16, [rm]
-                long    @@i_math_r16_modrm      ' 23 rm                 and r8, [rm]
-                long    @@i_math_al_imm8        ' 24 nn                 and al, nn
-                long    @@i_math_ax_imm16       ' 25 ll hh              and ax, hhll
-                long    @@i_hlt                 ' 26                    es:
-                long    @@i_daas                ' 27                    daa
-                long    @@i_math_modrm_r8       ' 28 rm                 sub [rm], r8
-                long    @@i_math_modrm_r16      ' 29 rm                 sub [rm], r16
-                long    @@i_math_r8_modrm       ' 2A rm                 sub r16, [rm]
-                long    @@i_math_r16_modrm      ' 2B rm                 sub r8, [rm]
-                long    @@i_math_al_imm8        ' 2C nn                 sub al, nn
-                long    @@i_math_ax_imm16       ' 2D ll hh              sub ax, hhll
-                long    @@i_hlt                 ' 2E                    cs:
-                long    @@i_daas                ' 2F                    das
+                long    @i_math_modrm_r8        ' 20 rm                 and [rm], r8
+                long    @i_math_modrm_r16       ' 21 rm                 and [rm], r16
+                long    @i_math_r8_modrm        ' 22 rm                 and r16, [rm]
+                long    @i_math_r16_modrm       ' 23 rm                 and r8, [rm]
+                long    @i_math_al_imm8         ' 24 nn                 and al, nn
+                long    @i_math_ax_imm16        ' 25 ll hh              and ax, hhll
+                long    @i_hlt                  ' 26                    es:
+                long    @i_daas                 ' 27                    daa
+                long    @i_math_modrm_r8        ' 28 rm                 sub [rm], r8
+                long    @i_math_modrm_r16       ' 29 rm                 sub [rm], r16
+                long    @i_math_r8_modrm        ' 2A rm                 sub r16, [rm]
+                long    @i_math_r16_modrm       ' 2B rm                 sub r8, [rm]
+                long    @i_math_al_imm8         ' 2C nn                 sub al, nn
+                long    @i_math_ax_imm16        ' 2D ll hh              sub ax, hhll
+                long    @i_hlt                  ' 2E                    cs:
+                long    @i_daas                 ' 2F                    das
 
-                long    @@i_math_modrm_r8       ' 30 rm                 xor [rm], r8
-                long    @@i_math_modrm_r16      ' 31 rm                 xor [rm], r16
-                long    @@i_math_r8_modrm       ' 32 rm                 xor r16, [rm]
-                long    @@i_math_r16_modrm      ' 33 rm                 xor r8, [rm]
-                long    @@i_math_al_imm8        ' 34 nn                 xor al, nn
-                long    @@i_math_ax_imm16       ' 35 ll hh              xor ax, hhll
-                long    @@i_hlt                 ' 26                    ss:
-                long    @@i_aaas                ' 37                    aaa
-                long    @@i_math_modrm_r8       ' 38 rm                 cmp [rm], r8
-                long    @@i_math_modrm_r16      ' 39 rm                 cmp [rm], r16
-                long    @@i_math_r8_modrm       ' 3A rm                 cmp r16, [rm]
-                long    @@i_math_r16_modrm      ' 3B rm                 cmp r8, [rm]
-                long    @@i_math_al_imm8        ' 3C nn                 cmp al, nn
-                long    @@i_math_ax_imm16       ' 3D ll hh              cmp ax, hhll
-                long    @@i_hlt                 ' 3E                    ds:
-                long    @@i_aaas                ' 3F                    aas
+                long    @i_math_modrm_r8        ' 30 rm                 xor [rm], r8
+                long    @i_math_modrm_r16       ' 31 rm                 xor [rm], r16
+                long    @i_math_r8_modrm        ' 32 rm                 xor r16, [rm]
+                long    @i_math_r16_modrm       ' 33 rm                 xor r8, [rm]
+                long    @i_math_al_imm8         ' 34 nn                 xor al, nn
+                long    @i_math_ax_imm16        ' 35 ll hh              xor ax, hhll
+                long    @i_hlt                  ' 26                    ss:
+                long    @i_aaas                 ' 37                    aaa
+                long    @i_math_modrm_r8        ' 38 rm                 cmp [rm], r8
+                long    @i_math_modrm_r16       ' 39 rm                 cmp [rm], r16
+                long    @i_math_r8_modrm        ' 3A rm                 cmp r16, [rm]
+                long    @i_math_r16_modrm       ' 3B rm                 cmp r8, [rm]
+                long    @i_math_al_imm8         ' 3C nn                 cmp al, nn
+                long    @i_math_ax_imm16        ' 3D ll hh              cmp ax, hhll
+                long    @i_hlt                  ' 3E                    ds:
+                long    @i_aaas                 ' 3F                    aas
 
-                long    @@i_inc16               ' 40                    inc ax
-                long    @@i_inc16               ' 41                    inc cx
-                long    @@i_inc16               ' 42                    inc dx
-                long    @@i_inc16               ' 43                    inc bx
-                long    @@i_inc16               ' 44                    inc sp
-                long    @@i_inc16               ' 45                    inc bp
-                long    @@i_inc16               ' 46                    inc si
-                long    @@i_inc16               ' 47                    inc di
-                long    @@i_dec16               ' 48                    dec ax
-                long    @@i_dec16               ' 49                    dec cx
-                long    @@i_dec16               ' 4A                    dec dx
-                long    @@i_dec16               ' 4B                    dec bx
-                long    @@i_dec16               ' 4C                    dec sp
-                long    @@i_dec16               ' 4D                    dec bp
-                long    @@i_dec16               ' 4E                    dec si
-                long    @@i_dec16               ' 4F                    dec di
+                long    @i_inc16                ' 40                    inc ax
+                long    @i_inc16                ' 41                    inc cx
+                long    @i_inc16                ' 42                    inc dx
+                long    @i_inc16                ' 43                    inc bx
+                long    @i_inc16                ' 44                    inc sp
+                long    @i_inc16                ' 45                    inc bp
+                long    @i_inc16                ' 46                    inc si
+                long    @i_inc16                ' 47                    inc di
+                long    @i_dec16                ' 48                    dec ax
+                long    @i_dec16                ' 49                    dec cx
+                long    @i_dec16                ' 4A                    dec dx
+                long    @i_dec16                ' 4B                    dec bx
+                long    @i_dec16                ' 4C                    dec sp
+                long    @i_dec16                ' 4D                    dec bp
+                long    @i_dec16                ' 4E                    dec si
+                long    @i_dec16                ' 4F                    dec di
 
-                long    @@i_push_r16            ' 50                    push ax
-                long    @@i_push_r16            ' 51                    push cx
-                long    @@i_push_r16            ' 52                    push dx
-                long    @@i_push_r16            ' 53                    push bx
-                long    @@i_push_r16            ' 54                    push sp
-                long    @@i_push_r16            ' 55                    push bp
-                long    @@i_push_r16            ' 56                    push si
-                long    @@i_push_r16            ' 57                    push di
-                long    @@i_pop_r16             ' 58                    pop ax
-                long    @@i_pop_r16             ' 59                    pop cx
-                long    @@i_pop_r16             ' 5A                    pop dx
-                long    @@i_pop_r16             ' 5B                    pop bx
-                long    @@i_pop_r16             ' 5C                    pop sp
-                long    @@i_pop_r16             ' 5D                    pop bp
-                long    @@i_pop_r16             ' 5E                    pop si
-                long    @@i_pop_r16             ' 5F                    pop di
+                long    @i_push_r16             ' 50                    push ax
+                long    @i_push_r16             ' 51                    push cx
+                long    @i_push_r16             ' 52                    push dx
+                long    @i_push_r16             ' 53                    push bx
+                long    @i_push_r16             ' 54                    push sp
+                long    @i_push_r16             ' 55                    push bp
+                long    @i_push_r16             ' 56                    push si
+                long    @i_push_r16             ' 57                    push di
+                long    @i_pop_r16              ' 58                    pop ax
+                long    @i_pop_r16              ' 59                    pop cx
+                long    @i_pop_r16              ' 5A                    pop dx
+                long    @i_pop_r16              ' 5B                    pop bx
+                long    @i_pop_r16              ' 5C                    pop sp
+                long    @i_pop_r16              ' 5D                    pop bp
+                long    @i_pop_r16              ' 5E                    pop si
+                long    @i_pop_r16              ' 5F                    pop di
 
-                long    @@i_jo                  ' 60 dd                 jo dd   60 - 6F are aliases to 70 - 7F
-                long    @@i_jo                  ' 61 dd                 jno dd
-                long    @@i_jc                  ' 62 dd                 jc dd
-                long    @@i_jc                  ' 63 dd                 jnc dd
-                long    @@i_jz                  ' 64 dd                 jz dd
-                long    @@i_jz                  ' 65 dd                 jnz dd
-                long    @@i_jce                 ' 66 dd                 jce dd
-                long    @@i_jce                 ' 67 dd                 jnce dd
-                long    @@i_js                  ' 68 dd                 js dd
-                long    @@i_js                  ' 69 dd                 jns dd
-                long    @@i_jp                  ' 6A dd                 jp dd
-                long    @@i_jp                  ' 6B dd                 jnp dd
-                long    @@i_jl                  ' 6C dd                 jl dd
-                long    @@i_jnl                 ' 6D dd                 jnl dd
-                long    @@i_jle                 ' 6E dd                 jle dd
-                long    @@i_jnle                ' 6F dd                 jnle dd
+                long    @i_jo                   ' 60 dd                 jo dd   60 - 6F are aliases to 70 - 7F
+                long    @i_jo                   ' 61 dd                 jno dd
+                long    @i_jc                   ' 62 dd                 jc dd
+                long    @i_jc                   ' 63 dd                 jnc dd
+                long    @i_jz                   ' 64 dd                 jz dd
+                long    @i_jz                   ' 65 dd                 jnz dd
+                long    @i_jce                  ' 66 dd                 jce dd
+                long    @i_jce                  ' 67 dd                 jnce dd
+                long    @i_js                   ' 68 dd                 js dd
+                long    @i_js                   ' 69 dd                 jns dd
+                long    @i_jp                   ' 6A dd                 jp dd
+                long    @i_jp                   ' 6B dd                 jnp dd
+                long    @i_jl                   ' 6C dd                 jl dd
+                long    @i_jnl                  ' 6D dd                 jnl dd
+                long    @i_jle                  ' 6E dd                 jle dd
+                long    @i_jnle                 ' 6F dd                 jnle dd
 
-                long    @@i_jo                  ' 70 dd                 jo dd   60 - 6F are aliases to 70 - 7F
-                long    @@i_jo                  ' 71 dd                 jno dd
-                long    @@i_jc                  ' 72 dd                 jc dd
-                long    @@i_jc                  ' 73 dd                 jnc dd
-                long    @@i_jz                  ' 74 dd                 jz dd
-                long    @@i_jz                  ' 75 dd                 jnz dd
-                long    @@i_jce                 ' 76 dd                 jce dd
-                long    @@i_jce                 ' 77 dd                 jnce dd
-                long    @@i_js                  ' 78 dd                 js dd
-                long    @@i_js                  ' 79 dd                 jns dd
-                long    @@i_jp                  ' 7A dd                 jp dd
-                long    @@i_jp                  ' 7B dd                 jnp dd
-                long    @@i_jl                  ' 7C dd                 jl dd
-                long    @@i_jnl                 ' 7D dd                 jnl dd
-                long    @@i_jle                 ' 7E dd                 jle dd
-                long    @@i_jnle                ' 7F dd                 jnle dd
+                long    @i_jo                   ' 70 dd                 jo dd   60 - 6F are aliases to 70 - 7F
+                long    @i_jo                   ' 71 dd                 jno dd
+                long    @i_jc                   ' 72 dd                 jc dd
+                long    @i_jc                   ' 73 dd                 jnc dd
+                long    @i_jz                   ' 74 dd                 jz dd
+                long    @i_jz                   ' 75 dd                 jnz dd
+                long    @i_jce                  ' 76 dd                 jce dd
+                long    @i_jce                  ' 77 dd                 jnce dd
+                long    @i_js                   ' 78 dd                 js dd
+                long    @i_js                   ' 79 dd                 jns dd
+                long    @i_jp                   ' 7A dd                 jp dd
+                long    @i_jp                   ' 7B dd                 jnp dd
+                long    @i_jl                   ' 7C dd                 jl dd
+                long    @i_jnl                  ' 7D dd                 jnl dd
+                long    @i_jle                  ' 7E dd                 jle dd
+                long    @i_jnle                 ' 7F dd                 jnle dd
 
-                long    @@i_math_imm8           ' 80 rm nn              add/or/adc/sbb/and/sub/xor/cmp [rm8], nn
-                long    @@i_math_imm16          ' 81 rm ll hh           add/or/adc/sbb/and/sub/xor/cmp [rm16], hhll
-                long    @@i_math_imm8s          ' 82 rm sn              add/or/adc/sbb/and/sub/xor/cmp [rm8], sn
-                long    @@i_math_imm16s         ' 83 rm sn              add/or/adc/sbb/and/sub/xor/cmp [rm16], sn
-                long    @@i_test_r8_modrm       ' 84 rm                 test r8, [mm]
-                long    @@i_test_r16_modrm      ' 85 rm                 test r16, [mm]
-                long    @@i_xchg_modrm8         ' 86 rm                 xchg r8, [mm]
-                long    @@i_xchg_modrm16        ' 87 rm                 xchg r16, [mm]
-                long    @@i_mov_modrm_r8        ' 88 rm                 mov [rm], r8
-                long    @@i_mov_modrm_r16       ' 89 rm                 mov [rm], r16
-                long    @@i_mov_r8_modrm        ' 8A rm                 mov r8, [rm]
-                long    @@i_mov_r16_modrm       ' 8B rm                 mov r16, [rm]
-                long    @@i_mov_modrm_sreg      ' 8C rm                 mov [rm], sreg
-                long    @@i_lea                 ' 8D oo                 lea r16, oo
-                long    @@i_mov_sreg_modrm      ' 8E rm                 mov sregs, [rm]
-                long    @@i_pop_modrm           ' 8F mm                 pop [rm]
+                long    @i_math_imm8            ' 80 rm nn              add/or/adc/sbb/and/sub/xor/cmp [rm8], nn
+                long    @i_math_imm16           ' 81 rm ll hh           add/or/adc/sbb/and/sub/xor/cmp [rm16], hhll
+                long    @i_math_imm8s           ' 82 rm sn              add/or/adc/sbb/and/sub/xor/cmp [rm8], sn
+                long    @i_math_imm16s          ' 83 rm sn              add/or/adc/sbb/and/sub/xor/cmp [rm16], sn
+                long    @i_test_r8_modrm        ' 84 rm                 test r8, [mm]
+                long    @i_test_r16_modrm       ' 85 rm                 test r16, [mm]
+                long    @i_xchg_modrm8          ' 86 rm                 xchg r8, [mm]
+                long    @i_xchg_modrm16         ' 87 rm                 xchg r16, [mm]
+                long    @i_mov_modrm_r8         ' 88 rm                 mov [rm], r8
+                long    @i_mov_modrm_r16        ' 89 rm                 mov [rm], r16
+                long    @i_mov_r8_modrm         ' 8A rm                 mov r8, [rm]
+                long    @i_mov_r16_modrm        ' 8B rm                 mov r16, [rm]
+                long    @i_mov_modrm_sreg       ' 8C rm                 mov [rm], sreg
+                long    @i_lea                  ' 8D oo                 lea r16, oo
+                long    @i_mov_sreg_modrm       ' 8E rm                 mov sregs, [rm]
+                long    @i_pop_modrm            ' 8F mm                 pop [rm]
 
-                long    @@i_xchg                ' 90                    xchg ax, cx
-                long    @@i_xchg                ' 91                    xchg ax, cx
-                long    @@i_xchg                ' 92                    xchg ax, dx
-                long    @@i_xchg                ' 93                    xchg ax, bx
-                long    @@i_xchg                ' 94                    xchg ax, sp
-                long    @@i_xchg                ' 95                    xchg ax, bp
-                long    @@i_xchg                ' 96                    xchg ax, si
-                long    @@i_xchg                ' 97                    xchg ax, di
-                long    @@i_cbw                 ' 98                    cbw
-                long    @@i_cwd                 ' 99                    cwd
-                long    @@i_call_far            ' 9A ol oh sl sh        call shsl:ohol
-                long    @@i_wait                ' 9B                    wait
-                long    @@i_pushf               ' 9C                    pushf
-                long    @@i_popf                ' 9C                    popf
-                long    @@i_sahf                ' 9E                    sahf
-                long    @@i_lahf                ' 9F                    lahf
+                long    @i_xchg                 ' 90                    xchg ax, cx
+                long    @i_xchg                 ' 91                    xchg ax, cx
+                long    @i_xchg                 ' 92                    xchg ax, dx
+                long    @i_xchg                 ' 93                    xchg ax, bx
+                long    @i_xchg                 ' 94                    xchg ax, sp
+                long    @i_xchg                 ' 95                    xchg ax, bp
+                long    @i_xchg                 ' 96                    xchg ax, si
+                long    @i_xchg                 ' 97                    xchg ax, di
+                long    @i_cbw                  ' 98                    cbw
+                long    @i_cwd                  ' 99                    cwd
+                long    @i_call_far             ' 9A ol oh sl sh        call shsl:ohol
+                long    @i_wait                 ' 9B                    wait
+                long    @i_pushf                ' 9C                    pushf
+                long    @i_popf                 ' 9C                    popf
+                long    @i_sahf                 ' 9E                    sahf
+                long    @i_lahf                 ' 9F                    lahf
 
-                long    @@i_mov_al_offs         ' A0 ol oh              mov al, [DS:ohol]
-                long    @@i_mov_ax_offs         ' A1 ol oh              mov ax, [DS:ohol]
-                long    @@i_mov_offs_al         ' A2 ol oh              mov [DS:ohol], al
-                long    @@i_mov_offs_ax         ' A3 ol oh              mov [DS:ohol], ax
-                long    @@i_movsb               ' A4                    movsb
-                long    @@i_movsw               ' A5                    movsw
-                long    @@i_cmpsb               ' A6                    cmpsb
-                long    @@i_cmpsw               ' A7                    cmpsw
-                long    @@i_test_al_imm         ' A8 nn                 test al, nn
-                long    @@i_test_ax_imm         ' A9 ll hh              test ax, hhll
-                long    @@i_stosb               ' AA                    stosb
-                long    @@i_stosw               ' AB                    stosw
-                long    @@i_lodsb               ' AC                    lodsb
-                long    @@i_lodsw               ' AD                    lodsw
-                long    @@i_scasb               ' AE                    scasb
-                long    @@i_scasw               ' AF                    scasw
+                long    @i_mov_al_offs          ' A0 ol oh              mov al, [DS:ohol]
+                long    @i_mov_ax_offs          ' A1 ol oh              mov ax, [DS:ohol]
+                long    @i_mov_offs_al          ' A2 ol oh              mov [DS:ohol], al
+                long    @i_mov_offs_ax          ' A3 ol oh              mov [DS:ohol], ax
+                long    @i_movsb                ' A4                    movsb
+                long    @i_movsw                ' A5                    movsw
+                long    @i_cmpsb                ' A6                    cmpsb
+                long    @i_cmpsw                ' A7                    cmpsw
+                long    @i_test_al_imm          ' A8 nn                 test al, nn
+                long    @i_test_ax_imm          ' A9 ll hh              test ax, hhll
+                long    @i_stosb                ' AA                    stosb
+                long    @i_stosw                ' AB                    stosw
+                long    @i_lodsb                ' AC                    lodsb
+                long    @i_lodsw                ' AD                    lodsw
+                long    @i_scasb                ' AE                    scasb
+                long    @i_scasw                ' AF                    scasw
 
-                long    @@i_mov_immb            ' B0 nn                 mov al, nn
-                long    @@i_mov_immb            ' B1 nn                 mov cl, nn
-                long    @@i_mov_immb            ' B2 nn                 mov dl, nn
-                long    @@i_mov_immb            ' B3 nn                 mov bl, nn
-                long    @@i_mov_immb            ' B4 nn                 mov ah, nn
-                long    @@i_mov_immb            ' B5 nn                 mov ch, nn
-                long    @@i_mov_immb            ' B6 nn                 mov dh, nn
-                long    @@i_mov_immb            ' B7 nn                 mov bh, nn
-                long    @@i_mov_immw            ' B8 ll hh              mov ax, hhll
-                long    @@i_mov_immw            ' B9 ll hh              mov cx, hhll
-                long    @@i_mov_immw            ' BA ll hh              mov dx, hhll
-                long    @@i_mov_immw            ' BB ll hh              mov bx, hhll
-                long    @@i_mov_immw            ' BC ll hh              mov sp, hhll
-                long    @@i_mov_immw            ' BD ll hh              mov bp, hhll
-                long    @@i_mov_immw            ' BE ll hh              mov si, hhll
-                long    @@i_mov_immw            ' BF ll hh              mov di, hhll
+                long    @i_mov_immb             ' B0 nn                 mov al, nn
+                long    @i_mov_immb             ' B1 nn                 mov cl, nn
+                long    @i_mov_immb             ' B2 nn                 mov dl, nn
+                long    @i_mov_immb             ' B3 nn                 mov bl, nn
+                long    @i_mov_immb             ' B4 nn                 mov ah, nn
+                long    @i_mov_immb             ' B5 nn                 mov ch, nn
+                long    @i_mov_immb             ' B6 nn                 mov dh, nn
+                long    @i_mov_immb             ' B7 nn                 mov bh, nn
+                long    @i_mov_immw             ' B8 ll hh              mov ax, hhll
+                long    @i_mov_immw             ' B9 ll hh              mov cx, hhll
+                long    @i_mov_immw             ' BA ll hh              mov dx, hhll
+                long    @i_mov_immw             ' BB ll hh              mov bx, hhll
+                long    @i_mov_immw             ' BC ll hh              mov sp, hhll
+                long    @i_mov_immw             ' BD ll hh              mov bp, hhll
+                long    @i_mov_immw             ' BE ll hh              mov si, hhll
+                long    @i_mov_immw             ' BF ll hh              mov di, hhll
 
-                long    @@i_ret_near_sp         ' C0 dl dh              ret (SP+dhdl)
-                long    @@i_ret_near            ' C1                    ret
-                long    @@i_ret_near_sp         ' C2 dl dh              ret (SP+dhdl)
-                long    @@i_ret_near            ' C3                    ret
-                long    @@i_les                 ' C4 rm                 les [rm]
-                long    @@i_lds                 ' C5 rm                 lds [rm]
-                long    @@i_mov_modrm_imm8      ' C6 rm nn              mov byte [rm], nn
-                long    @@i_mov_modrm_imm16     ' C7 rm ll hh           mov word [rm], hhll
-                long    @@i_ret_far_sp          ' C8 dl dh              retf (SP+dhdl)
-                long    @@i_ret_far             ' C9                    retf
-                long    @@i_ret_far_sp          ' CA dl dh              retf (SP+dhdl)
-                long    @@i_ret_far             ' CB                    retf
-                long    @@i_int3                ' CC                    int3
-                long    @@i_int                 ' CD                    int
-                long    @@i_into                ' CE                    into
-                long    @@i_iret                ' CF                    iret
+                long    @i_ret_near_sp          ' C0 dl dh              ret (SP+dhdl)
+                long    @i_ret_near             ' C1                    ret
+                long    @i_ret_near_sp          ' C2 dl dh              ret (SP+dhdl)
+                long    @i_ret_near             ' C3                    ret
+                long    @i_les                  ' C4 rm                 les [rm]
+                long    @i_lds                  ' C5 rm                 lds [rm]
+                long    @i_mov_modrm_imm8       ' C6 rm nn              mov byte [rm], nn
+                long    @i_mov_modrm_imm16      ' C7 rm ll hh           mov word [rm], hhll
+                long    @i_ret_far_sp           ' C8 dl dh              retf (SP+dhdl)
+                long    @i_ret_far              ' C9                    retf
+                long    @i_ret_far_sp           ' CA dl dh              retf (SP+dhdl)
+                long    @i_ret_far              ' CB                    retf
+                long    @i_int3                 ' CC                    int3
+                long    @i_int                  ' CD                    int
+                long    @i_into                 ' CE                    into
+                long    @i_iret                 ' CF                    iret
 
-                long    @@i_d0_prefix           ' D0 rm                 rol/ror/rolc/rorc/shl/shr/shra byte[rm]
-                long    @@i_d1_prefix           ' D1 rm                 rol/ror/rolc/rorc/shl/shr/shraw word[rm]
-                long    @@i_d2_prefix           ' D2 rm                 rol/ror/rolc/rorc/shl/shr/shrab byte[rm], cl
-                long    @@i_d3_prefix           ' D3 rm                 rol/ror/rolc/rorc/shl/shr/shraw word[rm], cl
-                long    @@i_aam                 ' D4                    aam
-                long    @@i_aad                 ' D5                    aad
-                long    @@i_salc                ' D6                    salc
-                long    @@i_xlatb               ' D7                    xlatb
+                long    @i_d0_prefix            ' D0 rm                 rol/ror/rolc/rorc/shl/shr/shra byte[rm]
+                long    @i_d1_prefix            ' D1 rm                 rol/ror/rolc/rorc/shl/shr/shraw word[rm]
+                long    @i_d2_prefix            ' D2 rm                 rol/ror/rolc/rorc/shl/shr/shrab byte[rm], cl
+                long    @i_d3_prefix            ' D3 rm                 rol/ror/rolc/rorc/shl/shr/shraw word[rm], cl
+                long    @i_aam                  ' D4                    aam
+                long    @i_aad                  ' D5                    aad
+                long    @i_salc                 ' D6                    salc
+                long    @i_xlatb                ' D7                    xlatb
                 long    i_esc_op                ' D8 rm                 esc rm
                 long    i_esc_op                ' D9 rm                 esc rm
                 long    i_esc_op                ' DA rm                 esc rm
@@ -938,39 +938,39 @@ i8086_optable
                 long    i_esc_op                ' DE rm                 esc rm
                 long    i_esc_op                ' DF rm                 esc rm
 
-                long    @@i_loopne              ' E0 dd                 loopne dd
-                long    @@i_loope               ' E1 dd                 loope dd
-                long    @@i_loop                ' E2 dd                 loop dd
-                long    @@i_jcxz                ' E3 dd                 jcxz dd
-                long    @@i_in_al_imm           ' E4 pp                 in al, [pp]
-                long    @@i_in_ax_imm           ' E5 pp                 in ax, [pp]
-                long    @@i_out_imm_al          ' E6 pp                 out [pp], al
-                long    @@i_out_imm_ax          ' E7 pp                 out [pp], ax
-                long    @@i_call_displ          ' E8 dl dh              call +dhdl
-                long    @@i_jmp_displ           ' E9 dl dh              jmp +dhdl
-                long    @@i_jmp_far             ' EA ol oh sl sh        jmp shsl:ohol
-                long    @@i_jmp_displ8          ' EB dd                 jmp +dd
-                long    @@i_in_al_dx            ' EC pp                 in al, [dx]
-                long    @@i_in_ax_dx            ' ED pp                 in ax, [dx]
-                long    @@i_out_dx_al           ' EE pp                 out [dx], al
-                long    @@i_out_dx_ax           ' EF pp                 out [dx], ax
+                long    @i_loopne               ' E0 dd                 loopne dd
+                long    @i_loope                ' E1 dd                 loope dd
+                long    @i_loop                 ' E2 dd                 loop dd
+                long    @i_jcxz                 ' E3 dd                 jcxz dd
+                long    @i_in_al_imm            ' E4 pp                 in al, [pp]
+                long    @i_in_ax_imm            ' E5 pp                 in ax, [pp]
+                long    @i_out_imm_al           ' E6 pp                 out [pp], al
+                long    @i_out_imm_ax           ' E7 pp                 out [pp], ax
+                long    @i_call_displ           ' E8 dl dh              call +dhdl
+                long    @i_jmp_displ            ' E9 dl dh              jmp +dhdl
+                long    @i_jmp_far              ' EA ol oh sl sh        jmp shsl:ohol
+                long    @i_jmp_displ8           ' EB dd                 jmp +dd
+                long    @i_in_al_dx             ' EC pp                 in al, [dx]
+                long    @i_in_ax_dx             ' ED pp                 in ax, [dx]
+                long    @i_out_dx_al            ' EE pp                 out [dx], al
+                long    @i_out_dx_ax            ' EF pp                 out [dx], ax
 
-                long    @@i_lock                ' F0                    lock
-                long    @@i_lock                ' F1                    lock
-                long    @@i_hlt                 ' F2                    repne
-                long    @@i_hlt                 ' F3                    repe
-                long    @@i_hlt                 ' F4                    hlt
-                long    @@i_cmc                 ' F5                    cmc
-                long    @@i_f6_prefix           ' F6 rm                 test/not/net/mul/imul/div/idiv [rm8]
-                long    @@i_f7_prefix           ' F7 rm                 test/not/net/mul/imul/div/idiv [rm16]
-                long    @@i_clc                 ' F8                    clc
-                long    @@i_stc                 ' F9                    stc
-                long    @@i_cli                 ' FA                    cli
-                long    @@i_sti                 ' FB                    sti
-                long    @@i_cld                 ' FC                    cld
-                long    @@i_std                 ' FD                    std
-                long    @@i_fe_prefix           ' FF rm                 inc/dec [rm]
-                long    @@i_ff_prefix           ' FF rm                 inc/dec/call/call far/jmp/jmp far/push/cmp [rm]
+                long    @i_lock                 ' F0                    lock
+                long    @i_lock                 ' F1                    lock
+                long    @i_hlt                  ' F2                    repne
+                long    @i_hlt                  ' F3                    repe
+                long    @i_hlt                  ' F4                    hlt
+                long    @i_cmc                  ' F5                    cmc
+                long    @i_f6_prefix            ' F6 rm                 test/not/net/mul/imul/div/idiv [rm8]
+                long    @i_f7_prefix            ' F7 rm                 test/not/net/mul/imul/div/idiv [rm16]
+                long    @i_clc                  ' F8                    clc
+                long    @i_stc                  ' F9                    stc
+                long    @i_cli                  ' FA                    cli
+                long    @i_sti                  ' FB                    sti
+                long    @i_cld                  ' FC                    cld
+                long    @i_std                  ' FD                    std
+                long    @i_fe_prefix            ' FF rm                 inc/dec [rm]
+                long    @i_ff_prefix            ' FF rm                 inc/dec/call/call far/jmp/jmp far/push/cmp [rm]
 
 i_hlt
                 bith    i_flags, #I_HALT_BIT
@@ -2536,7 +2536,7 @@ i_d0_prefix
                 cmp     i_temp0, #%00_101_000   wz  ' SHR
         if_z    jmp     #.shr
                 cmp     i_temp0, #%00_110_000   wz
-        if_z    jmp     #\@@i_hlt
+        if_z    jmp     #\@i_hlt
                 cmp     i_temp0, #%00_111_000   wz  ' SHRA
         if_z    jmp     #.shra
                 ret
@@ -2695,7 +2695,7 @@ i_d1_prefix
                 cmp     i_temp0, #%00_101_000   wz  ' SHR
         if_z    jmp     #.shr
                 cmp     i_temp0, #%00_110_000   wz
-        if_z    jmp     #\@@i_hlt
+        if_z    jmp     #\@i_hlt
                 cmp     i_temp0, #%00_111_000   wz  ' SHRA
         if_z    jmp     #.shra
                 ret
@@ -2943,14 +2943,23 @@ DAT             ' System
                 orgh
 
 system_init
-                fltl    #ACIA_RX                      ' configure rx smart pin
+                qmul    ##_CLKFREQ, ##$1_0000       ' calculate bit timing
+                getqx   i_temp0                     ' |
+                getqy   i_temp1                     ' |
+                setq    i_temp1                     ' |
+                qdiv    i_temp0, ##ACIA_BAUD        ' |
+                getqx   i_temp0                     ' |
+                and     i_temp0, ##$FFFFFC00        ' |
+                or      i_temp0, #8 - 1             ' set bits
+
+                fltl    #ACIA_RX                    ' configure rx smart pin
                 wrpin   ##P_ASYNC_RX, #ACIA_RX
-                wxpin   ##(((_CLKFREQ * $1_0000) / ACIA_BAUD) & $FFFFFC00) | 7, #ACIA_RX
+                wxpin   i_temp0, #ACIA_RX
                 drvl    #ACIA_RX
 
-                fltl    #ACIA_TX                      ' configure tx smart pin
+                fltl    #ACIA_TX                    ' configure tx smart pin
                 wrpin   ##(P_ASYNC_TX | P_OE), #ACIA_TX
-                wxpin   ##(((_CLKFREQ * $1_0000) / ACIA_BAUD) & $FFFFFC00) | 7, #ACIA_TX
+                wxpin   i_temp0, #ACIA_TX
                 drvl    #ACIA_TX
 
                 waitx   ##(_CLKFREQ / 1_000) * 200
@@ -2967,7 +2976,7 @@ system_run
    if_not_01    ret     wcz
 
                 mov     i_temp0, #$19
-                jmp     #\@@i_trap
+                jmp     #\@i_trap
 
                 ret     wcz
 
