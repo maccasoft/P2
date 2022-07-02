@@ -6409,8 +6409,8 @@ n_loop
                 jmp     #n_loop
 
 n_reset
-                wrword  #0, ##@@fdc_fifo_head
-                wrbyte  #0, ##@@fdc_cmd_len
+                wrword  #0, #@fdc_fifo_head
+                wrbyte  #0, #@fdc_cmd_len
 
                 or      n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
 
