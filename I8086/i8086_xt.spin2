@@ -3662,8 +3662,8 @@ i_readmemb
         if_b    ret     wcz                 ' |
                 cmp     pa, #$BC        wcz ' BBFFF video ram (16k)
         if_b    jmp     #.cga
-                cmp     pa, #$FE        wcz ' FE000
-        if_ae   jmp     #.rom               ' FFFFF rom (8k)
+                cmp     pa, #$F6        wcz ' F6000
+        if_ae   jmp     #.rom               ' FFFFF rom (32k+8k)
                 ret     wcz
 .ram
                 mov     pa, i_ea
@@ -3678,8 +3678,8 @@ i_readmemb
                 ret     wcz
 .rom
                 mov     pa, i_ea
-                sub     pa, ##$FE000
-                add     pa, ##@rom_FE000
+                sub     pa, ##$F6000
+                add     pa, ##@rom_F6000
                 rdbyte  i_tmpb, pa
                 ret     wcz
 
@@ -7225,7 +7225,8 @@ DAT             ' ROM and RAM
 
 cga_charrom     file    "CGA.F08"
 
-rom_FE000       file    "BIOS.ROM"
+rom_F6000       file    "BASIC110.ROM"
+{rom_FE000}     file    "XTBIOS-REV1.ROM"
 
 drv0            long    0 'file    "PCDOS200-DISK1.IMG"
 
