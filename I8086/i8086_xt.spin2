@@ -20,36 +20,39 @@ DAT             ' Startup
 
                 asmclk
 
-                rep     @.l1,#16            ' allocate all locks, to be safe...
+                rep     @.l1,#16    ' allocate all locks, to be safe...
                 locknew pb
                 nop
 .l1
 
-                coginit #3, ##@video_driver
-                coginit #2, ##@usb_host_start
+                coginit #4, ##@video_driver
+                coginit #3, ##@usb_host_start
 
                 wrword  #0, ##@ram_00000 + $00472 ' force cold boot
 
-                coginit #1, ##@pit_cog
+                coginit #2, ##@nec765
+                coginit #1, ##@i8254
                 coginit #0, ##@i8086
 
                 orgh
 
                 ' DMA
-dma             long    $0000_0000[4]   ' DMA Address / Counter registers
+dma             long    $0000_0000      ' DMA Address / Counter registers
+                long    $0000_0000
+                long    $0000_0000
+                long    $0000_0000
                 '        |||| ||||
                 '        |||| ++++------- Address
                 '        ++++------------ Count
 
 dma_page        byte    $00[4]          ' DMA Page registers
 
-dma_ctl         long    %0_00000000000_1111_00000100_00000000   ' DMA control registers
-                '        |             |||| |||||||| ||||||||
-                '        |             |||| |||||||| ||||++++------ Channel 3..0 has reached TC
-                '        |             |||| |||||||| ++++---------- Channel 3..0 request
-                '        |             |||| ++++++++--------------- Command register
-                '        |             ++++------------------------ Mask bits
-                '        +----------------------------------------- Byte flip-flop
+dma_ctl         long    %000000000000_1111_00000100_00000000   ' DMA control registers
+                '                     |||| |||||||| ||||||||
+                '                     |||| |||||||| ||||++++------ Channel 3..0 has reached TC
+                '                     |||| |||||||| ++++---------- Channel 3..0 request
+                '                     |||| ++++++++--------------- Command register
+                '                     ++++------------------------ Mask bits
 
 dma_mode        long    %00000000_00000000_00000000_00000000    ' DMA mode registers
 
@@ -100,7 +103,8 @@ cga_io_mc6845                   '         Unit        R/W         Name          
                 ' Keyboard
 kbd_data        byte    $00
 
-irq             byte    %00000000
+                ' 8259A Interrupt Lines
+pic_irq         byte    %00000000
                 '         | || ||
                 '         | || |+-- 0: Timer0
                 '         | || +--- 1: Keyboard
@@ -108,47 +112,31 @@ irq             byte    %00000000
                 '         | +------ 4: Serial Interface 1
                 '         +-------- 6: Floppy Disk Controller
 
-                alignw
+                alignl
 
-tmr0            word    %01000100_00110000
-                '        |||  ||| ||||||||
-                '        |||  ||| ++++++++------------------ 7..0: CONTROL REGISTER
-                '        |||  ||+---------------------------    8: 0=L / 1=H BYTE FLAG
-                '        |||  |+----------------------------    9: 1=RELOAD COUNTER
-                '        |||  +-----------------------------   10: 1=NULL COUNTER
-                '        ||+--------------------------------   13: 1=LATCH
-                '        |+---------------------------------   14: GATE
-                '        +----------------------------------   15: OUT
-tmr0_cnt        word    $0000
-tmr0_latch      word    $0000
-tmr0_reload     word    $0000
+                ' 8254 Programmable Interval Timer
+tmr0            byte    %00110000   ' Control registers
+tmr1            byte    %00110000
+tmr2            byte    %00110000
+                byte    %00111000
+                '          ||||||
+                '          |||||+------ 0: Timer0 enable
+                '          ||||+------- 1: Timer1 enable
+                '          |||+-------- 2: Timer2 enable
+                '          ||+--------- 3: Timer0 reload
+                '          |+---------- 4: Timer1 reload
+                '          +----------- 5: Timer2 reload
 
-tmr1            word    %01000100_00110000
-                '        |||  ||| ||||||||
-                '        |||  ||| ++++++++------------------ 7..0: CONTROL REGISTER
-                '        |||  ||+---------------------------    8: 0=L / 1=H BYTE FLAG
-                '        |||  |+----------------------------    9: 1=RELOAD COUNTER
-                '        |||  +-----------------------------   10: 1=NULL COUNTER
-                '        ||+--------------------------------   13: 1=LATCH
-                '        |+---------------------------------   14: GATE
-                '        +----------------------------------   15: OUT
-tmr1_cnt        word    $0000
-tmr1_latch      word    $0000
+tmr0_cnt        word    $0000       ' Counter register
+tmr0_reload     word    $0000       ' Reload counter registers
+
+tmr1_cnt        word    $0000       ' Counter register
 tmr1_reload     word    $0000
 
-tmr2            word    %01000100_00110000
-                '        |||  ||| ||||||||
-                '        |||  ||| ++++++++------------------ 7..0: CONTROL REGISTER
-                '        |||  ||+---------------------------    8: 0=L / 1=H BYTE FLAG
-                '        |||  |+----------------------------    9: 1=RELOAD COUNTER
-                '        |||  +-----------------------------   10: 1=NULL COUNTER
-                '        ||+--------------------------------   13: 1=LATCH
-                '        |+---------------------------------   14: GATE
-                '        +----------------------------------   15: OUT
-tmr2_cnt        word    $0000
-tmr2_latch      word    $0000
-tmr2_reload     word    $0000
+tmr2_cnt        word    $0000       ' Counter register
+tmr2_reload     word    $0000       ' Reload counter registers
 
+                ' NEC765 Floppy Disk Controller
 fdc_dor         byte    %00000000
 fdc_msr         byte    %00000000
 
@@ -1953,14 +1941,14 @@ hkbd_out_char
                 bitc    htmp, #7
                 wrbyte  htmp, #@kbd_data
 
-.wl1            locktry #0              wc
-        if_nc   jmp     #.wl1
+.lock           locktry #I_INT_LOCK     wc  ' acquire lock for interrupt lines
+        if_nc   jmp     #.lock
 
-                rdbyte  htmp1, #@irq
+                rdbyte  htmp1, #@pic_irq
                 bith    htmp1, #1
-                wrbyte  htmp1, #@irq
+                wrbyte  htmp1, #@pic_irq
 
-        _ret_   lockrel #0
+        _ret_   lockrel #I_INT_LOCK         ' release lock
 
 kbd_table ' Index is the key scan code
           {$00} byte    $00, $00, $00, $00                      ' $03
@@ -3003,7 +2991,7 @@ i8086
                 setq2   #(@i8086_lut_end - @i8086_lut) / 4 -1
                 rdlong  0, ptrb
 
-                call    #\@system_init
+                'call    #\@i_system_init
 
                 mov     i_optable, ##@i8086_optable
                 getct   i_lastwait
@@ -3015,7 +3003,7 @@ i8086
                 'add     i_total, i_cycles
                 bitl    i_flags, #I_SEG_BIT
 
-                call    #\@i_run_interrupts
+                call    #\@i_system_run
 
                 bitl    i_flags, #I_NO_INT_BIT  wcz
                 testb   i_flags, #I_TF_BIT      wz
@@ -3577,7 +3565,7 @@ i_optable       long    @i8086_optable
 i_rambase       long    @ram_00000
 i_cgabase       long    @ram_00000 + RAM_SIZE
 
-ppi             long    %00000000_00000000_00000000_00000000
+i_ppi           long    %00000000_00000000_00000000_00000000
                 '        |||||||| |||||||| |||||||| ||||||||
                 '        |||||||| |||||||| |||||||| ++++++++-- I=KB. Scancode / O=Diagnostic
                 '        |||||||| |||||||| |||||||+----------- Timer 2 Gate Speaker
@@ -3595,14 +3583,14 @@ ppi             long    %00000000_00000000_00000000_00000000
                 '        |||||||| +--------------------------- 1=Ram parity check
                 '        ++++++++----------------------------- CONTROL
 
-pic_icw         long    %00000000_00000000_00000000_00000000
+i_pic_icw       long    %00000000_00000000_00000000_00000000
                 '        |||||||| |||||||| |||||||| ||||||||
                 '        |||||||| |||||||| |||||||| ++++++++-- ICW1
                 '        |||||||| |||||||| ++++++++----------- ICW2
                 '        |||||||| ++++++++-------------------- ICW3
                 '        ++++++++----------------------------- ICW4
 
-pic_ocw         long    %00000000_00000000_00000000_00000000
+i_pic_ocw       long    %00000000_00000000_00000000_00000000
                 '        |||      |||||||| |||||||| ||||||||
                 '        |||      |||||||| |||||||| ++++++++--   7..0: OCW1 (IMR)
                 '        |||      |||||||| ++++++++-----------  15..8: OCW2
@@ -3611,12 +3599,28 @@ pic_ocw         long    %00000000_00000000_00000000_00000000
                 '        |+-----------------------------------     30: ICW3 received
                 '        +------------------------------------     31: ICW4 received
 
-pic_irq         long    %00000000_00000000_00000000_00000000
+i_pic_irr       long    %00000000_00000000_00000000_00000000
                 '        |    |||          |||||||| ||||||||
                 '        |    |||          |||||||| ++++++++--   7..0: IRR
                 '        |    |||          ++++++++-----------  15..8: ISR
                 '        |    +++----------------------------- 26..24:  # served
                 '        +------------------------------------     31: IS
+
+i_pit           long    %00111000_00110000_00110000_00110000
+                '          ||||||
+                '          |||||+------------------------------ 24: Timer0 enable
+                '          ||||+------------------------------- 25: Timer1 enable
+                '          |||+-------------------------------- 26: Timer2 enable
+                '          ||+--------------------------------- 27: Timer0 reload
+                '          |+---------------------------------- 28: Timer1 reload
+                '          +----------------------------------- 29: Timer2 reload
+i_pit_latches   long    $0000_0000, $0000_0000
+
+i_dma_ctl       long    0
+
+i_sys_flags     long    %000_000
+                '        ||| +++ Timer H/L flags
+                '        +++---- Timer latches
 
 i_opcode        res     1
 i_modrm         res     1
@@ -3710,12 +3714,23 @@ i_readiob
                 ' i_tmpb = data
                 mov     i_tmpb, #$FF
 
-.wl1            locktry #0              wc
-        if_nc   jmp     #.wl1
-                push    ##.unlock
+                cmp     i_ea, ##$03DA   wcz
+        if_e    rdbyte  i_tmpb, #@cga_io_03DA
 
-                cmp     i_ea, #$0F      wcz
-        if_be   jmp     #dma_rd
+                cmp     i_ea, #$60      wcz
+        if_e    jmp     #\ppi_60_rd
+                cmp     i_ea, #$61      wcz
+        if_e    getbyte i_tmpb, i_ppi, #PPI_PB_BYTE
+                cmp     i_ea, #$62      wcz
+        if_e    jmp     #\ppi_62_rd
+                cmp     i_ea, #$63      wcz
+        if_e    getbyte i_tmpb, i_ppi, #PPI_CTL_BYTE
+
+                cmp     i_ea, #$07      wcz
+        if_be   jmp     #\dma_addr_rd
+                cmp     i_ea, #$08      wcz
+        if_e    rdbyte  i_tmpb, #@dma_ctl
+                cmp     i_ea, #$81      wcz
         if_e    rdbyte  i_tmpb, #@dma_page + 2
                 cmp     i_ea, #$82      wcz
         if_e    rdbyte  i_tmpb, #@dma_page + 3
@@ -3734,40 +3749,43 @@ i_readiob
                 cmp     i_ea, #$41      wcz
         if_e    jmp     #\pit_41_rd
 
-                cmp     i_ea, #$60      wcz
-        if_e    jmp     #\ppi_60_rd
-                cmp     i_ea, #$61      wcz
-        if_e    getbyte i_tmpb, ppi, #PPI_PB_BYTE
-                cmp     i_ea, #$62      wcz
-        if_e    jmp     #ppi_62_rd
-                cmp     i_ea, #$63      wcz
-        if_e    getbyte i_tmpb, ppi, #PPI_CTL_BYTE
-
-                cmp     i_ea, ##$03DA   wcz
-        if_e    rdbyte  i_tmpb, #@cga_io_03DA
-
                 cmp     i_ea, ##$03F1   wcz
         if_e    mov     i_tmpb, #%01010000
                 cmp     i_ea, ##$03F4   wcz
-        if_e    jmp     #fdc_status_rd
+        if_e    jmp     #\fdc_status_rd
                 cmp     i_ea, ##$03F5   wcz
-        if_e    jmp     #fdc_data_rd
+        if_e    jmp     #\fdc_data_rd
 
                 ret     wcz
-
-.unlock
-        _ret_   lockrel #0
 
 i_writeiob
                 ' i_ea   = address
                 ' i_tmpb = data
 
-.wl1            locktry #0              wc
-        if_nc   jmp     #.wl1
-                push    ##.unlock
+                cmp     i_ea, ##$03D4   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03D4
+                cmp     i_ea, ##$03D5   wcz
+        if_e    jmp     #\cga_03D5_wr
+                cmp     i_ea, ##$03D8   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03D8
+                cmp     i_ea, ##$03D9   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03D9
+                cmp     i_ea, ##$03DA   wcz
+        if_e    wrbyte  i_tmpb, #@cga_io_03DA
 
+                cmp     i_ea, #$60      wcz
+        if_e    setbyte i_ppi, i_tmpb, #PPI_PA_BYTE
+                cmp     i_ea, #$61      wcz
+        if_e    jmp     #\ppi_61_wr
+                cmp     i_ea, #$62      wcz
+        if_e    setbyte i_ppi, i_tmpb, #PPI_PC_BYTE
+                cmp     i_ea, #$63      wcz
+        if_e    setbyte i_ppi, i_tmpb, #PPI_CTL_BYTE
+
+                cmp     i_ea, #$07      wcz
+        if_be   jmp     #\dma_addr_wr
                 cmp     i_ea, #$0F      wcz
-        if_be   jmp     #dma_wr
+        if_be   jmp     #\dma_wr
                 cmp     i_ea, #$81      wcz
         if_e    wrbyte  i_tmpb, #@dma_page + 2
                 cmp     i_ea, #$82      wcz
@@ -3789,69 +3807,100 @@ i_writeiob
                 cmp     i_ea, #$43      wcz
         if_e    jmp     #\pit_43_wr
 
-                cmp     i_ea, #$60      wcz
-        if_e    setbyte ppi, i_tmpb, #PPI_PA_BYTE
-                cmp     i_ea, #$61      wcz
-        if_e    jmp     #ppi_61_wr
-                cmp     i_ea, #$62      wcz
-        if_e    setbyte ppi, i_tmpb, #PPI_PC_BYTE
-                cmp     i_ea, #$63      wcz
-        if_e    setbyte ppi, i_tmpb, #PPI_CTL_BYTE
-
-                cmp     i_ea, ##$03D4   wcz
-        if_e    wrbyte  i_tmpb, #@cga_io_03D4
-                cmp     i_ea, ##$03D5   wcz
-        if_e    jmp     #\cga_03D5_wr
-                cmp     i_ea, ##$03D8   wcz
-        if_e    wrbyte  i_tmpb, #@cga_io_03D8
-                cmp     i_ea, ##$03D9   wcz
-        if_e    wrbyte  i_tmpb, #@cga_io_03D9
-                cmp     i_ea, ##$03DA   wcz
-        if_e    wrbyte  i_tmpb, #@cga_io_03DA
-
                 cmp     i_ea, ##$03F2   wcz
-        if_e    jmp     #fdc_dor_wr
+        if_e    jmp     #\fdc_dor_wr
                 cmp     i_ea, ##$03F5   wcz
-        if_e    jmp     #fdc_data_wr
+        if_e    jmp     #\fdc_data_wr
 
                 ret     wcz
 
-.unlock
-        _ret_   lockrel #0
+' CGA
 
-fdc_status_rd
-                rdbyte  i_tmpb, #@fdc_msr
+cga_03D5_wr
+                rdbyte  pa, #@cga_io_03D4
+                cmp     pa, #17         wcz
+        if_a    ret     wcz
+                add     pa, #@cga_io_mc6845
+                wrbyte  i_tmpb, pa
                 ret     wcz
+i_system_run
 
-fdc_data_rd
-                mov     i_tmpb, #$00
-                rdbyte  i_temp0, #@fdc_fifo_tail
-                rdbyte  i_temp1, #@fdc_fifo_head
-                cmp     i_temp0, i_temp1    wcz
-        if_e    ret     wcz
-                add     i_temp0, #@fdc_fifo
-                rdbyte  i_tmpb, i_temp0
-                sub     i_temp0, #@fdc_fifo
-                incmod  i_temp0, #16 - 1
-                wrbyte  i_temp0, #@fdc_fifo_tail
-                ret     wcz
+                ' 8259A PIC Interrupts
 
-fdc_dor_wr
-                wrbyte  i_tmpb, #@fdc_dor
-                ret     wcz
+.lock           locktry #I_INT_LOCK     wc  ' acquire lock for interrupt lines
+        if_nc   jmp     #.lock
 
-fdc_data_wr
-                rdbyte  i_temp0, #@fdc_msr
-                testb   i_temp0, #MSR_BUSY      wz
-        if_x1   ret     wcz
-                rdbyte  i_temp0, #@fdc_cmd_len
-                cmp     i_temp0, #9             wcz
-        if_ae   ret     wcz
-                add     i_temp0, #@fdc_cmd
-                wrbyte  i_tmpb, i_temp0
-                sub     i_temp0, #@fdc_cmd - 1
-                wrbyte  i_temp0, #@fdc_cmd_len
-                ret     wcz
+                rdbyte  i_temp0, #@pic_irq
+                or      i_pic_irr, i_temp0
+                wrbyte  #0, #@pic_irq
+
+                lockrel #I_INT_LOCK         ' release lock
+
+                getbyte i_temp0, i_pic_irr, #PIC_ISR_BYTE
+                getbyte i_temp1, i_pic_irr, #PIC_IRR_BYTE
+
+                or      i_temp0, i_temp1
+                getbyte i_temp1, i_pic_ocw, #PIC_OCW1_BYTE
+                andn    i_temp0, i_temp1
+
+                setbyte i_pic_irr, i_temp0, #PIC_ISR_BYTE
+                setbyte i_pic_irr, #0, #PIC_IRR_BYTE
+
+                testb   i_pic_irr, #PIC_IS_BIT  wc
+                testb   i_flags, #I_IF_BIT      wz
+   if_not_01    ret
+
+                call    #\pic_intack
+
+                getbyte i_temp0, i_pic_icw, #PIC_ICW2_BYTE
+                testb   i_pic_irr, #PIC_IS_BIT  wz
+        if_x1   getnib  i_temp1, i_pic_irr, #PIC_IR_NIB
+        if_x1   add     i_temp0, i_temp1
+        if_x1   jmp     #\i_trap
+
+                ret
+
+pic_intack
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 0    wz
+        if_x1   setnib  i_pic_irr, #0, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 1    wz
+        if_x1   setnib  i_pic_irr, #1, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 2    wz
+        if_x1   setnib  i_pic_irr, #2, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 3    wz
+        if_x1   setnib  i_pic_irr, #3, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 4    wz
+        if_x1   setnib  i_pic_irr, #4, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 5    wz
+        if_x1   setnib  i_pic_irr, #5, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 6    wz
+        if_x1   setnib  i_pic_irr, #6, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+        if_x1   ret
+
+                testb   i_pic_irr, #(PIC_ISR_BYTE * 8) + 7    wz
+                setnib  i_pic_irr, #7, #PIC_IR_NIB
+        if_x1   bith    i_pic_irr, #PIC_IS_BIT
+
+                ret
 
 i8086_lut_end
 
@@ -6104,977 +6153,566 @@ CON             ' 8086 Constants
     I_LOCK_BIT   = 30
     I_NO_INT_BIT = 31
 
-DAT ' System
-                orgh
-
-system_init
-                ret
-
-i_run_interrupts
-
-                ' irq7 - printer
-
-                ' irq6 - floppy
-
-                ' irq5 - hard disk
-
-                ' irq4 - serial interface 1
-
-                ' irq3 - serial interface 2
-
-                ' irq1 - keyboard
-'                pollatn             wz
-'        if_x1   bith    pic_irq, #1     ' signal irq
-
-.lw1            locktry #0              wc
-        if_nc   jmp     #.lw1
-
-                rdbyte  i_temp0, #@irq  wz
-                or      pic_irq, i_temp0
-                wrbyte  #0, #@irq
-
-                lockrel #0
-
-                getbyte i_temp0, pic_irq, #PIC_ISR_BYTE
-                getbyte i_temp1, pic_irq, #PIC_IRR_BYTE
-
-                or      i_temp0, i_temp1
-                getbyte i_temp1, pic_ocw, #PIC_OCW1_BYTE
-                andn    i_temp0, i_temp1
-
-                setbyte pic_irq, i_temp0, #PIC_ISR_BYTE
-                setbyte pic_irq, #0, #PIC_IRR_BYTE
-
-                testb   pic_irq, #PIC_IS_BIT    wc
-                testb   i_flags, #I_IF_BIT      wz
-   if_not_01    ret
-                call    #pic_intack
-
-                getbyte i_temp0, pic_icw, #PIC_ICW2_BYTE
-                testb   pic_irq, #PIC_IS_BIT    wz
-        if_x1   getnib  i_temp1, pic_irq, #PIC_IR_NIB
-        if_x1   add     i_temp0, i_temp1
-        if_x1   jmp     #\i_trap
-
-                ret
-
-cga_03D5_wr
-                rdbyte  pa, #@cga_io_03D4
-                cmp     pa, #17         wcz
-        if_a    ret     wcz
-                add     pa, #@cga_io_mc6845
-                wrbyte  i_tmpb, pa
-                ret     wcz
-
-DAT             ' PPI 8255A
-                orgh
-
-ppi_60_rd
-                testb   ppi, #PPI_PA_INPUT          wz ' PA input ?
-        if_x0   getbyte i_tmpb, ppi, #PPI_PA_BYTE      ' no, return the out state
-        if_x1   rdbyte  i_tmpb, #@kbd_data
-        if_x1   wrbyte  #0, #@kbd_data
-                ret     wcz
-
-ppi_61_wr
-                testb   ppi, #(PPI_PB_BYTE * 8) + 6 wc
-                testb   i_tmpb, #6                  wz
-        if_01   bitnz   i_flags, #I_KB_RESET
-
-                testb   ppi, #(PPI_PB_BYTE * 8) + 7 wc
-                testb   i_tmpb, #7                  wz
-                setbyte ppi, i_tmpb, #PPI_PB_BYTE
-        if_10   jmp     #.reset
-
-                testb   i_tmpb, #(PPI_PB_BYTE * 8) + 7 wz
-        if_x1   wrbyte  #$00, #@kbd_data
-                ret     wcz
-
-.reset
-                bitl    i_flags, #I_KB_RESET        wcz
-        if_x1   wrbyte  #$AA, #@kbd_data
-        if_x1   bith    pic_irq, #1     ' signal irq
-                ret     wcz
-
-ppi_62_rd
-                testb   ppi, #(PPI_PB_BYTE * 8) + 3  wz
-        if_x0   mov     i_tmpb, #%00001101 ' Low switches
-                '                     ||||
-                '                     |||+-- Loop on POST
-                '                     ||+--- 1=Co-Processor installed
-                '                     ++---- Planar RAM size (00=64K, 01=128K, 10=192K, 11=256K)
-        if_x1   mov     i_tmpb, #%00000010 ' High switches
-                '                     ||||
-                '                     ||++-- Display (10=CGA)
-                '                     ++---- Num. Floppy drives (00=1, 01=2, 10=3, 11=4)
-                ret     wcz
-
-CON ' PPI 8255A constants
-
-    PPI_PA_BYTE  = 0
-    PPI_PB_BYTE  = 1
-    PPI_PC_BYTE  = 2
-    PPI_CTL_BYTE = 3
-
-    PPI_PA_INPUT  = (PPI_CTL_BYTE * 8) + 4
-    PPI_PCU_INPUT = (PPI_CTL_BYTE * 8) + 3
-    PPI_PB_INPUT  = (PPI_CTL_BYTE * 8) + 1
-    PPI_PCL_INPUT = (PPI_CTL_BYTE * 8) + 0
-
-DAT             ' PIC 8259A
-                orgh
-
-pic_20_wr
-                testb   i_tmpb, #4      wc
-                testb   i_tmpb, #3      wz
-        if_00   jmp     #.ocw2
-        if_01   setbyte pic_ocw, i_tmpb, #PIC_OCW3_BYTE ' OCW3
-        if_01   ret
-                mov     pic_icw, #0     ' ICW1
-                mov     pic_ocw, #0
-                mov     pic_irq, #0
-                setbyte pic_ocw, #%00001010, #PIC_OCW3_BYTE
-                setnib  pic_irq, #7, #PIC_IR_NIB
-                setbyte pic_icw, i_tmpb, #0
-                ret     wcz
-
-.ocw2
-                testb   i_tmpb, #5      wz  ' EOI
-        if_x1   getnib  i_temp0, pic_irq, #PIC_IR_NIB
-        if_x1   add     i_temp0, #PIC_ISR_BYTE * 8
-        if_x1   bitl    pic_irq, i_temp0
-        if_x1   bitl    pic_irq, #PIC_IS_BIT
-        if_x1   setnib  i_temp0, #7, #PIC_IR_NIB
-                ret     wcz
-
-pic_20_rd
-                mov     i_tmpb, #0
-
-                bitl    pic_ocw, #PIC_OCW3_POLL_BIT wcz
-                testb   pic_ocw, #PIC_OCW3_RR_BIT   wz
-        if_11   jmp     #.poll
-
-                testb   pic_ocw, #PIC_OCW3_RR_BIT   wc
-                testb   pic_ocw, #PIC_OCW3_RIS_BIT  wz
-        if_10   getbyte i_tmpb, pic_irq, #PIC_IRR_BYTE
-        if_11   getbyte i_tmpb, pic_irq, #PIC_ISR_BYTE
-                ret     wcz
-
-.poll
-                call    #pic_intack
-                getbyte i_tmpb, pic_irq, #PIC_POLL_BYTE
-                ret     wcz
-
-pic_21_wr
-                bith    pic_ocw, #29    wcz
-        if_0x   setbyte pic_icw, i_tmpb, #1 ' ICW2
-        if_0x   ret     wcz
-
-                bith    pic_ocw, #30    wcz
-                testb   pic_icw, #1     wz
-        if_00   setbyte pic_icw, i_tmpb, #2 ' ICW3
-        if_01   setbyte pic_icw, i_tmpb, #3 ' ICW4
-        if_01   bith    pic_ocw, #31
-        if_0x   ret     wcz
-
-                bith    pic_ocw, #31    wcz
-        if_0x   setbyte pic_icw, i_tmpb, #3 ' ICW4
-        if_0x   ret     wcz
-
-                setbyte pic_ocw, i_tmpb, #0 ' OCW1 (IMR)
-                ret     wcz
-
-pic_21_rd
-                getbyte i_tmpb, pic_ocw, #PIC_OCW1_BYTE ' OCW1 (IMR)
-                ret     wcz
-
-pic_intack
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 0    wz
-        if_x1   setnib  pic_irq, #0, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
-
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 1    wz
-        if_x1   setnib  pic_irq, #1, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
-
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 2    wz
-        if_x1   setnib  pic_irq, #2, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
-
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 3    wz
-        if_x1   setnib  pic_irq, #3, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
-
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 4    wz
-        if_x1   setnib  pic_irq, #4, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
-
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 5    wz
-        if_x1   setnib  pic_irq, #5, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
-
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 6    wz
-        if_x1   setnib  pic_irq, #6, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-        if_x1   ret
-
-                testb   pic_irq, #(PIC_ISR_BYTE * 8) + 7    wz
-                setnib  pic_irq, #7, #PIC_IR_NIB
-        if_x1   bith    pic_irq, #PIC_IS_BIT
-
-                ret
-
-CON ' PIC 8259A Constants
-
-    ' pic_icw
-    PIC_ICW1_BYTE = 0
-    PIC_ICW2_BYTE = 1
-    PIC_ICW3_BYTE = 2
-    PIC_ICW4_BYTE = 3
-
-    ' pic_ocw
-    PIC_OCW1_BYTE = 0
-    PIC_OCW2_BYTE = 1
-    PIC_OCW3_BYTE = 2
-
-    PIC_OCW3_POLL_BIT = (PIC_OCW3_BYTE * 8) + 2
-    PIC_OCW3_RR_BIT   = (PIC_OCW3_BYTE * 8) + 1
-    PIC_OCW3_RIS_BIT  = (PIC_OCW3_BYTE * 8) + 0
-
-    PIC_ICW2_BIT  = 29
-    PIC_ICW3_BIT  = 30
-    PIC_ICW4_BIT  = 31
-
-    ' pic_irq
-    PIC_IRR_BYTE  = 0
-    PIC_ISR_BYTE  = 1
-    PIC_POLL_BYTE = 3
-    PIC_IS_BIT    = 31
-    PIC_IR_NIB    = 6
-
-DAT             ' PIT 8254
-                orgh
-
-pit_40_wr
-                rdword  i_temp0, #@tmr0
-                testb   i_temp0, #5         wc
-                testb   i_temp0, #4         wz
-        if_01   jmp     #.ctl_01 ' write counter bits 0-7 only
-        if_10   jmp     #.ctl_10 ' write counter bits 8-15 only
-        if_11   jmp     #.ctl_11 ' write counter bits 0-7 first, then 8-15
-                ret     wcz
-.ctl_01
-                wrword  i_tmpb, #@tmr0_reload
-                'bitl    i_temp0, #TMR_OUT
-                bitl    i_temp0, #TMR_NULL
-                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
-                wrword  i_temp0, #@tmr0
-                ret     wcz
-.ctl_10
-                shl     i_tmpb, #8
-                wrword  i_tmpb, #@tmr0_reload
-                'bitl    i_temp0, #TMR_OUT
-                bitl    i_temp0, #TMR_NULL
-                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
-                wrword  i_temp0, #@tmr0
-                ret     wcz
-.ctl_11
-                bitnot  i_temp0, #TMR_HL   wcz
-                rdword  i_temp1, #@tmr0_reload
-        if_0x   setbyte i_temp1, i_tmpb, #0
-        if_1x   setbyte i_temp1, i_tmpb, #1
-                wrword  i_temp1, #@tmr0_reload
-
-                'bitl    i_temp0, #TMR_OUT
-                bitl    i_temp0, #TMR_NULL
-                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
-                wrword  i_temp0, #@tmr0
-                ret     wcz
-
-pit_40_rd
-                rdword  i_temp0, #@tmr0
-                testb   i_temp0, #5             wc
-                testb   i_temp0, #4             wz
-        if_01   jmp     #.ctl_01 ' read counter bits 0-7 only
-        if_10   jmp     #.ctl_10 ' read counter bits 8-15 only
-        if_11   jmp     #.ctl_11 ' read counter bits 0-7 first, then 8-15
-                ret     wcz
-.ctl_01
-                bitl    i_temp0, #TMR_LATCH     wcz
-        if_x0   rdword  i_temp1, #@tmr0_cnt
-        if_x1   rdword  i_temp1, #@tmr0_latch
-                getbyte i_tmpb, i_temp1, #0
-                wrword  i_temp0, #@tmr0
-                ret     wcz
-.ctl_10
-                bitl    i_temp0, #TMR_LATCH     wcz
-        if_x0   rdword  i_temp1, #@tmr0_cnt
-        if_x1   rdword  i_temp1, #@tmr0_latch
-                getbyte i_tmpb, i_temp1, #1
-                wrword  i_temp0, #@tmr0
-                ret     wcz
-.ctl_11
-                bitnot  i_temp0, #TMR_HL        wcz
-                testb   i_temp0, #TMR_LATCH     wz
-        if_x0   rdword  i_temp1, #@tmr0_cnt
-        if_x1   rdword  i_temp1, #@tmr0_latch
-
-        if_0x   getbyte i_tmpb, i_temp1, #0
-        if_1x   getbyte i_tmpb, i_temp1, #1
-        if_11   bitl    i_temp0, #TMR_LATCH
-                wrword  i_temp0, #@tmr0
-
-                ret     wcz
-
-pit_41_wr
-                rdword  i_temp0, #@tmr1
-                testb   i_temp0, #5         wc
-                testb   i_temp0, #4         wz
-        if_01   jmp     #.ctl_01 ' write counter bits 0-7 only
-        if_10   jmp     #.ctl_10 ' write counter bits 8-15 only
-        if_11   jmp     #.ctl_11 ' write counter bits 0-7 first, then 8-15
-                ret     wcz
-.ctl_01
-                wrword  i_tmpb, #@tmr1_reload
-                'bitl    i_temp0, #TMR_OUT
-                bitl    i_temp0, #TMR_NULL
-                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
-                wrword  i_temp0, #@tmr1
-                ret     wcz
-.ctl_10
-                shl     i_tmpb, #8
-                wrword  i_tmpb, #@tmr1_reload
-                'bitl    i_temp0, #TMR_OUT
-                bitl    i_temp0, #TMR_NULL
-                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
-                wrword  i_temp0, #@tmr1
-                ret     wcz
-.ctl_11
-                bitnot  i_temp0, #TMR_HL   wcz
-                rdword  i_temp1, #@tmr1_reload
-        if_0x   setbyte i_temp1, i_tmpb, #0
-        if_1x   setbyte i_temp1, i_tmpb, #1
-                wrword  i_temp1, #@tmr1_reload
-
-                'bitl    i_temp0, #TMR_OUT
-                bitl    i_temp0, #TMR_NULL
-                bith    i_temp0, #TMR_RELOAD    ' signal reload counter
-                wrword  i_temp0, #@tmr1
-                ret     wcz
-
-pit_41_rd
-                rdword  i_temp0, #@tmr1
-                testb   i_temp0, #5             wc
-                testb   i_temp0, #4             wz
-        if_01   jmp     #.ctl_01 ' read counter bits 0-7 only
-        if_10   jmp     #.ctl_10 ' read counter bits 8-15 only
-        if_11   jmp     #.ctl_11 ' read counter bits 0-7 first, then 8-15
-                ret     wcz
-.ctl_01
-                bitl    i_temp0, #TMR_LATCH     wcz
-        if_x0   rdword  i_temp1, #@tmr1_cnt
-        if_x1   rdword  i_temp1, #@tmr1_latch
-                getbyte i_tmpb, i_temp1, #0
-                wrword  i_temp0, #@tmr1
-                ret     wcz
-.ctl_10
-                bitl    i_temp0, #TMR_LATCH     wcz
-        if_x0   rdword  i_temp1, #@tmr1_cnt
-        if_x1   rdword  i_temp1, #@tmr1_latch
-                getbyte i_tmpb, i_temp1, #1
-                wrword  i_temp0, #@tmr1
-                ret     wcz
-.ctl_11
-                bitnot  i_temp0, #TMR_HL        wcz
-                testb   i_temp0, #TMR_LATCH     wz
-        if_x0   rdword  i_temp1, #@tmr1_cnt
-        if_x1   rdword  i_temp1, #@tmr1_latch
-
-        if_0x   getbyte i_tmpb, i_temp1, #0
-        if_1x   getbyte i_tmpb, i_temp1, #1
-        if_11   bitl    i_temp0, #TMR_LATCH
-                wrword  i_temp0, #@tmr1
-
-                ret     wcz
-
-pit_43_wr
-                testb   i_tmpb, #5          wc
-                testb   i_tmpb, #4          wz
-        if_00   jmp     #.latch
-
-                testb   i_tmpb, #7          wc
-                testb   i_tmpb, #6          wz
-
-        if_00   rdword  i_temp0, #@tmr0
-        if_00   setbyte i_temp0, i_tmpb, #0
-        if_00   bith    i_temp0, #TMR_NULL
-        if_00   wrword  i_temp0, #@tmr0
-
-        if_01   rdword  i_temp0, #@tmr1
-        if_01   setbyte i_temp0, i_tmpb, #0
-        if_01   bith    i_temp0, #TMR_NULL
-        if_01   wrword  i_temp0, #@tmr1
-
-        if_10   rdword  i_temp0, #@tmr2
-        if_10   setbyte i_temp0, i_tmpb, #0
-        if_10   bith    i_temp0, #TMR_NULL
-        if_10   wrword  i_temp0, #@tmr2
-                ret     wcz
-.latch
-                testb   i_tmpb, #7          wc
-                testb   i_tmpb, #6          wz
-
-        if_00   rdword  i_temp0, #@tmr0_cnt
-        if_00   wrword  i_temp0, #@tmr0_latch
-        if_00   rdword  i_temp0, #@tmr0
-        if_00   bith    i_temp0, #TMR_LATCH
-        if_00   wrword  i_temp0, #@tmr0
-
-        if_01   rdword  i_temp0, #@tmr1_cnt
-        if_01   wrword  i_temp0, #@tmr1_latch
-        if_01   rdword  i_temp0, #@tmr1
-        if_01   bith    i_temp0, #TMR_LATCH
-        if_01   wrword  i_temp0, #@tmr1
-
-        if_10   rdword  i_temp0, #@tmr2_cnt
-        if_10   wrword  i_temp0, #@tmr2_latch
-        if_10   rdword  i_temp0, #@tmr2
-        if_10   bith    i_temp0, #TMR_LATCH
-        if_10   wrword  i_temp0, #@tmr2
-                ret     wcz
-
-DAT
+    I_INT_LOCK   = 0
+    I_TIMER_LOCK = 1
+    I_DMA_LOCK   = 2
+
+DAT             ' 8254 Programmable Interval Timer
                 org     $000
 
-pit_cog
-                mov     ijmp1, #pit_tick
-                getct   pit_ct
-                addct1  pit_ct, #_CLKFREQ / 1_193_180
-                setint1 #EVENT_CT1
-
-fdc_nec765
-                rdbyte  fdc_tmp0, #@fdc_dor
-
-                testb   _fdc_dor, #DOR_RESET    wc
-                testb   fdc_tmp0, #DOR_RESET    wz
-                setbyte _fdc_dor, fdc_tmp0, #0
-        if_01   jmp     #.reset
-
-                testb   fdc_drive+0, #30        wz
-                bitz    _fdc_msr, #MSR_DRIVE1_POS_MODE
-                testb   fdc_drive+1, #30        wz
-                bitz    _fdc_msr, #MSR_DRIVE2_POS_MODE
-                testb   fdc_drive+2, #30        wz
-                bitz    _fdc_msr, #MSR_DRIVE3_POS_MODE
-                testb   fdc_drive+3, #30        wz
-                bitz    _fdc_msr, #MSR_DRIVE4_POS_MODE
-
-                rdbyte  fdc_tmp0, #@fdc_fifo_tail
-                rdbyte  fdc_tmp1, #@fdc_fifo_head
-                cmp     fdc_tmp0, fdc_tmp1      wz
-                bitnz   _fdc_msr, #MSR_BUSY
-                bitnz   _fdc_msr, #MSR_DATAIO
-
-                wrbyte  _fdc_msr, #@fdc_msr
-        if_nz   jmp     #fdc_nec765
-
-                rdbyte  _len, #@fdc_cmd_len     wz
-        if_z    jmp     #fdc_nec765
-
-                rdbyte  _cmd, #@fdc_cmd
-                and     _cmd, #$0F
-                cmp     _cmd, #CMD_READ_TRACK   wz
-        if_e    jmp     #.read_track
-                cmp     _cmd, #CMD_SPECIFY      wz
-        if_e    jmp     #.specify
-                cmp     _cmd, #CMD_CHECK_STAT   wz
-        if_e    jmp     #.check_stat
-                cmp     _cmd, #CMD_WRITE_SECT   wz
-        if_e    jmp     #.write_sect
-                cmp     _cmd, #CMD_READ_SECT    wz
-        if_e    jmp     #.read_sect
-                cmp     _cmd, #CMD_CALIBRATE    wz
-        if_e    jmp     #.calibrate
-                cmp     _cmd, #CMD_CHECK_INT    wz
-        if_e    jmp     #.check_int
-                cmp     _cmd, #CMD_WRITE_DEL_S  wz
-        if_e    jmp     #.write_del_s
-                cmp     _cmd, #CMD_READ_ID_S    wz
-        if_e    jmp     #.read_id_s
-                cmp     _cmd, #CMD_READ_DEL_S   wz
-        if_e    jmp     #.read_del_s
-                cmp     _cmd, #CMD_FORMAT_TRACK wz
-        if_e    jmp     #.format_track
-                cmp     _cmd, #CMD_SEEK         wz
-        if_e    jmp     #.seek
-
-                mov     pa, #STATUS0_INT_INVALID
-                call    #fdc_fifo_write
-
-                bitl    _fdc_msr, #MSR_BUSY
-                bith    _fdc_msr, #MSR_DATAIO
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.reset
-                mov     _fdc_msr, #(1<<MSR_DATAREG)|(1<<MSR_BUSY)|(1<<MSR_NDMA)
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                wrword  #0, #@fdc_fifo_head
-                wrbyte  #0, #@fdc_cmd_len
-
-                setbyte fdc_status, #STATUS0_INT_ABNORMAL_POLL, #0
-
-                mov     fdc_drvnum, #0              ' reset current drive numer
-                bitl    fdc_drive+0, #30            ' stop seeking for all drives
-                bitl    fdc_drive+1, #30            ' |
-                bitl    fdc_drive+2, #30            ' |
-                bitl    fdc_drive+3, #30            ' |
-
-                getct   fdc_tmp1                    ' delay a bit
-                addct3  fdc_tmp1, ##_CLKFREQ / 1000 ' |
-.l1             pollct3 wc                          ' |
-        if_nc   jmp     #.l1                        ' |
-
-                bitl    _fdc_msr, #MSR_BUSY
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                testb   _fdc_dor, #DOR_INT_ENABLE   wz ' generate interrupt 6
-        if_x1   rdbyte  fdc_tmp0, #@irq
-        if_x1   bith    fdc_tmp0, #6
-        if_x1   wrbyte  fdc_tmp0, #@irq
-
-                jmp     #fdc_nec765
-
-.read_track
-                cmp     _len, #9                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.specify
-                cmp     _len, #3                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                rdbyte  fdc_tmp0, #@fdc_cmd+2
-                testb   fdc_tmp0, #0            wz
-                bitnz   _fdc_msr, #MSR_NDMA
-                bitz    _fdc_dor, #31
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.check_stat
-                cmp     _len, #2                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.write_sect
-                cmp     _len, #9                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.read_sect
-                cmp     _len, #9                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                rdbyte  pa, #@fdc_cmd+1             ' drive number
-                and     pa, #%00000011              ' |
-
-                alts    pa, #fdc_drive              ' get drive data
-                getbyte fdc_tmp0, 0-0, #0           ' | (keep current track position)
-
-                rdbyte  fdc_tmp1, #@fdc_cmd+2       ' request track
-                setbyte fdc_tmp0, fdc_tmp1, #2      ' | to byte 2
-
-                rdbyte  fdc_tmp1, #@fdc_cmd+3       ' head
-                testb   fdc_tmp1, #0            wz  ' |
-                bitz    fdc_tmp0, #24               ' |
-
-                rdbyte  fdc_tmp1, #@fdc_cmd+4       ' sector
-                setbyte fdc_tmp0, fdc_tmp1, #1      ' | to byte 1
-
-                bith    fdc_tmp0, #30               ' seeking
-                bith    _fdc_msr, #MSR_BUSY         ' busy
-
-                altd    pa, #fdc_drive              ' update drive data
-                mov     0-0, fdc_tmp0               ' |
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.calibrate
-                cmp     _len, #2                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                rdbyte  fdc_drvnum, #@fdc_cmd+1     ' drive number
-                and     fdc_drvnum, #%00000011      ' |
-
-                alts    fdc_drvnum, #fdc_drive      ' get drive data
-                mov     fdc_tmp0, 0-0               ' |
-
-                setbyte fdc_tmp0, #0, #2            ' request track 0
-                bith    fdc_tmp0, #30               ' seeking
-                bith    _fdc_msr, #MSR_BUSY         ' busy
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                altd    fdc_drvnum, #fdc_drive      ' update drive data
-                mov     0-0, fdc_tmp0               ' |
-
-                wrbyte  #$00, #@fdc_cmd_len
-
-                getct   fdc_tmp1
-                addct3  fdc_tmp1, ##_CLKFREQ / 1000
-.l2             pollct3                         wc
-        if_nc   jmp     #.l2
-
-                bith    fdc_status, #STATUS0_SE
-                bith    fdc_status, #STATUS3_TRK0
-
-                bitl    _fdc_msr, #MSR_BUSY         ' ready
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                testb   _fdc_dor, #DOR_INT_ENABLE   wz
-        if_x1   rdbyte  fdc_tmp0, #@irq
-        if_x1   bith    fdc_tmp0, #6
-        if_x1   wrbyte  fdc_tmp0, #@irq
-
-                jmp     #fdc_nec765
-
-.check_int
-                getbyte pa, fdc_status, #0
-                call    #fdc_fifo_write
-
-                alts    fdc_drvnum, #fdc_drive      ' get current drive track number
-                getbyte pa, 0-0, #0                 ' | (from byte 0)
-                call    #fdc_fifo_write
-
-                bith    _fdc_msr, #MSR_BUSY
-                bith    _fdc_msr, #MSR_DATAIO
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.write_del_s
-                cmp     _len, #9                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.read_id_s
-                cmp     _len, #2                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.read_del_s
-                cmp     _len, #9                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.format_track
-                cmp     _len, #6                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                wrbyte  #$00, #@fdc_cmd_len
-                jmp     #fdc_nec765
-
-.seek
-                cmp     _len, #3                wcz
-        if_lt   jmp     #fdc_nec765
-
-                call    #fdc_set_status
-
-                rdbyte  fdc_drvnum, #@fdc_cmd+1     ' drive number
-                and     fdc_drvnum, #%00000011      ' |
-
-                alts    fdc_drvnum, #fdc_drive      ' get drive data
-                mov     fdc_tmp0, 0-0               ' |
-
-                rdbyte  fdc_tmp1, #@fdc_cmd+1       ' head
-                testb   fdc_tmp1, #2            wz  ' |
-                bitz    fdc_tmp0, #24               ' |
-
-                rdbyte  fdc_tmp1, #@fdc_cmd+2       ' request track
-                setbyte fdc_tmp0, fdc_tmp1, #2      ' | to byte 2
-
-                bith    fdc_tmp0, #30               ' seeking
-                bith    _fdc_msr, #MSR_BUSY         ' busy
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                altd    fdc_drvnum, #fdc_drive      ' update drive data
-                mov     0-0, fdc_tmp0               ' |
-
-                wrbyte  #$00, #@fdc_cmd_len
-
-                getct   fdc_tmp1
-                addct3  fdc_tmp1, ##_CLKFREQ / 1000
-.l3             pollct3 wc
-        if_nc   jmp     #.l3
-
-                getbyte fdc_tmp1, fdc_tmp0, #2      ' requested track
-                setbyte fdc_tmp0, fdc_tmp1, #0      ' | to byte 0
-                bith    fdc_status, #STATUS0_SE
-                cmp     fdc_tmp1, #0            wz
-                bitz    fdc_status, #STATUS3_TRK0
-
-                bitl    _fdc_msr, #MSR_BUSY         ' ready
-                wrbyte  _fdc_msr, #@fdc_msr
-
-                testb   _fdc_dor, #DOR_INT_ENABLE   wz
-        if_x1   rdbyte  fdc_tmp0, #@irq
-        if_x1   bith    fdc_tmp0, #6
-        if_x1   wrbyte  fdc_tmp0, #@irq
-
-                jmp     #fdc_nec765
-
-fdc_set_status
-                mov     fdc_status, #STATUS0_INT_NORMAL
-                or      fdc_status, fdc_drvnum      ' drive number
-
-                bith    fdc_status, #STATUS0_NR     ' no media?
-
-                alts    fdc_drvnum, #fdc_drive      ' get drive data
-                mov     fdc_tmp1, 0-0               ' |
-                testb   fdc_tmp1, #24           wz  ' head
-                bitz    fdc_tmp0, #3                ' |
-
-                ret
-
-fdc_fifo_write
-                rdbyte  fdc_tmp0, #@fdc_fifo_head
-                add     fdc_tmp0, #@fdc_fifo
-                wrbyte  pa, fdc_tmp0
-                sub     fdc_tmp0, #@fdc_fifo
-                incmod  fdc_tmp0, #16 - 1
-        _ret_   wrbyte  fdc_tmp0, #@fdc_fifo_head
-
-
-_fdc_msr        long    (1<<MSR_DATAREG)|(1<<MSR_NDMA)
-_fdc_dor        long    0
-
-fdc_drvnum      long    0
-fdc_drive       long    %00000000_00000000_00000000_00000000[4]
-                '         |||   | |||||||| |||||||| ++++++++--- Track
-                '         |||   | |||||||| ++++++++------------ Sector
-                '         |||   | ++++++++--------------------- Req. Track
-                '         |||   +------------------------------ Head
-                '         ||+---------------------------------- Reading
-                '         |+----------------------------------- Transfer
-                '         +------------------------------------ Seeking
-
-fdc_status      long    STATUS0_INT_ABNORMAL_POLL
-
-pit_tick
-'                testb   pit_tmr0, #TMR_GATE     wc
-'                testb   pit_tmr0, #TMR_NULL     wz
-'   if_nc_or_z   jmp     #pit_tick1
-
-                rdword  pit_tmr0, #@tmr0
-                testb   pit_tmr0, #TMR_NULL      wz
-        if_x1   jmp     #pit_tick1
-
-                bitl    pit_tmr0, #TMR_RELOAD    wcz
-        if_x0   jmp     #.l1
-                rdword  pit_temp0, #@tmr0_reload
-                wrword  pit_temp0, #@tmr0_cnt
-                wrword  pit_tmr0, #@tmr0
-                jmp     #pit_tick1
-
-.l1
-                getbyte pit_temp0, pit_tmr0, #0
-                and     pit_temp0, #%0000_111_0 wz
+i8254
+                getct   t_lastct1
+                addct1  t_lastct1, #_CLKFREQ / 1_193_180
+
+t_loop
+                pollct1 wc
+        if_nc   jmp     #t_loop
+
+.lock           locktry #I_TIMER_LOCK wc ' acquire timer lock
+        if_nc   jmp     #.lock
+
+                rdlong  t_ctrl, #@tmr0
+                mov     t_temp0, t_ctrl
+                and     t_temp0, t_reload_mask
+                wrlong  t_temp0, #@tmr0
+
+                lockrel #I_TIMER_LOCK ' release lock
+
+                getbyte t_temp0, t_ctrl, #3
+                and     t_flags, %00111000
+                or      t_flags, t_temp0
+
+t_timer0
+                testb   t_flags, #TIMER0_ENABLE wz
+        if_x0   jmp     #t_timer1
+
+                bitl    t_flags, #TIMER0_RELOAD wcz
+        if_x1   rdword  t_temp0, #@tmr0_reload
+        if_x1   wrword  t_temp0, #@tmr0_cnt
+        if_x1   jmp     #t_timer1
+
+                getbyte t_temp0, t_ctrl, #0
+                and     t_temp0, #%0000_111_0 wz
         if_z    jmp     #.mode0
-                cmp     pit_temp0, #%0000_010_0 wz
-        if_ne   cmp     pit_temp0, #%0000_110_0 wz
+                cmp     t_temp0, #%0000_010_0 wz
+        if_ne   cmp     t_temp0, #%0000_110_0 wz
         if_e    jmp     #.mode2
-                cmp     pit_temp0, #%0000_011_0 wz
-        if_ne   cmp     pit_temp0, #%0000_111_0 wz
+                cmp     t_temp0, #%0000_011_0 wz
+        if_ne   cmp     t_temp0, #%0000_111_0 wz
         if_e    jmp     #.mode3
-                cmp     pit_temp0, #%0000_101_0 wz
-                jmp     #pit_tick1
-
+                cmp     t_temp0, #%0000_101_0 wz
+                jmp     #t_timer1
 .mode0
-                rdword  pit_temp0, #@tmr0_cnt
-                sub     pit_temp0, #1           wcz
-                wrword  pit_temp0, #@tmr0_cnt
-        if_nz   jmp     #pit_tick1
-
-                rdbyte  pit_temp0, #@irq
-                bith    pit_temp0, #0
-                wrbyte  pit_temp0, #@irq
-
-                jmp     #pit_tick1
+                rdword  t_count, #@tmr0_cnt
+                sub     t_count, #1           wcz
+                wrword  t_count, #@tmr0_cnt
+        if_nz   jmp     #t_timer1
+                jmp     #t_trigger_irq
 .mode2
 .mode3
-                rdword  pit_temp0, #@tmr0_cnt
-                sub     pit_temp0, #1           wcz
-                wrword  pit_temp0, #@tmr0_cnt
-        if_nz   jmp     #pit_tick1
-                bith    pit_tmr0, #TMR_RELOAD
-                wrword  pit_tmr0, #@tmr0
+                rdword  t_count, #@tmr0_cnt
+                sub     t_count, #1           wcz
+                wrword  t_count, #@tmr0_cnt
+        if_nz   jmp     #t_timer1
+                bith    t_flags, #TIMER0_RELOAD
 
-                rdbyte  pit_temp0, #@irq
-                bith    pit_temp0, #0
-                wrbyte  pit_temp0, #@irq
+t_trigger_irq
+.lock           locktry #I_INT_LOCK  wc ' acquire irq lock
+        if_nc   jmp     #.lock
 
-                jmp     #pit_tick1
+                rdbyte  htmp1, #@pic_irq
+                bith    htmp1, #0
+                wrbyte  htmp1, #@pic_irq
 
-pit_tick1
-'                testb   pit_tmr1, #TMR_GATE     wc
-'                testb   pit_tmr1, #TMR_NULL     wz
-'   if_nc_or_z   jmp     #pit_tick_end
+                lockrel #I_INT_LOCK ' release lock
 
-                rdword  pit_tmr1, #@tmr1
-                testb   pit_tmr1, #TMR_NULL      wz
-        if_x1   jmp     #pit_tick2
+t_timer1
+                testb   t_flags, #TIMER1_ENABLE wz
+        if_x0   jmp     #t_timer2
 
-                bitl    pit_tmr1, #TMR_RELOAD    wcz
-        if_x0   jmp     #.l1
-                rdword  pit_temp0, #@tmr1_reload
-                wrword  pit_temp0, #@tmr1_cnt
-                wrword  pit_tmr1, #@tmr1
-                jmp     #pit_tick2
+                bitl    t_flags, #TIMER1_RELOAD wcz
+        if_x1   rdword  t_temp0, #@tmr1_reload
+        if_x1   wrword  t_temp0, #@tmr1_cnt
+        if_x1   jmp     #t_timer2
 
-.l1             getbyte pit_temp0, pit_tmr1, #0
-                and     pit_temp0, #%0000_111_0 wz
+                getbyte t_temp0, t_ctrl, #1
+                and     t_temp0, #%0000_111_0 wz
         if_z    jmp     #.mode0
-                cmp     pit_temp0, #%0000_010_0 wz
-        if_ne   cmp     pit_temp0, #%0000_110_0 wz
+                cmp     t_temp0, #%0000_010_0 wz
+        if_ne   cmp     t_temp0, #%0000_110_0 wz
         if_e    jmp     #.mode2
-                cmp     pit_temp0, #%0000_011_0 wz
-        if_ne   cmp     pit_temp0, #%0000_111_0 wz
+                cmp     t_temp0, #%0000_011_0 wz
+        if_ne   cmp     t_temp0, #%0000_111_0 wz
         if_e    jmp     #.mode3
-                cmp     pit_temp0, #%0000_101_0 wz
-                jmp     #pit_tick2
-
+                cmp     t_temp0, #%0000_101_0 wz
+                jmp     #t_timer2
 .mode0
-                rdword  pit_temp0, #@tmr1_cnt
-                sub     pit_temp0, #1           wcz
-                wrword  pit_temp0, #@tmr1_cnt
-                jmp     #pit_tick2
+                rdword  t_count, #@tmr1_cnt
+                sub     t_count, #1           wcz
+                wrword  t_count, #@tmr1_cnt
+        if_nz   jmp     #t_timer2
+                jmp     #t_dma_tick
 .mode2
 .mode3
-                rdword  pit_temp0, #@tmr1_cnt
-                sub     pit_temp0, #1           wcz
-                wrword  pit_temp0, #@tmr1_cnt
-        if_nz   jmp     #pit_tick2
-                bith    pit_tmr1, #TMR_RELOAD
-                wrword  pit_tmr1, #@tmr1
+                rdword  t_count, #@tmr1_cnt
+                sub     t_count, #1           wcz
+                wrword  t_count, #@tmr1_cnt
+        if_nz   jmp     #t_timer2
+                bith    t_flags, #TIMER1_RELOAD
 
-                ' DMA
-                rdlong  pit_dma_ctl, #@dma_ctl
-                testb   pit_dma_ctl, #8 + 2     wz  ' controller enable
-        if_x1   jmp     #pit_tick2
-                testb   pit_dma_ctl, #16 + 0    wz  ' ch0 mask
-        if_x1   jmp     #pit_tick2
-                bitl    pit_dma_ctl, #4 + 0     wcz ' ch0 request
-        'if_x0   jmp     #pit_tick_end
+t_dma_tick
+.lock           locktry #I_DMA_LOCK wc  ' acquire dma lock
+        if_nc   jmp     #.lock
 
-                rdlong  pit_dma_mode, #@dma_mode
-                testb   pit_dma_mode, #4        wz  ' auto init
-        if_x0   jmp     #pit_tick2
+                rdlong  t_dma_ctl, #@dma_ctl
+                testb   t_dma_ctl, #8 + 2     wz  ' controller enable
+        if_x1   jmp     #.unlock
+                testb   t_dma_ctl, #16 + 0    wz  ' ch0 mask
+        if_x1   jmp     #.unlock
+                bitl    t_dma_ctl, #4 + 0     wcz ' ch0 request
+        if_x1   jmp     #.unlock
 
-                rdword  pit_temp0, #@dma            ' ch0 address
-                incmod  pit_temp0, i_ffffh
-                wrword  pit_temp0, #@dma
-                rdword  pit_temp0, #@dma + 2        ' ch0 counter
-                sub     pit_temp0, #1           wz
-                wrword  pit_temp0, #@dma + 2
-        if_z    bith    pit_dma_ctl, #0             ' signal ch0 end
+                rdlong  t_dma_mode, #@dma_mode
+                testb   t_dma_mode, #4        wz  ' auto init
+        if_x0   jmp     #.unlock
 
-                wrlong  pit_dma_ctl, #@dma_ctl
+                wrlong  #0, #@dma
+                bith    t_dma_ctl, #0             ' signal ch0 end
 
-                jmp     #pit_tick2
+'                rdword  t_temp0, #@dma            ' ch0 address
+'                incmod  t_temp0, i_ffffh
+'                wrword  t_temp0, #@dma
+'                rdword  t_temp0, #@dma + 2        ' ch0 counter
+'                sub     t_temp0, #1           wz
+'                wrword  t_temp0, #@dma + 2
+'        if_z    bith    t_dma_ctl, #0             ' signal ch0 end
 
-pit_tick2
-pit_tick_end
-                addct1  pit_ct, #_CLKFREQ / 1_193_180
-                reti1
+.unlock
+                wrbyte  t_dma_ctl, #@dma_ctl
+                lockrel #I_DMA_LOCK     ' release lock
 
-pit_ct          res     1
-pit_tmr0        res     1
-pit_tmr1        res     1
-pit_tmr2        res     1
+t_timer2
+                testb   t_flags, #TIMER2_ENABLE wz
+        if_x0   jmp     #t_done
 
-pit_temp0       res     1
-pit_temp1       res     1
-pit_temp2       res     1
+                bitl    t_flags, #TIMER2_RELOAD wcz
+        if_x1   rdword  t_temp0, #@tmr2_reload
+        if_x1   wrword  t_temp0, #@tmr2_cnt
+        if_x1   jmp     #t_done
 
-pit_dma_ctl     res     1
-pit_dma_mode    res     1
+                getbyte t_temp0, t_ctrl, #2
+                and     t_temp0, #%0000_111_0 wz
+        if_z    jmp     #.mode0
+                cmp     t_temp0, #%0000_010_0 wz
+        if_ne   cmp     t_temp0, #%0000_110_0 wz
+        if_e    jmp     #.mode2
+                cmp     t_temp0, #%0000_011_0 wz
+        if_ne   cmp     t_temp0, #%0000_111_0 wz
+        if_e    jmp     #.mode3
+                cmp     t_temp0, #%0000_101_0 wz
+                jmp     #t_done
+.mode0
+                rdword  t_count, #@tmr2_cnt
+                sub     t_count, #1           wcz
+                wrword  t_count, #@tmr2_cnt
+        if_nz   jmp     #t_done
+                ' TODO ???
+                jmp     #t_done
+.mode2
+.mode3
+                rdword  t_count, #@tmr2_cnt
+                sub     t_count, #1           wcz
+                wrword  t_count, #@tmr2_cnt
+        if_nz   jmp     #t_done
+                bith    t_flags, #TIMER2_RELOAD
+                ' TODO ???
+                jmp     #t_done
 
-_cmd            res     1
-_len            res     1
+t_done
+                jmp     #t_loop
 
-fdc_tmp0        res     1
-fdc_tmp1        res     1
-fdc_tmp2        res     1
+t_flags         long    %00111000
+t_reload_mask   long    %11000111_11111111_11111111_11111111
 
-                fit     $1F0
+t_lastct1       res     1
 
-CON ' PIT 8254 Constants
+t_ctrl          res     1
+t_count         res     1
+t_reload        res     1
 
-    TMR_HL     =  8
-    TMR_RELOAD =  9
-    TMR_NULL   = 10
-    TMR_LATCH  = 13
-    TMR_GATE   = 14
-    TMR_OUT    = 15
+t_dma_ctl       res     1
+t_dma_mode      res     1
+
+t_temp0         res     1
+
+CON ' 8254 Constants
+
+    TIMER0_ENABLE   = 0
+    TIMER1_ENABLE   = 1
+    TIMER2_ENABLE   = 2
+
+    TIMER0_RELOAD   = 3
+    TIMER1_RELOAD   = 4
+    TIMER2_RELOAD   = 5
+
+DAT             ' NEC765
+                org     $000
+
+nec765
+
+n_loop
+                testb   n_dor, #DOR_ENABLE  wc
+                rdbyte  n_dor, #@fdc_dor
+                testb   n_dor, #DOR_ENABLE  wz
+        if_01   jmp     #n_reset
+
+                rdbyte  n_temp0, #@fdc_fifo_tail
+                rdbyte  n_temp1, #@fdc_fifo_head
+                cmp     n_temp0, n_temp1    wz
+                bitnz   n_msr, #MSR_BUSY
+                bitnz   n_msr, #MSR_DATAIO
+                wrbyte  n_msr, #@fdc_msr
+        if_nz   jmp     #n_loop
+
+                rdbyte  n_cmd_len, #@fdc_cmd_len wz
+        if_z    jmp     #n_loop
+
+                rdbyte  n_cmd, #@fdc_cmd
+                and     n_cmd, #$0F
+
+                cmp     n_cmd, #CMD_READ_TRACK   wz
+        if_e    jmp     #n_read_track
+                cmp     n_cmd, #CMD_SPECIFY      wz
+        if_e    jmp     #n_specify
+                cmp     n_cmd, #CMD_CHECK_STAT   wz
+        if_e    jmp     #n_check_stat
+                cmp     n_cmd, #CMD_WRITE_SECT   wz
+        if_e    jmp     #n_write_sect
+                cmp     n_cmd, #CMD_READ_SECT    wz
+        if_e    jmp     #n_read_sect
+                cmp     n_cmd, #CMD_CALIBRATE    wz
+        if_e    jmp     #n_calibrate
+                cmp     n_cmd, #CMD_CHECK_INT    wz
+        if_e    jmp     #n_check_int
+                cmp     n_cmd, #CMD_WRITE_DEL_S  wz
+        if_e    jmp     #n_write_del_s
+                cmp     n_cmd, #CMD_READ_ID_S    wz
+        if_e    jmp     #n_read_id_s
+                cmp     n_cmd, #CMD_READ_DEL_S   wz
+        if_e    jmp     #n_read_del_s
+                cmp     n_cmd, #CMD_FORMAT_TRACK wz
+        if_e    jmp     #n_format_track
+                cmp     n_cmd, #CMD_SEEK         wz
+        if_e    jmp     #n_seek
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_reset
+                wrword  #0, ##@@fdc_fifo_head
+                wrbyte  #0, ##@@fdc_cmd_len
+
+                or      n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                jmp     #n_trigger_irq
+
+n_read_track
+                cmp     n_cmd_len, #9           wcz
+        if_lt   jmp     #n_loop
+
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_specify
+                cmp     n_cmd_len, #3           wcz
+        if_lt   jmp     #n_loop
+
+                andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_check_stat
+                cmp     n_cmd_len, #2           wcz
+        if_lt   jmp     #n_loop
+
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_write_sect
+                cmp     n_cmd_len, #9           wcz
+        if_lt   jmp     #n_loop
+
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_read_sect
+                cmp     n_cmd_len, #9           wcz
+        if_lt   jmp     #n_loop
+
+                bith    n_msr, #MSR_BUSY
+                bitl    n_msr, #MSR_DATAIO
+                wrbyte  n_msr, #@fdc_msr
+
+                andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                rdbyte  n_drv, #@fdc_cmd+1      ' drive number
+                and     n_drv, #%00000011       ' |
+                andn    n_stat, #%11            ' clear drive#
+                or      n_stat, n_drv           ' set current drive#
+
+                rdbyte  ptra, #@fdc_cmd+2       ' track#
+                altsb   n_drv, #n_track
+                setbyte ptra
+                cmp     ptra, #0                wz
+                bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
+
+                mul     ptra, #9
+                rdbyte  n_temp0, #@fdc_cmd+4    ' sector#
+                sub     n_temp0, #1
+                add     ptra, n_temp0
+
+                shl     ptra, #9
+
+                rdlong  n_temp0, ##@drv0        wz
+        if_z    wrbyte  #$00, #@fdc_cmd_len
+        if_z    jmp     #n_loop
+
+                add     ptra, ##@drv0
+.l1             rdbyte  pa, ptra++
+                call    #n_dma_write
+ if_nz_and_nc   jmp     #.l1
+
+                getbyte pa, n_stat, #0          ' st0
+                call    #n_fifo_write           ' |
+                getbyte pa, n_stat, #1          ' st1
+                call    #n_fifo_write           ' |
+                getbyte pa, n_stat, #2          ' st2
+                call    #n_fifo_write           ' |
+                rdbyte  pa, #@fdc_cmd+2         ' track#
+                call    #n_fifo_write           ' |
+                rdbyte  pa, #@fdc_cmd+3
+                call    #n_fifo_write
+                rdbyte  pa, #@fdc_cmd+4         ' sector#
+                call    #n_fifo_write           ' |
+                rdbyte  pa, #@fdc_cmd+5
+                call    #n_fifo_write
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_trigger_irq
+
+n_calibrate
+                cmp     n_cmd_len, #2           wcz
+        if_lt   jmp     #n_loop
+
+                andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                rdbyte  n_drv, #@fdc_cmd+1      ' drive number
+                and     n_drv, #%00000011       ' |
+                altsb   n_drv, #n_track
+                setbyte #$00
+
+                andn    n_stat, #%11            ' clear drive#
+                or      n_stat, n_drv           ' set current drive#
+
+                bith    n_stat, #STATUS3_TRK0   ' set track0 flag
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_trigger_irq
+
+n_check_int
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                getbyte pa, n_stat, #0          ' st0
+                call    #n_fifo_write           ' |
+
+                altgb   n_drv, #n_track         ' current drive track#
+                getbyte pa                      ' |
+                call    #n_fifo_write           ' |
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_write_del_s
+                cmp     n_cmd_len, #9           wcz
+        if_lt   jmp     #n_loop
+
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_read_id_s
+                cmp     n_cmd_len, #2           wcz
+        if_lt   jmp     #n_loop
+
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_read_del_s
+                cmp     n_cmd_len, #9           wcz
+        if_lt   jmp     #n_loop
+
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_format_track
+                cmp     n_cmd_len, #6           wcz
+        if_lt   jmp     #n_loop
+
+                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                wrbyte  #$00, #@fdc_cmd_len
+                jmp     #n_loop
+
+n_seek
+                cmp     n_cmd_len, #3           wcz
+        if_lt   jmp     #n_loop
+
+                andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+
+                rdbyte  n_drv, #@fdc_cmd+1      ' drive#
+                and     n_drv, #%00000011       ' |
+
+                andn    n_stat, #%11            ' clear drive#
+                or      n_stat, n_drv           ' set current drive#
+
+                rdbyte  n_temp0, #@fdc_cmd+2    ' track#
+                altsb   n_drv, #n_track
+                setbyte n_temp0
+                cmp     n_temp0, #0             wz
+                bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
+
+                wrbyte  #$00, #@fdc_cmd_len
+                'jmp     #n_loop
+                ' fall-through
+
+n_trigger_irq
+                testb   n_dor, #DOR_INT_ENABLE   wz
+        if_x0   jmp     #n_loop
+
+                waitx   ##_CLKFREQ / 1000 * 2
+
+.lock           locktry #I_INT_LOCK  wc ' acquire irq lock
+        if_nc   jmp     #.lock
+
+                rdbyte  n_temp0, #@pic_irq
+                bith    n_temp0, #6
+                wrbyte  n_temp0, #@pic_irq
+
+                lockrel #I_INT_LOCK ' release lock
+
+                jmp     #n_loop
+
+' write pa to fifo head
+n_fifo_write
+                rdbyte  n_temp0, #@fdc_fifo_head
+                'debug("n_fifo_write ", uhex_byte(pa),udec(n_temp0))
+                add     n_temp0, #@fdc_fifo
+                wrbyte  pa, n_temp0
+                sub     n_temp0, #@fdc_fifo
+                incmod  n_temp0, #16 - 1
+        _ret_   wrbyte  n_temp0, #@fdc_fifo_head
+
+' write pa to dma address
+n_dma_write
+                rdbyte  n_ea, #@dma_page+2      ' get page address
+                shl     n_ea, #16               ' shift into position
+                rdlong  n_dma, #@dma+8          ' get dma address and count
+                setword n_ea, n_dma, #0         ' set address into ea
+
+                mov     n_temp0, n_ea
+                shr     n_temp0, #12
+                cmp     n_temp0, #$40       wcz ' check ram size
+        if_ae   jmp     #.no_ram                ' |
+
+                add     n_ea, ##@ram_00000
+                wrbyte  pa, n_ea
+
+.no_ram
+                getword n_temp0, n_dma, #0      ' increment address
+                incmod  n_temp0, ##$FFFF    wc  ' |
+                setword n_dma, n_temp0, #0      ' |
+
+                getword n_temp0, n_dma, #1      ' decrement count
+                cmp     n_temp0, #0         wz  ' | if not already zero (correct?)
+        if_nz   sub     n_temp0, #1             ' |
+        if_nz   setword n_dma, n_temp0, #1      ' |
+
+        _ret_   wrlong  n_dma, #@dma+8          ' update dma, Z=1 if counter is zero
+
+n_msr           long    (1<<MSR_DATAREG)|(1<<MSR_NDMA)
+n_stat          long    STATUS0_INT_ABNORMAL_POLL
+
+n_drv           long    0                       ' current drive number
+n_track         long    $00_00_00_00            ' drive track position
+
+n_dor           res     1
+n_cmd           res     1
+n_cmd_len       res     1
+n_ea            res     1
+n_dma           res     1
+n_temp0         res     1
+n_temp1         res     1
+
+DAT             ' NEC765 I/O HUB code
+                orgh
+
+fdc_status_rd
+                rdbyte  i_tmpb, #@fdc_msr
+                ret     wcz
+
+fdc_data_rd
+                mov     i_tmpb, #$00
+                rdbyte  i_temp0, #@fdc_fifo_tail
+                rdbyte  i_temp1, #@fdc_fifo_head
+                cmp     i_temp0, i_temp1    wcz
+        if_e    ret     wcz
+                add     i_temp0, #@fdc_fifo
+                rdbyte  i_tmpb, i_temp0
+                sub     i_temp0, #@fdc_fifo
+                incmod  i_temp0, #16 - 1
+                wrbyte  i_temp0, #@fdc_fifo_tail
+                ret     wcz
+
+fdc_dor_wr
+                wrbyte  i_tmpb, #@fdc_dor
+                ret     wcz
+
+fdc_data_wr
+                rdbyte  i_temp0, #@fdc_msr
+                testb   i_temp0, #MSR_BUSY      wz
+        if_x1   ret     wcz
+                rdbyte  i_temp0, #@fdc_cmd_len
+                cmp     i_temp0, #9             wcz
+        if_ae   ret     wcz
+                add     i_temp0, #@fdc_cmd
+                wrbyte  i_tmpb, i_temp0
+                sub     i_temp0, #@fdc_cmd - 1
+                wrbyte  i_temp0, #@fdc_cmd_len
+                ret     wcz
 
 CON ' NEC765 Constants
 
-    DOR_DRIVE0 = $00
-    DOR_DRIVE1 = $01
-    DOR_DRIVE2 = $02
-    DOR_DRIVE3 = $03
-    #2, DOR_RESET
-        DOR_INT_ENABLE
-        DOR_DRIVE0_MOTOR
-        DOR_DRIVE1_MOTOR
-        DOR_DRIVE2_MOTOR
-        DOR_DRIVE3_MOTOR
+    DOR_ENABLE       = 2
+    DOR_INT_ENABLE   = 3
+    DOR_DRIVE0_MOTOR = 4
+    DOR_DRIVE1_MOTOR = 5
+    DOR_DRIVE2_MOTOR = 6
+    DOR_DRIVE3_MOTOR = 7
 
-    STATUS0_INT_NORMAL        = $00_00_00_00
-    STATUS0_INT_ABNORMAL_POLL = $00_00_00_C0
+    STATUS0_INT_NORMAL        = $00
+    STATUS0_INT_ABNORMAL_POLL = $C0
 
     STATUS0_HD   = encod($00_00_00_04)
     STATUS0_NR   = encod($00_00_00_08)
@@ -7105,14 +6743,14 @@ CON ' NEC765 Constants
     STATUS3_WPDR = encod($40_00_00_00)
     STATUS3_ESIG = encod($80_00_00_00)
 
-    #0, MSR_DRIVE1_POS_MODE
-        MSR_DRIVE2_POS_MODE
-        MSR_DRIVE3_POS_MODE
-        MSR_DRIVE4_POS_MODE
-        MSR_BUSY
-        MSR_NDMA
-        MSR_DATAIO
-        MSR_DATAREG
+    MSR_DRIVE1_POS_MODE = 0
+    MSR_DRIVE2_POS_MODE = 1
+    MSR_DRIVE3_POS_MODE = 2
+    MSR_DRIVE4_POS_MODE = 3
+    MSR_BUSY    = 4
+    MSR_NDMA    = 5
+    MSR_DATAIO  = 6
+    MSR_DATAREG = 7
 
     CMD_READ_TRACK   = $02
     CMD_SPECIFY      = $03
@@ -7127,115 +6765,460 @@ CON ' NEC765 Constants
     CMD_FORMAT_TRACK = $0D
     CMD_SEEK         = $0F
 
+DAT             ' PPI 8255A
+                orgh
+
+ppi_60_rd
+                testb   i_ppi, #PPI_PA_INPUT        wz  ' PA input ?
+        if_x0   getbyte i_tmpb, i_ppi, #PPI_PA_BYTE     ' no, return the out state
+        if_x1   rdbyte  i_tmpb, #@kbd_data
+        if_x1   wrbyte  #0, #@kbd_data
+                ret     wcz
+
+ppi_61_wr
+                testb   i_ppi, #(PPI_PB_BYTE * 8) + 6 wc
+                testb   i_tmpb, #6                  wz
+        if_01   bitnz   i_flags, #I_KB_RESET
+
+                testb   i_ppi, #(PPI_PB_BYTE * 8) + 7 wc
+                testb   i_tmpb, #7                  wz
+                setbyte i_ppi, i_tmpb, #PPI_PB_BYTE
+        if_10   jmp     #.reset
+
+                testb   i_tmpb, #(PPI_PB_BYTE * 8) + 7 wz
+        if_x1   wrbyte  #$00, #@kbd_data
+                ret     wcz
+
+.reset
+                bitl    i_flags, #I_KB_RESET    wcz
+        if_x0   ret     wcz
+                wrbyte  #$AA, #@kbd_data
+                bith    i_pic_irr, #1       ' signal irq
+                ret     wcz
+
+ppi_62_rd
+                testb   i_ppi, #(PPI_PB_BYTE * 8) + 3  wz
+        if_x0   mov     i_tmpb, #%00001101 ' Low switches
+                '                     ||||
+                '                     |||+-- Loop on POST
+                '                     ||+--- 1=Co-Processor installed
+                '                     ++---- Planar RAM size (00=64K, 01=128K, 10=192K, 11=256K)
+        if_x1   mov     i_tmpb, #%00000010 ' High switches
+                '                     ||||
+                '                     ||++-- Display (10=CGA)
+                '                     ++---- Num. Floppy drives (00=1, 01=2, 10=3, 11=4)
+                ret     wcz
+
+CON ' PPI 8255A constants
+
+    PPI_PA_BYTE  = 0
+    PPI_PB_BYTE  = 1
+    PPI_PC_BYTE  = 2
+    PPI_CTL_BYTE = 3
+
+    PPI_PA_INPUT  = (PPI_CTL_BYTE * 8) + 4
+    PPI_PCU_INPUT = (PPI_CTL_BYTE * 8) + 3
+    PPI_PB_INPUT  = (PPI_CTL_BYTE * 8) + 1
+    PPI_PCL_INPUT = (PPI_CTL_BYTE * 8) + 0
+
+DAT             ' PIC 8259A
+                orgh
+
+pic_20_wr
+                testb   i_tmpb, #4      wc
+                testb   i_tmpb, #3      wz
+        if_00   jmp     #.ocw2
+        if_01   setbyte i_pic_ocw, i_tmpb, #PIC_OCW3_BYTE ' OCW3
+        if_01   ret
+                mov     i_pic_icw, #0     ' ICW1
+                mov     i_pic_ocw, #0
+                mov     i_pic_irr, #0
+                setbyte i_pic_ocw, #%00001010, #PIC_OCW3_BYTE
+                setnib  i_pic_irr, #7, #PIC_IR_NIB
+                setbyte i_pic_icw, i_tmpb, #0
+                ret     wcz
+
+.ocw2
+                testb   i_tmpb, #5      wz  ' EOI
+        if_x1   getnib  i_temp0, i_pic_irr, #PIC_IR_NIB
+        if_x1   add     i_temp0, #PIC_ISR_BYTE * 8
+        if_x1   bitl    i_pic_irr, i_temp0
+        if_x1   bitl    i_pic_irr, #PIC_IS_BIT
+        if_x1   setnib  i_temp0, #7, #PIC_IR_NIB
+                ret     wcz
+
+pic_20_rd
+                mov     i_tmpb, #0
+
+                bitl    i_pic_ocw, #PIC_OCW3_POLL_BIT wcz
+                testb   i_pic_ocw, #PIC_OCW3_RR_BIT   wz
+        if_11   jmp     #.poll
+
+                testb   i_pic_ocw, #PIC_OCW3_RR_BIT   wc
+                testb   i_pic_ocw, #PIC_OCW3_RIS_BIT  wz
+        if_10   getbyte i_tmpb, i_pic_irr, #PIC_IRR_BYTE
+        if_11   getbyte i_tmpb, i_pic_irr, #PIC_ISR_BYTE
+                ret     wcz
+
+.poll
+                call    #pic_intack
+                getbyte i_tmpb, i_pic_irr, #PIC_POLL_BYTE
+                ret     wcz
+
+pic_21_wr
+                bith    i_pic_ocw, #29    wcz
+        if_0x   setbyte i_pic_icw, i_tmpb, #1 ' ICW2
+        if_0x   ret     wcz
+
+                bith    i_pic_ocw, #30    wcz
+                testb   i_pic_icw, #1     wz
+        if_00   setbyte i_pic_icw, i_tmpb, #2 ' ICW3
+        if_01   setbyte i_pic_icw, i_tmpb, #3 ' ICW4
+        if_01   bith    i_pic_ocw, #31
+        if_0x   ret     wcz
+
+                bith    i_pic_ocw, #31    wcz
+        if_0x   setbyte i_pic_icw, i_tmpb, #3 ' ICW4
+        if_0x   ret     wcz
+
+                setbyte i_pic_ocw, i_tmpb, #0 ' OCW1 (IMR)
+                ret     wcz
+
+pic_21_rd
+                getbyte i_tmpb, i_pic_ocw, #PIC_OCW1_BYTE ' OCW1 (IMR)
+                ret     wcz
+
+CON ' PIC 8259A Constants
+
+    ' pic_icw
+    PIC_ICW1_BYTE = 0
+    PIC_ICW2_BYTE = 1
+    PIC_ICW3_BYTE = 2
+    PIC_ICW4_BYTE = 3
+
+    ' pic_ocw
+    PIC_OCW1_BYTE = 0
+    PIC_OCW2_BYTE = 1
+    PIC_OCW3_BYTE = 2
+
+    PIC_OCW3_POLL_BIT = (PIC_OCW3_BYTE * 8) + 2
+    PIC_OCW3_RR_BIT   = (PIC_OCW3_BYTE * 8) + 1
+    PIC_OCW3_RIS_BIT  = (PIC_OCW3_BYTE * 8) + 0
+
+    PIC_ICW2_BIT  = 29
+    PIC_ICW3_BIT  = 30
+    PIC_ICW4_BIT  = 31
+
+    ' pic_irq
+    PIC_IRR_BYTE  = 0
+    PIC_ISR_BYTE  = 1
+    PIC_POLL_BYTE = 3
+    PIC_IS_BIT    = 31
+    PIC_IR_NIB    = 6
+
+    I_TMR0_MODE5 = 5
+    I_TMR0_MODE4 = 4
+    I_TMR1_MODE5 = 8 + 5
+    I_TMR1_MODE4 = 8 + 4
+    I_TMR2_MODE5 = 16 + 5
+    I_TMR2_MODE4 = 16 + 4
+
+    I_TMR0_HL    = 0
+    I_TMR0_LATCH = 3
+    I_TMR1_HL    = 1
+    I_TMR1_LATCH = 4
+    I_TMR2_HL    = 2
+    I_TMR2_LATCH = 5
+
+    I_DMA_HL = 6
+
+    I_TMR0_ENABLE = 24 + TIMER0_ENABLE
+    I_TMR0_RELOAD = 24 + TIMER0_RELOAD
+    I_TMR1_ENABLE = 24 + TIMER1_ENABLE
+    I_TMR1_RELOAD = 24 + TIMER1_RELOAD
+    I_TMR2_ENABLE = 24 + TIMER2_ENABLE
+    I_TMR2_RELOAD = 24 + TIMER2_RELOAD
+
+DAT             ' PIT 8254
+                orgh
+
+pit_40_wr
+.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
+        if_nc   jmp     #.lock
+                rdlong  i_pit, #@tmr0
+
+                testb   i_pit, #I_TMR0_MODE5 wc
+                testb   i_pit, #I_TMR0_MODE4 wz
+        if_01   call    #.ctl_01    ' write counter bits 0-7 only
+        if_10   call    #.ctl_10    ' write counter bits 8-15 only
+        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
+
+                wrlong  i_pit, #@tmr0
+                lockrel #I_TIMER_LOCK ' release lock
+
+                ret     wcz
+.ctl_01
+                wrword  i_tmpb, #@tmr0_reload
+                bith    i_pit, #I_TMR0_ENABLE ' enable timer
+        _ret_   bith    i_pit, #I_TMR0_RELOAD ' signal reload counter
+.ctl_10
+                shl     i_tmpb, #8
+                wrword  i_tmpb, #@tmr0_reload
+                bith    i_pit, #I_TMR0_ENABLE ' enable timer
+        _ret_   bith    i_pit, #I_TMR0_RELOAD ' signal reload counter
+.ctl_11
+                bitnot  i_sys_flags, #I_TMR0_HL   wcz
+                rdword  i_temp0, #@tmr0_reload
+        if_0x   setbyte i_temp0, i_tmpb, #0
+        if_1x   setbyte i_temp0, i_tmpb, #1
+                wrword  i_temp0, #@tmr0_reload
+        if_1x   bith    i_pit, #I_TMR0_ENABLE ' enable timer (if write complete)
+        if_1x   bith    i_pit, #I_TMR0_RELOAD ' signal reload counter
+                ret
+
+pit_40_rd
+                rdlong  i_pit, #@tmr0
+                testb   i_pit, #I_TMR0_MODE5 wc
+                testb   i_pit, #I_TMR0_MODE4 wz
+        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
+        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
+        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
+                ret     wcz
+.ctl_01
+                bitl    i_sys_flags, #I_TMR0_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr0_cnt
+        if_x1   getword i_temp0, i_pit_latches, #0
+                getbyte i_tmpb, i_temp0, #0
+                ret     wcz
+.ctl_10
+                bitl    i_sys_flags, #I_TMR0_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr0_cnt
+        if_x1   getword i_temp0, i_pit_latches, #0
+                getbyte i_tmpb, i_temp0, #1
+                ret     wcz
+.ctl_11
+                bitnot  i_sys_flags, #I_TMR0_HL       wcz
+                testb   i_sys_flags, #I_TMR0_LATCH    wz
+        if_x0   rdword  i_temp0, #@tmr0_cnt
+        if_x1   getword i_temp0, i_pit_latches, #0
+
+        if_0x   getbyte i_tmpb, i_temp0, #0
+        if_1x   getbyte i_tmpb, i_temp0, #1
+        if_11   bitl    i_sys_flags, #I_TMR0_LATCH
+                ret     wcz
+
+pit_41_wr
+.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
+        if_nc   jmp     #.lock
+                rdlong  i_pit, #@tmr0
+
+                testb   i_pit, #I_TMR1_MODE5 wc
+                testb   i_pit, #I_TMR1_MODE4 wz
+        if_01   call    #.ctl_01    ' write counter bits 0-7 only
+        if_10   call    #.ctl_10    ' write counter bits 8-15 only
+        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
+
+                wrlong  i_pit, #@tmr0
+                lockrel #I_TIMER_LOCK ' release lock
+
+                ret     wcz
+.ctl_01
+                wrword  i_tmpb, #@tmr1_reload
+                bith    i_pit, #I_TMR1_ENABLE ' enable timer
+        _ret_   bith    i_pit, #I_TMR1_RELOAD ' signal reload counter
+.ctl_10
+                shl     i_tmpb, #8
+                wrword  i_tmpb, #@tmr1_reload
+                bith    i_pit, #I_TMR1_ENABLE ' enable timer
+        _ret_   bith    i_pit, #I_TMR1_RELOAD ' signal reload counter
+.ctl_11
+                bitnot  i_sys_flags, #I_TMR1_HL   wcz
+                rdword  i_temp0, #@tmr1_reload
+        if_0x   setbyte i_temp0, i_tmpb, #0
+        if_1x   setbyte i_temp0, i_tmpb, #1
+                wrword  i_temp0, #@tmr1_reload
+        if_1x   bith    i_pit, #I_TMR1_ENABLE ' enable timer (if write complete)
+        if_1x   bith    i_pit, #I_TMR1_RELOAD ' signal reload counter
+                ret
+
+pit_41_rd
+                rdlong  i_pit, #@tmr0
+                testb   i_pit, #I_TMR1_MODE5 wc
+                testb   i_pit, #I_TMR1_MODE4 wz
+        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
+        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
+        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
+                ret     wcz
+.ctl_01
+                bitl    i_sys_flags, #I_TMR1_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches, #1
+                getbyte i_tmpb, i_temp0, #0
+                ret     wcz
+.ctl_10
+                bitl    i_sys_flags, #I_TMR1_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches, #1
+                getbyte i_tmpb, i_temp0, #1
+                ret     wcz
+.ctl_11
+                bitnot  i_sys_flags, #I_TMR1_HL       wcz
+                testb   i_sys_flags, #I_TMR1_LATCH    wz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches, #1
+
+        if_0x   getbyte i_tmpb, i_temp0, #0
+        if_1x   getbyte i_tmpb, i_temp0, #1
+        if_11   bitl    i_sys_flags, #I_TMR1_LATCH
+                ret     wcz
+
+pit_43_wr
+                testb   i_tmpb, #5          wc
+                testb   i_tmpb, #4          wz
+        if_00   jmp     #.latch
+
+.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
+        if_nc   jmp     #.lock
+                rdlong  i_pit, #@tmr0
+
+                testb   i_tmpb, #7          wc
+                testb   i_tmpb, #6          wz
+
+        if_00   setbyte i_pit, i_tmpb, #0
+        if_00   bitl    i_pit, #I_TMR0_ENABLE
+        if_00   bitl    i_pit, #I_TMR0_LATCH
+        if_00   bitl    i_pit, #I_TMR0_HL
+
+        if_01   setbyte i_pit, i_tmpb, #1
+        if_01   bitl    i_pit, #I_TMR1_ENABLE
+        if_01   bitl    i_pit, #I_TMR1_LATCH
+        if_01   bitl    i_pit, #I_TMR1_HL
+
+        if_10   setbyte i_pit, i_tmpb, #2
+        if_10   bitl    i_pit, #I_TMR2_ENABLE
+        if_10   bitl    i_pit, #I_TMR2_LATCH
+        if_10   bitl    i_pit, #I_TMR2_HL
+
+                wrlong  i_pit, #@tmr0
+                lockrel #I_TIMER_LOCK ' release lock
+                ret     wcz
+.latch
+                testb   i_tmpb, #7          wc
+                testb   i_tmpb, #6          wz
+
+        if_00   rdword  i_temp0, #@tmr0_cnt
+        if_00   setword i_pit_latches, i_temp0, #0
+        if_00   bith    i_sys_flags, #I_TMR0_LATCH
+
+        if_01   rdword  i_temp0, #@tmr1_cnt
+        if_01   setword i_pit_latches, i_temp0, #1
+        if_01   bith    i_sys_flags, #I_TMR1_LATCH
+
+        if_10   rdword  i_temp0, #@tmr2_cnt
+        if_10   setword i_pit_latches+1, i_temp0, #0
+        if_10   bith    i_sys_flags, #I_TMR2_LATCH
+
+                ret     wcz
+
 DAT             ' DMA 8237A
                 orgh
 
-dma_rd
-                rdlong  i_temp0, #@dma_ctl
-
-                cmp     i_ea, #$07      wcz
-        if_be   jmp     #dma_addr_rd
-                cmp     i_ea, #$08      wcz ' read status register
-        if_e    getbyte i_tmpb, i_temp0, #0
-                ret     wcz
-
 dma_addr_rd
-                bitnot  i_temp0, #31    wcz
-                wrlong  i_temp0, #@dma_ctl
+                bitnot  i_sys_flags, #I_DMA_HL  wcz
 
-                mov     i_temp2, i_ea
-                rcl     i_temp2, #1
-                add     i_temp2, #@dma
-                rdbyte  i_tmpb, i_temp2
+                mov     i_temp0, i_ea
+                rcl     i_temp0, #1
+                add     i_temp0, #@dma
+                rdbyte  i_tmpb, i_temp0
 
                 ret     wcz
 
 dma_wr
-                rdlong  i_temp0, #@dma_ctl
+                cmp     i_ea, #$0C      wcz ' clear byte pointer flip-flop
+        if_e    bitl    i_sys_flags, #I_DMA_HL
+        if_e    ret     wcz
 
-                cmp     i_ea, #$07      wcz
-        if_be   jmp     #dma_addr_wr
-                cmp     i_ea, #$09      wcz ' write request register
-        if_e    jmp     #dma_request_wr
-                cmp     i_ea, #$0A      wcz ' write single mask register
-        if_e    jmp     #dma_mask_wr
-                cmp     i_ea, #$0B      wcz ' write mode register
-        if_e    jmp     #dma_mode_wr
-                cmp     i_ea, #$0D      wcz ' master clear
-        if_e    jmp     #dma_clear_wr
-                cmp     i_ea, #$0F      wcz ' write all mask register
-        if_e    jmp     #dma_allmask_wr
+.lock           locktry #I_DMA_LOCK  wc      ' acquire dma lock
+        if_nc   jmp     #.lock
+                rdlong  i_dma_ctl, #@dma_ctl
 
                 cmp     i_ea, #$08      wcz ' write command register
-        if_e    setbyte i_temp0, i_tmpb, #1
-                cmp     i_ea, #$0C      wcz ' clear byte pointer flip-flop
-        if_e    bitl    i_temp0, #31
+        if_e    setbyte i_dma_ctl, i_tmpb, #1
+                cmp     i_ea, #$09      wcz ' write request register
+        if_e    call    #\dma_request_wr
+                cmp     i_ea, #$0A      wcz ' write single mask register
+        if_e    call    #\dma_mask_wr
+                cmp     i_ea, #$0B      wcz ' write mode register
+        if_e    call    #\dma_mode_wr
+                cmp     i_ea, #$0D      wcz ' master clear
+        if_e    call    #\dma_clear_wr
                 cmp     i_ea, #$0E      wcz ' clear mask register
-        if_e    setnib  i_temp0, #0, #4
-                wrlong  i_temp0, #@dma_ctl
+        if_e    setnib  i_dma_ctl, #0, #4
+                cmp     i_ea, #$0F      wcz ' write all mask register
+        if_e    setnib  i_dma_ctl, i_tmpb, #4
+
+                wrlong  i_dma_ctl, #@dma_ctl
+                lockrel #I_DMA_LOCK ' release lock
                 ret     wcz
 
 dma_addr_wr
-                bitnot  i_temp0, #31    wcz
-                wrlong  i_temp0, #@dma_ctl
+                bitnot  i_sys_flags, #I_DMA_HL  wcz
 
-                mov     i_temp2, i_ea
-                rcl     i_temp2, #1
-                add     i_temp2, #@dma
-                wrbyte  i_tmpb, i_temp2
+                mov     i_temp0, i_ea
+                rcl     i_temp0, #1
+                add     i_temp0, #@dma
+                wrbyte  i_tmpb, i_temp0
 
                 ret     wcz
 
 dma_request_wr
                 testb   i_tmpb, #1      wc
                 testb   i_tmpb, #0      wz
-        if_00   mov     i_temp2, #%0001_0000
-        if_00   bitl    i_temp0, #0
-        if_01   mov     i_temp2, #%0010_0000
-        if_01   bitl    i_temp0, #1
-        if_10   mov     i_temp2, #%0100_0000
-        if_10   bitl    i_temp0, #2
-        if_11   mov     i_temp2, #%1000_0000
-        if_11   bitl    i_temp0, #3
+
+        if_00   mov     i_temp0, #%0001_0000
+        if_00   bitl    i_dma_ctl, #0
+
+        if_01   mov     i_temp0, #%0010_0000
+        if_01   bitl    i_dma_ctl, #1
+
+        if_10   mov     i_temp0, #%0100_0000
+        if_10   bitl    i_dma_ctl, #2
+
+        if_11   mov     i_temp0, #%1000_0000
+        if_11   bitl    i_dma_ctl, #3
+
                 testb   i_tmpb, #2      wz
-                muxz    i_temp0, i_temp2
-                wrlong  i_temp0, #@dma_ctl
-                ret     wcz
+        _ret_   muxz    i_dma_ctl, i_temp0
 
 dma_mask_wr
                 testb   i_tmpb, #1      wc
                 testb   i_tmpb, #0      wz
-        if_00   mov     i_temp2, #%0001
-        if_01   mov     i_temp2, #%0010
-        if_10   mov     i_temp2, #%0100
-        if_11   mov     i_temp2, #%1000
-                shl     i_temp2, #16
+        if_00   mov     i_temp0, #%0001
+        if_01   mov     i_temp0, #%0010
+        if_10   mov     i_temp0, #%0100
+        if_11   mov     i_temp0, #%1000
+                shl     i_temp0, #16
                 testb   i_tmpb, #2      wz
-                muxz    i_temp0, i_temp2
-                wrlong  i_temp0, #@dma_ctl
-                ret     wcz
-
-dma_allmask_wr
-                setnib  i_temp0, i_tmpb, #4
-                wrlong  i_temp0, #@dma_ctl
-                ret     wcz
+        _ret_   muxz    i_dma_ctl, i_temp0
 
 dma_mode_wr
                 testb   i_tmpb, #1      wc
                 testb   i_tmpb, #0      wz
-                rdlong  i_temp1, #@dma_mode
-        if_00   setbyte i_temp1, i_tmpb, #0
-        if_01   setbyte i_temp1, i_tmpb, #1
-        if_10   setbyte i_temp1, i_tmpb, #2
-        if_11   setbyte i_temp1, i_tmpb, #3
-                wrlong  i_temp1, #@dma_mode
-                ret     wcz
+                rdlong  i_temp0, #@dma_mode
+        if_00   setbyte i_temp0, i_tmpb, #0
+        if_01   setbyte i_temp0, i_tmpb, #1
+        if_10   setbyte i_temp0, i_tmpb, #2
+        if_11   setbyte i_temp0, i_tmpb, #3
+        _ret_   wrlong  i_temp0, #@dma_mode
 
 dma_clear_wr
-                wrlong  ##%0_00000000000_1111_00000100_00000000, #@dma_ctl
+                bitl    i_sys_flags, #I_DMA_HL  wcz
+                mov     i_dma_ctl, ##%0_00000000000_1111_00000100_00000000
                 wrlong  #0, #@dma
                 wrlong  #0, #@dma + 4
-                ret     wcz
+                wrlong  #0, #@dma + 8
+                wrlong  #0, #@dma + 12
+        _ret_   wrlong  #0, #@dma_page
 
 DAT             ' ROM and RAM
                 orgh
@@ -7244,7 +7227,9 @@ cga_charrom     file    "CGA.F08"
 
 rom_FE000       file    "BIOS.ROM"
 
-                fit     (512 - 256 - 16) * 1024
+drv0            long    0 'file    "PCDOS200-DISK1.IMG"
+
+                fit     $8_0000 - RAM_SIZE - CGA_VRAM
 
 ram_00000
                 ' space used as
