@@ -6366,6 +6366,11 @@ n_loop
                 testb   n_dor, #DOR_ENABLE  wz
         if_01   jmp     #n_reset
 
+                testb   n_dor, #DOR_DRIVE0_MOTOR  wz
+                drvz    #56
+                testb   n_dor, #DOR_DRIVE1_MOTOR  wz
+                drvz    #57
+
                 rdbyte  n_temp0, #@fdc_fifo_tail
                 rdbyte  n_temp1, #@fdc_fifo_head
                 cmp     n_temp0, n_temp1    wz
@@ -6438,8 +6443,6 @@ n_check_stat
                 cmp     n_cmd_len, #2           wcz
         if_lt   jmp     #n_loop
 
-                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
-
                 wrbyte  #$00, #@fdc_cmd_len
                 jmp     #n_loop
 
@@ -6447,10 +6450,55 @@ n_write_sect
                 cmp     n_cmd_len, #9           wcz
         if_lt   jmp     #n_loop
 
-                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
+                bith    n_msr, #MSR_BUSY
+                bitl    n_msr, #MSR_DATAIO
+                wrbyte  n_msr, #@fdc_msr
+
+                rdbyte  n_drv, #@fdc_cmd+1      ' drive number
+                and     n_drv, #%00000011       ' |
+                andn    n_stat, #%11            ' clear drive#
+                or      n_stat, n_drv           ' set current drive#
+
+                rdbyte  ptra, #@fdc_cmd+2       ' track#
+                altsb   n_drv, #n_track
+                setbyte ptra
+                cmp     ptra, #0                wz
+                bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
+
+                mul     ptra, #9
+                rdbyte  n_temp0, #@fdc_cmd+4    ' sector#
+                sub     n_temp0, #1
+                add     ptra, n_temp0
+
+                shl     ptra, #9
+
+                rdlong  n_temp0, ##@drv0        wz
+        if_z    wrbyte  #$00, #@fdc_cmd_len
+        if_z    jmp     #n_loop
+
+                add     ptra, ##@drv0
+.l1             call    #n_dma_read
+                wrbyte  pa, ptra++
+                waitx   ##_CLKFREQ / (250_000 / 8) ' simulate fd speed ?
+ if_nz_and_nc   jmp     #.l1
+
+                getbyte pa, n_stat, #0          ' st0
+                call    #n_fifo_write
+                getbyte pa, n_stat, #1          ' st1
+                call    #n_fifo_write
+                getbyte pa, n_stat, #2          ' st2
+                call    #n_fifo_write
+                rdbyte  pa, #@fdc_cmd+2         ' track#
+                call    #n_fifo_write
+                rdbyte  pa, #@fdc_cmd+3
+                call    #n_fifo_write
+                rdbyte  pa, #@fdc_cmd+4         ' sector#
+                call    #n_fifo_write
+                rdbyte  pa, #@fdc_cmd+5
+                call    #n_fifo_write
 
                 wrbyte  #$00, #@fdc_cmd_len
-                jmp     #n_loop
+                jmp     #n_trigger_irq
 
 n_read_sect
                 cmp     n_cmd_len, #9           wcz
@@ -6459,8 +6507,6 @@ n_read_sect
                 bith    n_msr, #MSR_BUSY
                 bitl    n_msr, #MSR_DATAIO
                 wrbyte  n_msr, #@fdc_msr
-
-                andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
 
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive number
                 and     n_drv, #%00000011       ' |
@@ -6487,20 +6533,21 @@ n_read_sect
                 add     ptra, ##@drv0
 .l1             rdbyte  pa, ptra++
                 call    #n_dma_write
+                waitx   ##_CLKFREQ / (250_000 / 8) ' simulate fd speed ?
  if_nz_and_nc   jmp     #.l1
 
                 getbyte pa, n_stat, #0          ' st0
-                call    #n_fifo_write           ' |
+                call    #n_fifo_write
                 getbyte pa, n_stat, #1          ' st1
-                call    #n_fifo_write           ' |
+                call    #n_fifo_write
                 getbyte pa, n_stat, #2          ' st2
-                call    #n_fifo_write           ' |
+                call    #n_fifo_write
                 rdbyte  pa, #@fdc_cmd+2         ' track#
-                call    #n_fifo_write           ' |
+                call    #n_fifo_write
                 rdbyte  pa, #@fdc_cmd+3
                 call    #n_fifo_write
                 rdbyte  pa, #@fdc_cmd+4         ' sector#
-                call    #n_fifo_write           ' |
+                call    #n_fifo_write
                 rdbyte  pa, #@fdc_cmd+5
                 call    #n_fifo_write
 
@@ -6510,8 +6557,6 @@ n_read_sect
 n_calibrate
                 cmp     n_cmd_len, #2           wcz
         if_lt   jmp     #n_loop
-
-                andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
 
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive number
                 and     n_drv, #%00000011       ' |
@@ -6527,8 +6572,6 @@ n_calibrate
                 jmp     #n_trigger_irq
 
 n_check_int
-                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
-
                 getbyte pa, n_stat, #0          ' st0
                 call    #n_fifo_write           ' |
 
@@ -6543,16 +6586,12 @@ n_write_del_s
                 cmp     n_cmd_len, #9           wcz
         if_lt   jmp     #n_loop
 
-                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
-
                 wrbyte  #$00, #@fdc_cmd_len
                 jmp     #n_loop
 
 n_read_id_s
                 cmp     n_cmd_len, #2           wcz
         if_lt   jmp     #n_loop
-
-                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
 
                 wrbyte  #$00, #@fdc_cmd_len
                 jmp     #n_loop
@@ -6561,8 +6600,6 @@ n_read_del_s
                 cmp     n_cmd_len, #9           wcz
         if_lt   jmp     #n_loop
 
-                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
-
                 wrbyte  #$00, #@fdc_cmd_len
                 jmp     #n_loop
 
@@ -6570,16 +6607,12 @@ n_format_track
                 cmp     n_cmd_len, #6           wcz
         if_lt   jmp     #n_loop
 
-                'andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
-
                 wrbyte  #$00, #@fdc_cmd_len
                 jmp     #n_loop
 
 n_seek
                 cmp     n_cmd_len, #3           wcz
         if_lt   jmp     #n_loop
-
-                andn    n_stat, #(1<<STATUS0_INT_INVALID)|(1<<STATUS0_INT_ABNORMAL)
 
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive#
                 and     n_drv, #%00000011       ' |
@@ -6651,7 +6684,34 @@ n_dma_write
 
         _ret_   wrlong  n_dma, #@dma+8          ' update dma, Z=1 if counter is zero
 
-n_msr           long    (1<<MSR_DATAREG)|(1<<MSR_NDMA)
+' read pa to dma address
+n_dma_read
+                rdbyte  n_ea, #@dma_page+2      ' get page address
+                shl     n_ea, #16               ' shift into position
+                rdlong  n_dma, #@dma+8          ' get dma address and count
+                setword n_ea, n_dma, #0         ' set address into ea
+
+                mov     n_temp0, n_ea
+                shr     n_temp0, #12
+                cmp     n_temp0, #$40       wcz ' check ram size
+        if_ae   jmp     #.no_ram                ' |
+
+                add     n_ea, ##@ram_00000
+                rdbyte  pa, n_ea
+
+.no_ram
+                getword n_temp0, n_dma, #0      ' increment address
+                incmod  n_temp0, ##$FFFF    wc  ' |
+                setword n_dma, n_temp0, #0      ' |
+
+                getword n_temp0, n_dma, #1      ' decrement count
+                cmp     n_temp0, #0         wz  ' | if not already zero (correct?)
+        if_nz   sub     n_temp0, #1             ' |
+        if_nz   setword n_dma, n_temp0, #1      ' |
+
+        _ret_   wrlong  n_dma, #@dma+8          ' update dma, Z=1 if counter is zero
+
+n_msr           long    (1<<MSR_DATAREG)
 n_stat          long    STATUS0_INT_ABNORMAL_POLL
 
 n_drv           long    0                       ' current drive number
