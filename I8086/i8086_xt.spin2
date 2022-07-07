@@ -6363,10 +6363,14 @@ nec765
                 setq2   #(@nec765_lut_end - @nec765_lut) / 4 -1
                 rdlong  0, ptrb
 
-                call    #\sd_init                   ' TODO check c_and_nz for failure
+                call    #\sd_init
+  if_c_and_nz   jmp     #n_loop
+
                 call    #\fs_mount                  ' TODO check partition not found
                 mov     fs_par0, ##@fs_file0
-                call    #\fs_open                   ' TODO check file not found
+                call    #\fs_open
+                mov     fs_par0, ##@fs_file1
+                call    #\fs_open
 
 n_loop
                 testb   n_dor, #DOR_ENABLE  wc
@@ -6462,16 +6466,23 @@ n_write_sect
                 bitl    n_msr, #MSR_DATAIO
                 wrbyte  n_msr, #@fdc_msr
 
-                rdlong  n_temp0, ##@fs_file0 + 12 wz ' file size
-        if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
-        if_z    jmp     #n_loop                 ' |
-
-                mov     fs_par0, ##@fs_file0
-
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive number
                 and     n_drv, #%00000011       ' |
                 andn    n_stat, #%11            ' clear drive#
                 or      n_stat, n_drv           ' set current drive#
+
+                cmp     n_drv, #0           wz
+        if_z    mov     fs_par0, ##@fs_file0
+                cmp     n_drv, #1           wz
+        if_z    mov     fs_par0, ##@fs_file1
+                cmp     n_drv, #2           wz
+        if_nz   cmp     n_drv, #3           wz
+        if_z    jmp     #n_loop
+
+                mov     ptra, fs_par0
+                rdlong  n_temp0, ptra[12/4] wz  ' file size
+        if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
+        if_z    jmp     #n_loop                 ' |
 
                 rdbyte  fs_par1, #@fdc_cmd+2    ' track#
                 altsb   n_drv, #n_track
@@ -6520,16 +6531,23 @@ n_read_sect
                 bitl    n_msr, #MSR_DATAIO
                 wrbyte  n_msr, #@fdc_msr
 
-                rdlong  n_temp0, ##@fs_file0 + 12 wz ' file size
-        if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
-        if_z    jmp     #n_loop                 ' |
-
-                mov     fs_par0, ##@fs_file0
-
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive number
                 and     n_drv, #%00000011       ' |
                 andn    n_stat, #%11            ' clear drive#
                 or      n_stat, n_drv           ' set current drive#
+
+                cmp     n_drv, #0           wz
+        if_z    mov     fs_par0, ##@fs_file0
+                cmp     n_drv, #1           wz
+        if_z    mov     fs_par0, ##@fs_file1
+                cmp     n_drv, #2           wz
+        if_nz   cmp     n_drv, #3           wz
+        if_z    jmp     #n_loop
+
+                mov     ptra, fs_par0
+                rdlong  n_temp0, ptra[12/4] wz  ' file size
+        if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
+        if_z    jmp     #n_loop                 ' |
 
                 rdbyte  fs_par1, #@fdc_cmd+2    ' track#
                 altsb   n_drv, #n_track
@@ -7659,7 +7677,7 @@ ppi_62_rd
                 '                     |||+-- Loop on POST
                 '                     ||+--- 1=Co-Processor installed
                 '                     ++---- Planar RAM size (00=64K, 01=128K, 10=192K, 11=256K)
-        if_x1   mov     i_tmpb, #%00000010 ' High switches
+        if_x1   mov     i_tmpb, #%00000110 ' High switches
                 '                     ||||
                 '                     ||++-- Display (10=CGA)
                 '                     ++---- Num. Floppy drives (00=1, 01=2, 10=3, 11=4)
@@ -8085,6 +8103,13 @@ rom_F6000       file    "BASIC110.ROM"
 {rom_FE000}     file    "XTBIOS-REV1.ROM"
 
 fs_file0        byte    "PCDOS_A IMG", $00
+          {12}  long    0               ' file size
+          {16}  long    $00000000       ' first cluster
+          {20}  long    0               ' file position
+          {24}  long    0               ' current cluster (index)
+          {28}  long    $00000000       ' current cluster
+
+fs_file1        byte    "PCDOS_B IMG", $00
           {12}  long    0               ' file size
           {16}  long    $00000000       ' first cluster
           {20}  long    0               ' file position
