@@ -6359,6 +6359,14 @@ DAT             ' NEC765
                 org     $000
 
 nec765
+                add     ptrb, ##@nec765_lut - @nec765
+                setq2   #(@nec765_lut_end - @nec765_lut) / 4 -1
+                rdlong  0, ptrb
+
+                call    #\sd_init                   ' TODO check c_and_nz for failure
+                call    #\fs_mount                  ' TODO check partition not found
+                mov     fs_par0, ##@fs_file0
+                call    #\fs_open                   ' TODO check file not found
 
 n_loop
                 testb   n_dor, #DOR_ENABLE  wc
@@ -6454,33 +6462,37 @@ n_write_sect
                 bitl    n_msr, #MSR_DATAIO
                 wrbyte  n_msr, #@fdc_msr
 
+                rdlong  n_temp0, ##@fs_file0 + 12 wz ' file size
+        if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
+        if_z    jmp     #n_loop                 ' |
+
+                mov     fs_par0, ##@fs_file0
+
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive number
                 and     n_drv, #%00000011       ' |
                 andn    n_stat, #%11            ' clear drive#
                 or      n_stat, n_drv           ' set current drive#
 
-                rdbyte  ptra, #@fdc_cmd+2       ' track#
+                rdbyte  fs_par1, #@fdc_cmd+2    ' track#
                 altsb   n_drv, #n_track
-                setbyte ptra
-                cmp     ptra, #0                wz
+                setbyte fs_par1
+                cmp     fs_par1, #0         wz
                 bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
 
-                mul     ptra, #9
+                mul     fs_par1, #9
                 rdbyte  n_temp0, #@fdc_cmd+4    ' sector#
                 sub     n_temp0, #1
-                add     ptra, n_temp0
+                add     fs_par1, n_temp0
 
-                shl     ptra, #9
-
-                rdlong  n_temp0, ##@drv0        wz
-        if_z    wrbyte  #$00, #@fdc_cmd_len
-        if_z    jmp     #n_loop
-
-                add     ptra, ##@drv0
-.l1             call    #n_dma_read
+.l2             call    #\fs_read_sector
+                mov     ptra, ##@sd_data
+                mov     pb, ##512
+.l1             call    #\n_dma_read
                 wrbyte  pa, ptra++
-                waitx   ##_CLKFREQ / (250_000 / 8) ' simulate fd speed ?
- if_nz_and_nc   jmp     #.l1
+        if_nc   djnz    pb, #.l1
+                call    #\fs_update_sector
+        if_nc   add     fs_par1, #1
+        if_nc   jmp     #.l2
 
                 getbyte pa, n_stat, #0          ' st0
                 call    #n_fifo_write
@@ -6508,33 +6520,36 @@ n_read_sect
                 bitl    n_msr, #MSR_DATAIO
                 wrbyte  n_msr, #@fdc_msr
 
+                rdlong  n_temp0, ##@fs_file0 + 12 wz ' file size
+        if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
+        if_z    jmp     #n_loop                 ' |
+
+                mov     fs_par0, ##@fs_file0
+
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive number
                 and     n_drv, #%00000011       ' |
                 andn    n_stat, #%11            ' clear drive#
                 or      n_stat, n_drv           ' set current drive#
 
-                rdbyte  ptra, #@fdc_cmd+2       ' track#
+                rdbyte  fs_par1, #@fdc_cmd+2    ' track#
                 altsb   n_drv, #n_track
-                setbyte ptra
-                cmp     ptra, #0                wz
+                setbyte fs_par1
+                cmp     fs_par1, #0         wz
                 bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
 
-                mul     ptra, #9
+                mul     fs_par1, #9
                 rdbyte  n_temp0, #@fdc_cmd+4    ' sector#
                 sub     n_temp0, #1
-                add     ptra, n_temp0
+                add     fs_par1, n_temp0
 
-                shl     ptra, #9
-
-                rdlong  n_temp0, ##@drv0        wz
-        if_z    wrbyte  #$00, #@fdc_cmd_len
-        if_z    jmp     #n_loop
-
-                add     ptra, ##@drv0
+.l2             call    #\fs_read_sector
+                mov     pb, ##512
+                mov     ptra, ##@sd_data
 .l1             rdbyte  pa, ptra++
-                call    #n_dma_write
-                waitx   ##_CLKFREQ / (250_000 / 8) ' simulate fd speed ?
- if_nz_and_nc   jmp     #.l1
+                call    #\n_dma_write
+        if_nc   djnz    pb, #.l1
+        if_nc   add     fs_par1, #1
+        if_nc   jmp     #.l2
 
                 getbyte pa, n_stat, #0          ' st0
                 call    #n_fifo_write
@@ -6660,7 +6675,7 @@ n_fifo_write
 ' write pa to dma address
 n_dma_write
                 rdbyte  n_ea, #@dma_page+2      ' get page address
-                shl     n_ea, #16               ' shift into position
+                setnib  n_ea, n_ea, #4
                 rdlong  n_dma, #@dma+8          ' get dma address and count
                 setword n_ea, n_dma, #0         ' set address into ea
 
@@ -6674,20 +6689,21 @@ n_dma_write
 
 .no_ram
                 getword n_temp0, n_dma, #0      ' increment address
-                incmod  n_temp0, ##$FFFF    wc  ' |
+                incmod  n_temp0, ##$FFFF        ' |
                 setword n_dma, n_temp0, #0      ' |
 
                 getword n_temp0, n_dma, #1      ' decrement count
-                cmp     n_temp0, #0         wz  ' | if not already zero (correct?)
-        if_nz   sub     n_temp0, #1             ' |
-        if_nz   setword n_dma, n_temp0, #1      ' |
+                sub     n_temp0, #1         wc  ' |
+                setword n_dma, n_temp0, #1      ' |
 
-        _ret_   wrlong  n_dma, #@dma+8          ' update dma, Z=1 if counter is zero
+        _ret_   wrlong  n_dma, #@dma+8          ' update dma, C=1 reached TC
 
-' read pa to dma address
+' read pa from dma address
 n_dma_read
+                mov     pa, #$FF
+
                 rdbyte  n_ea, #@dma_page+2      ' get page address
-                shl     n_ea, #16               ' shift into position
+                setnib  n_ea, n_ea, #4
                 rdlong  n_dma, #@dma+8          ' get dma address and count
                 setword n_ea, n_dma, #0         ' set address into ea
 
@@ -6701,21 +6717,79 @@ n_dma_read
 
 .no_ram
                 getword n_temp0, n_dma, #0      ' increment address
-                incmod  n_temp0, ##$FFFF    wc  ' |
+                incmod  n_temp0, ##$FFFF        ' |
                 setword n_dma, n_temp0, #0      ' |
 
                 getword n_temp0, n_dma, #1      ' decrement count
-                cmp     n_temp0, #0         wz  ' | if not already zero (correct?)
-        if_nz   sub     n_temp0, #1             ' |
-        if_nz   setword n_dma, n_temp0, #1      ' |
+                sub     n_temp0, #1         wc  ' |
+                setword n_dma, n_temp0, #1      ' |
 
-        _ret_   wrlong  n_dma, #@dma+8          ' update dma, Z=1 if counter is zero
+        _ret_   wrlong  n_dma, #@dma+8          ' update dma, C=1 reached TC
 
 n_msr           long    (1<<MSR_DATAREG)
 n_stat          long    STATUS0_INT_ABNORMAL_POLL
 
 n_drv           long    0                       ' current drive number
 n_track         long    $00_00_00_00            ' drive track position
+
+'-------------------------------------------------------------------------------
+
+sd_ReadyBit     long    %0000_0000_0000_0000_0000_001_0000_0000
+sd_ErrorBits    long    %1111_1111_1111_1111_1000_000_0000_0000
+
+sd_cmd          long    0                           ' The 8b CMDxx | $40
+sd_cmdpar       long    0                           ' The 32b parameters
+sd_cmdcrc       long    0                           ' The 8b CRC (must be valid for CMD0 & CMD8)
+sd_cmdpar2      long    0                           ' SDV1=$0, SDV2=$40000000
+sd_cmdtype      long    0                           ' reply is R1=1, R3=3, R7=7, else 0
+sd_reply        long    0                           ' R1 reply (moved to replyR1 when R3/R7 32b reply here)
+sd_replyR1      long    0                           ' R1 reply (8b saved when R3/R7 32b reply follows)
+sd_replyR2      long    0                           ' R2 reply (32 bits)
+sd_dataout      long    0                           ' 8/32 bit data being shifted out
+sd_bytescnt     long    0                           ' #bytes to send/recv
+sd_bitscnt      long    0                           ' #bits to be shifted in/out
+sd_ctr1         long    0
+sd_ini_time     long    0                           ' initial time
+sd_time_out     long    0                           ' length of timeout
+                                                    '\ 1=SDV1, 2=SDV2(byte address), 3=SDHC/SDV2(block address)
+sd_blocksh      long    0                           '/ block shift 0/9 bits
+
+sd_blocknr      long    0                           ' sector#
+sd_data_p       long    0                           ' data buffer ptr
+
+'-------------------------------------------------------------------------------
+
+fs_begin        long    0       ' Partition start sector
+fs_sectors      long    0       ' Partition sectors
+
+fs_type         long    0       ' Filesystem type: 1=FAT16, 2=FAT32
+fs_cluster_size long    0       ' Number of sectors per cluster
+fs_fat          long    0       ' FAT table start sector
+fs_root         long    0       ' Root directory start sector
+fs_root_entries long    0       ' Root directory entries
+fs_data         long    0       ' Data section start
+
+fs_cwd          res     1       ' Current working directory begin cluster (0=FAT16 root)
+fs_cluster      res     1       ' Current cluster
+fs_cluster_sect res     1       ' Current cluster sector index
+
+fs_find_index   res     1
+
+fs_ptr          res     1
+fs_length       res     1
+
+fs_par0         res     1
+fs_par1         res     1
+fs_par2         res     1
+fs_par3         res     1
+
+fs_memptr0      res     1
+fs_memptr1      res     1
+fs_tmp0         res     1
+fs_tmp1         res     1
+fs_tmp2         res     1
+
+'-------------------------------------------------------------------------------
 
 n_dor           res     1
 n_cmd           res     1
@@ -6725,8 +6799,730 @@ n_dma           res     1
 n_temp0         res     1
 n_temp1         res     1
 
+DAT             ' NEC765 LUT code
+                org     $200
+nec765_lut
+
+'+-------[ Mount Partition ]---------------------------------------------------+
+'+ Call Format:                                                                +
+'+      call    #fs_mount                                                      +
+'+ On Return:                                                                  +
+'+      fs_type = 1 or 2 if ok, 0 if error                                     +
+'+-----------------------------------------------------------------------------+
+fs_mount
+                mov     sd_blocknr, #0
+                mov     sd_data_p, ##@sd_data
+                call    #\sd_read
+
+                call    #\.check_type
+        if_z    mov     fs_begin, #0
+        if_z    jmp     #.l1
+
+                call    #.get_partition
+        'if_nz   TODO can't find a FAT16 or FAT32 partition, raise error
+
+                mov     sd_blocknr, fs_begin
+                mov     sd_data_p, ##@sd_data
+                call    #\sd_read
+
+                call    #\.check_type
+        'if_nz   TODO not fat16 or fat32, raise error
+
+.l1
+                rdbyte  fs_cluster_size, ##@sd_data + $0D ' sectors per cluster
+
+                rdword  fs_fat, ##@sd_data + $0E    ' reserved sectors
+                add     fs_fat, fs_begin            ' + fs_begin = FAT start sector
+
+                cmp     fs_type, #$0C           wz
+        if_z    jmp     #.fat32
+
+                rdbyte  fs_tmp0, ##@sd_data + $10   ' number of FATs
+                rdword  fs_tmp1, ##@sd_data + $16   ' sectors per FAT
+                mul     fs_tmp0, fs_tmp1            ' total sectors for all FATs
+                mov     fs_root, fs_fat             ' begin of FAT
+                add     fs_root, fs_tmp0            '  + total FAT sectors = root directory start
+
+                rdword  fs_root_entries, ##@sd_data + 17 ' root entries
+
+                mov     fs_data, fs_root_entries
+                shr     fs_data, #4                 ' root sectors
+                add     fs_data, fs_root            ' = data section start
+                ret
+.fat32
+                rdbyte  fs_tmp0, ##@sd_data + $10   ' number of FATs
+                rdlong  fs_tmp1, ##@sd_data + $24   ' sectors per FAT
+                mul     fs_tmp0, fs_tmp1            ' total sectors for all FATs
+                mov     fs_data, fs_fat             ' begin of FAT
+                add     fs_data, fs_tmp0            ' + total fat sectors = data section start
+
+                rdlong  fs_root, ##@sd_data + $2C   ' root directory first cluster
+                sub     fs_root, #1                 '
+                mul     fs_root, fs_cluster_size    '
+                add     fs_root, fs_data            ' = root directory start sector
+
+                mov     fs_root_entries, fs_cluster_size
+                shl     fs_root_entries, #4
+                ret
+
+.check_type
+                rdlong  fs_tmp0, ##@sd_data + $36
+                cmp     fs_tmp0, ##$31544146    wz  ' FAT1
+        if_z    rdbyte  fs_tmp0, ##@sd_data + $3A
+        if_z    cmp     fs_tmp0, #$36               ' 6
+        if_z    mov     fs_type, #$06
+        if_z    ret
+
+                rdlong  fs_tmp0, ##@sd_data + $52
+                cmp     fs_tmp0, ##$33544146    wz  ' FAT3
+        if_z    rdbyte  fs_tmp0, ##@sd_data + $56
+        if_z    cmp     fs_tmp0, #$32               ' 2
+        if_z    mov     fs_type, #$0C
+                ret
+
+.get_partition
+                mov     fs_tmp1, #4
+                mov     ptra, ##@sd_data + $1BE
+.l2             rdbyte  fs_tmp0, ptra[4]            ' type
+                cmp     fs_tmp0, #$06           wz  ' FAT16
+        if_nz   cmp     fs_tmp0, #$0E           wz  ' FAT16
+        if_nz   cmp     fs_tmp0, #$0C           wz  ' FAT32
+        if_nz   add     ptra, #16
+        if_nz   djnz    fs_tmp1, #.l2
+        if_z    rdlong  fs_begin, ptra[2]           ' $1C6 + (partition << 4)
+        if_z    mov     fs_type, fs_tmp0
+                ret
+
+'+-------[ Find first/next directory entry ]-----------------------------------+
+'+ Call Format:                                                                +
+'+      call    #fs_find_first                                                 +
+'+      call    #fs_find_next                                                  +
+'+ On Return:                                                                  +
+'+      ptra    = Entry                                                        +
+'+      Returns "NC" if ok, "C" if error                                       +
+'+-----------------------------------------------------------------------------+
+fs_find_first
+                mov     fs_find_index, #0
+fs_find_next
+                cmps    fs_find_index, fs_root_entries  wcz
+        if_ae   modc    _set    wc
+        if_ae   ret
+
+                mov     fs_tmp0, fs_find_index
+                shr     fs_tmp0, #4
+                add     fs_tmp0, fs_root
+                cmp     fs_tmp0, sd_blocknr wz
+        if_nz   mov     sd_blocknr, fs_tmp0
+                mov     sd_data_p, ##@sd_data
+        if_nz   call    #\sd_read
+
+                mov     ptra, fs_find_index
+                and     ptra, #$0F
+                shl     ptra, #5
+                add     ptra, ##@sd_data
+
+                add     fs_find_index, #1       ' pre-select next entry
+
+                rdbyte  fs_tmp0, ptra[11]       ' attribute
+                test    fs_tmp0, #AM_VOLUME|AM_DIR wz ' skip volume id and directories
+        if_nz   jmp     #fs_find_next           ' |
+                and     fs_tmp0, #AM_LFN_MASK   ' check if LFN entry
+                cmp     fs_tmp0, #AM_LFN    wz  ' |
+        if_z    jmp     #fs_find_next           ' | yes, skip
+
+                rdbyte  fs_tmp0, ptra
+                cmp     fs_tmp0, #$E5       wz
+        if_z    jmp     #fs_find_next
+                cmp     fs_tmp0, #$00       wz
+        if_z    modc    _set    wc
+        if_nz   modc    _clr    wc
+
+                ret
+
+'+-------[ Open file for read/write ]------------------------------------------+
+'+ Call Format:                                                                +
+'+      mov     fs_par0, #@file_descriptor                                     +
+'+      call    #fs_find_first                                                 +
+'+-----------------------------------------------------------------------------+
+fs_open
+                mov     ptrb, fs_par0
+                call    #\fs_find_first
+        if_c    jmp     #.end
+.next           rdlong  fs_tmp0, ptra
+                rdlong  fs_tmp1, ptrb
+                cmp     fs_tmp0, fs_tmp1    wz
+        if_z    rdlong  fs_tmp0, ptra[1]
+        if_z    rdlong  fs_tmp1, ptrb[1]
+        if_z    cmp     fs_tmp0, fs_tmp1    wz
+        if_z    rdlong  fs_tmp0, ptra[1]
+        if_z    setbyte fs_tmp0, #0, #3
+        if_z    rdlong  fs_tmp1, ptrb[1]
+        if_z    setbyte fs_tmp1, #0, #3
+        if_z    cmp     fs_tmp0, fs_tmp1    wz
+        if_z    jmp     #.ok
+                call    #\fs_find_next
+        if_nc   jmp     #.next
+.end
+        _ret_   modz    _clr    wz
+.ok
+                rdlong  fs_tmp0, ptra[28/4]
+                wrlong  fs_tmp0, ptrb[12/4]     ' fle size
+
+                rdword  fs_tmp0, ptra[26/2]     ' lower cluster
+                cmp     fs_type, #2     wz
+        if_z    rdword  fs_tmp1, ptra[20/2]     ' upper cluster
+        if_z    setword fs_tmp0, fs_tmp1, #1
+                wrlong  fs_tmp0, ptrb[16/4]     ' first cluster
+
+                wrlong  #0, ptrb[20/4]          ' clear pointers
+                wrlong  #0, ptrb[24/4]          ' |
+                wrlong  fs_tmp0, ptrb[28/4]     ' | current cluster
+
+        _ret_   modz    _set    wz
+
+'+-------[ Read a file sector ]------------------------------------------------+
+'+ Call Format:                                                                +
+'+      mov     fs_par0, #@file_descriptor                                     +
+'+      mov     fs_par1, #sector                                               +
+'+      call    #fs_find_first                                                 +
+'+-----------------------------------------------------------------------------+
+fs_read_sector
+                mov     ptrb, fs_par0
+
+                qdiv    fs_par1, fs_cluster_size ' get cluster index
+                getqx   fs_par2         ' | cluster index
+                getqy   fs_par3         ' | cluster sector index
+
+                rdlong  fs_tmp0, ptrb[24/4] ' current cluster index
+                cmp     fs_par2, fs_tmp0    wz
+        if_z    rdlong  fs_tmp0, ptrb[28/4] ' current cluster
+        if_z    jmp     #.l1
+
+                wrlong  fs_par2, ptrb[24/4] ' update cluster index
+
+                rdlong  fs_tmp0, ptrb[16/4] ' first cluster
+                cmp     fs_par2, #0     wz
+        if_z    jmp     #.l1
+
+.l2             mov     fs_tmp2, fs_tmp0
+                cmp     fs_type, #$0C   wz
+        if_z    shr     fs_tmp2, #7         ' FAT32 128 clusters per sector
+        if_nz   shr     fs_tmp2, #8         ' FAT16 256 clusters per sector
+                add     fs_tmp2, fs_fat
+                cmp     sd_blocknr, fs_tmp2 wz
+        if_nz   mov     sd_blocknr, fs_tmp2
+        if_nz   mov     sd_data_p, ##@sd_data
+        if_nz   call    #\sd_read
+
+                cmp     fs_type, #$0C   wz
+        if_z    and     fs_tmp0, #$7F       ' FAT32 128 clusters per sector
+        if_z    shl     fs_tmp0, #2         ' |
+        if_nz   and     fs_tmp0, #$FF       ' FAT16 256 clusters per sector
+        if_nz   shl     fs_tmp0, #1         ' |
+                add     fs_tmp0, ##@sd_data
+        if_z    rdlong  fs_tmp0, fs_tmp0
+        if_nz   rdword  fs_tmp0, fs_tmp0
+                sub     fs_par2, #1     wz
+        if_nz   jmp     #.l2
+
+.l1
+                wrlong  fs_tmp0, ptrb[28/4] ' update current cluster
+
+                sub     fs_tmp0, #2
+                mul     fs_tmp0, fs_cluster_size
+                add     fs_tmp0, fs_data
+
+                add     fs_tmp0, fs_par3
+                cmp     sd_blocknr, fs_tmp0 wz
+        if_nz   mov     sd_blocknr, fs_tmp0
+                mov     sd_data_p, ##@sd_data
+        if_nz   call    #\sd_read
+                ret     wcz
+
+'+-------[ Update a file sector ]----------------------------------------------+
+'+ Call Format:                                                                +
+'+      call    #fs_update_sector                                              +
+'+-----------------------------------------------------------------------------+
+fs_update_sector
+                mov     sd_data_p, ##@sd_data
+                call    #\sd_write
+                ret     wcz
+
+'+-------[ SD Card Initialisation ]--------------------------------------------+
+'+ On Entry:                                                                   +
+'+ Call Format:                                                                +
+'+              CALL    #_SDcard_Init                   '                      +
+'+ On Return:                                                                  +
+'+      hub $20   = CSD[16] + CID[16]                   ' csd/cid data         +
+'+      Returns  "Z" if ok, "NZ" if error                                      +
+'+-----------------------------------------------------------------------------+
+
+'+-----------------------------------------------------------------------------+
+'+      SD/SDHC/sdxc SPI Initialisation                                        +
+'+-----------------------------------------------------------------------------+
+'+      Send >74 clocks with /CS=1 & DI=1 starting & ending with CLK=0         +
+'+-----------------------------------------------------------------------------+
+sd_init
+                callpa  #_SD_CS, #check_pullup      ' check for pull-up on sd_cs
+        if_nc   jmp     #_fail                      '_pullup                 '
+
+                drvh    #_SD_CS                     ' cs=1 & output
+                drvl    #_SD_CK                     ' ck=0 & output
+                drvh    #_SD_DI                     ' di=1 & output
+
+                mov     sd_ctr1, #(96 * 2)
+.count          waitx   ##delay5us                  '\ 5us+5us (ie 100KHz)
+                outnot  #_SD_CK                     '| CLK=0-->1-->0
+                djnz    sd_ctr1, #.count            '/
+                waitx   ##delay5us                  '  CLK=0 (idle) & /CS=1
+'+-----------------------------------------------------------------------------+
+'+ Software Reset:                                                             +
+'+      CMD0,  PAR=$0,        CRC=$95, REPLY=R1($01)                           +
+'+-----------------------------------------------------------------------------+
+.cmd0           getct   sd_ini_time                 '\ set timeout up to CMD9
+                mov     sd_time_out, ##delay10ms    '/
+                mov     sd_ctr1, #10                ' try a few times
+.again0         mov     sd_cmd, #CMD0
+                mov     sd_cmdpar, #0
+                mov     sd_cmdcrc, #$95
+
+                call    #_cmdR1                     ' /CS=0, send cmd, recv R1, /CS=1
+
+                'debug(uhex_long(cmdout, cmdpar, cmdcrc, replyR1, replyR2))
+        if_nc   mov     sd_time_out, ##delay1s      ' increase timeout to 1s
+                                                    '\ $01(idle): SD/MMC, not fully validated
+        if_nc   jmp     #.cmd8                      '/ $00(good): (dane card response)
+
+                waitx   ##delay5us                  ' delay 5us
+                djnz    sd_ctr1, #.again0           ' n: try again?
+                jmp     #_fail                      '00                      '
+
+' we know we now have an SD/MMC card but its not fully validated yet...
+'+-----------------------------------------------------------------------------+
+'+ Check Voltage:                                                              +
+'+      CMD8,  PAR=$1AA,      CRC=$87, REPLY=R1($01)+R7($xx1AA) ($05=try SDV1) +
+'+-----------------------------------------------------------------------------+
+.cmd8           mov     sd_cmd, #CMD8
+                mov     sd_cmdpar, #$1AA
+                mov     sd_cmdcrc, #$87
+
+                call    #_cmdR1R7                   ' /CS=0, send cmd, recv R1+R7, /CS=1
+                'debug(uhex_long(cmdout, cmdpar, cmdcrc, replyR1, replyR2))
+
+    if_c_or_z   jmp     #.illegal                   ' j if <> $01 (not idle)
+.idle           and     sd_reply, ##$FFF            '\
+                cmp     sd_reply, #$1AA     wz      '/ R7[11:0]=$1AA ?
+                mov     sd_cmdpar2, ##$40000000     ' preset for SDV2
+        if_ne   jmp     #_fail '98                  ' n: unknown R7
+                jmp     #.cmd55                     ' y: CMD55+ACMD41($4000_0000)
+
+.illegal        cmp     sd_replyR1, #$05    wz      ' $05(illegal cmd) ?
+        if_ne   jmp     #_fail '08                  ' <>$01/$05 (not idle/illegal)
+                mov     sd_cmdpar2, #0              ' try SDV1
+                                                            ' CMD55+ACMD41($0) fall thru
+'+-----------------------------------------------------------------------------+
+'+ Prefix to ACMD41 & ACMD23:                                                  +
+'+      CMD55, PAR=$0,        CRC=$xx, REPLY=R1($01)                           +
+'+-----------------------------------------------------------------------------+
+.cmd55          mov     sd_cmd, #CMD55              '
+                mov     sd_cmdpar, #0               '
+
+                call    #_cmdRZA41                  ' /CS=0, send cmd, recv R1, /CS=0(ena)
+                'debug(uhex_long(cmdout, cmdpar, cmdcrc, replyR1, replyR2))
+
+    if_c_or_z   jmp     #_fail '55                  ' <>$01 (not idle)
+                                                            '              fall thru
+'+-----------------------------------------------------------------------------+
+'+ Check SDV1/SDV2:  (follows CMD55)                                           +
+'+     ACMD41, PAR=$0,        CRC=$xx, REPLY=R1($00) SD-V1                     +
+'+     ACMD41, PAR=$40000000, CRC=$xx, REPLY=R1($00) SD-V2                     +
+'+-----------------------------------------------------------------------------+
+.CommandA41     mov     sd_cmd, #ACMD41             '
+                mov     sd_cmdpar, sd_cmdpar2       ' SDV1=0 / SDV2=$40000000
+
+                call    #_cmdR1                     ' /CS=0, send cmd, recv R1, /CS=1
+                'debug(uhex_long(cmdout, cmdpar, cmdcrc, replyR1, replyR2))
+
+if_nc_and_nz    jmp     #.cmd55                     '  =$01(busy): CMD55+CMD41 again
+        if_c    jmp     #_fail '41                  ' <>$00/$01: error
+
+                cmp     sd_cmdpar2, #0      wz      ' SDV1 ?
+        if_z    mov     sd_blocksh, #9              ' y: #1 SDV1(byte address)
+        if_z    jmp     #.cmd16                     ' y: SDV1 does not use CMD58
+                                                    ' SDV2         fall thru
+'+-----------------------------------------------------------------------------+
+'+ Check OCR CCS bit:                                                          +
+'+      CMD58, PAR=$0,        CRC=$xx, REPLY=R1($00)+R3(b30=1)                 +
+'+-----------------------------------------------------------------------------+
+.cmd58          mov     sd_cmd, #CMD58              ' SDHC ?
+                mov     sd_cmdpar, #0               '
+
+                call    #_cmdR1R3                   ' /CS=0, send cmd, recv R1+R3, /CS=1
+                'debug(uhex_long(cmdout, cmdpar, cmdcrc, replyR1, replyR2))
+
+    if_c_or_nz  jmp     #_fail                      '58                      ' <>$00(good): error
+                testbn  sd_reply, #30       wz      ' bit30=CCS=1? $40000000?
+        if_z    mov     sd_blocksh, #9              ' n: #2 SDV2(byte address)
+        if_nz   mov     sd_blocksh, #0              ' y: #3 SDHC/SDV2(block address)
+''      if_nz   jmp     #.Command9x                   ' y: does not req cmd16?                        ?????????
+                                                    ' SDV2(byte)   fall thru
+'+-----------------------------------------------------------------------------+
+'+ Force block size to 512 bytes:                                              +
+'+      CMD16, PAR=$200,      CRC=$xx, REPLY=R1($00)                           +
+'+-----------------------------------------------------------------------------+
+.cmd16          mov     sd_cmd, #CMD16              ' force blocksize=512bytes
+                mov     sd_cmdpar, ##512            ' 512 bytes
+
+                call    #_cmdR1                     ' /CS=0, send cmd, recv R1, /CS=1
+                'debug(uhex_long(cmdout, cmdpar, cmdcrc, replyR1, replyR2))
+
+if_nc_and_nz    jmp     #.cmd16                     '  =$01(idle): again
+if_c_or_nz      jmp     #_fail '16                  ' <>$00(good): error
+
+'+-----------------------------------------------------------------------------+
+'+ Read CSD register (16 bytes):                                               +
+'+      CMD9,  PAR=$0,        CRC=$xx, REPLY=R1($00)                           +
+'+-----------------------------------------------------------------------------+
+.cmd9           mov     sd_data_p, ##@sd_csd
+                mov     sd_cmd, #CMD9               ' read CSD register
+                call    #sd_read_reg                '
+                'debug(uhex_byte_array(#@SD_csd, #16))
+
+'+-----------------------------------------------------------------------------+
+'+ Read CID register (16 bytes):                                               +
+'+      CMD10, PAR=$0,        CRC=$xx, REPLY=R1($00)                           +
+'+-----------------------------------------------------------------------------+
+.cmd10          mov     sd_data_p, ##@sd_cid
+                mov     sd_cmd, #CMD10              ' read CID register
+                call    #sd_read_reg                '
+                'debug(uhex_byte_array(#@SD_cid, #16))
+
+        _ret_   modz    _set                wz      ' "Z" = success
+
+
+'+-----------------------------------------------------------------------------+
+'+ Read Sector:                                                                +
+'+-----------------------------------------------------------------------------+
+sd_read
+'+-----------------------------------------------------------------------------+
+'+ Read Block/Sector:  (512 bytes)                                             +
+'+      CMD17, PAR=blocknr,   CRC=$xx, REPLY=R1($??) +n*$FF +($FE+block+CRC16) +
+'+-----------------------------------------------------------------------------+
+.cmd17          mov     sd_bytescnt, ##512          ' read block (no. bytes)
+                mov     sd_cmd, #CMD17              '
+                mov     sd_cmdpar, sd_blocknr       '
+                shl     sd_cmdpar, sd_blocksh       ' <<0 or <<9
+                call    #sd_read_block              ' read 512 bytes
+                ret                                 ' "Z" = success
+
+'+-----------------------------------------------------------------------------+
+'+ Write Sector:                                                               +
+'+-----------------------------------------------------------------------------+
+sd_write
+'+-----------------------------------------------------------------------------+
+'+ Write Block/Sector:  (512 bytes)                                            +
+'+      CMD24, PAR=blocknr,   CRC=$xx, REPLY=R1($??) +n*$FF +($FE+block+CRC16) +
+'+-----------------------------------------------------------------------------+
+.cmd24          mov     sd_bytescnt, ##512          ' write block (no. bytes)
+                mov     sd_cmd, #CMD24              '
+                mov     sd_cmdpar, sd_blocknr       '
+                shl     sd_cmdpar, sd_blocksh       ' <<0 or <<9
+                call    #sd_write_block             ' write 512 bytes
+                ret                                 ' "Z" = success
+
+'+-----------------------------------------------------------------------------+
+'+ Read Block/Sector:  (512 bytes)                                             +
+'+      CMD9,  PAR=$0,        CRC=$xx, REPLY=R1($00)                           +
+'+      CMD10, PAR=$0,        CRC=$xx, REPLY=R1($00)                           +
+'+      CMD17, PAR=blocknr,   CRC=$xx, REPLY=R1($??) +n*$FF +($FE+block+CRC16) +
+'+-----------------------------------------------------------------------------+
+sd_read_reg     mov     sd_bytescnt, #16            ' CMD9,10: CSD,CID register
+                mov     sd_cmdpar, #0               '        PAR=$0,      16 bytes
+sd_read_block                                       ' CMD17: PAR=sector, 512 bytes
+                getct   sd_ini_time                 '\ set timeout for cmd9,10,17
+                mov     sd_time_out, ##delay1s      '/
+
+                call    #_cmdRZtoken                ' /CS=0, send cmd, recv R1, /CS=0(ena)
+                'debug(uhex_long(cmdout, cmdpar, cmdcrc, replyR1, replyR2))
+        if_nz   jmp     #_fail '17                  ' <>$00(good): error
+
+                call    #_getreply                  ' n*$FF+$FE
+                cmp     sd_reply, #$FE         wz   ' $FE=valid Data Token
+        if_nz   jmp     #_fail '97                  '
+
+.readbyte       call    #_recvbyte                  ' read data byte
+                wrbyte  sd_reply, sd_data_p         ' save byte
+                add     sd_data_p, #1               ' bufaddr++
+                djnz    sd_bytescnt, #.readbyte     ' byte--
+                call    #_recvbyte                  ' read CRC16 1/2
+                call    #_recvbyte                  ' read CRC16 2/2
+' NOTE: CRC16 not checked - do we want to do this?
+                outl    #_SD_CK                     ' CLK=0 (idle)          already=0
+                call    #_recvbyte                  ' SEND 8 CLOCKS BEFORE DISABLING CS
+                outh    #_SD_CS                     ' /CS=1 (disable)
+        _ret_   modz    _set                wz      ' "Z" = success
+
+'+-----------------------------------------------------------------------------+
+'+ Write Block/Sector:  (512 bytes)                                            +
+'+      CMD24, PAR=blocknr                                                     +
+'+-----------------------------------------------------------------------------+
+sd_write_block                                      ' CMD24: PAR=sector, 512 bytes
+                getct   sd_ini_time                 '\ set timeout for cmd24
+                mov     sd_time_out, ##delay1s      '/
+
+                call    #_cmdRZtoken                ' /CS=0, send cmd, recv R1, /CS=0(ena)
+        if_nz   jmp     #_fail '24                  ' <>$00(good): error
+
+                mov     sd_dataout, #$FE            ' start block token
+                call    #_sendbyte                  ' write data byte
+
+.writebyte      rdbyte  sd_dataout, sd_data_p       ' load byte
+                call    #_sendbyte                  ' write data byte
+                add     sd_data_p, #1               ' bufaddr++
+                djnz    sd_bytescnt, #.writebyte    ' byte--
+' NOTE: CRC16 is ignored in SPI mode
+                call    #_sendFF                    ' CRC16 byte 1/2
+                call    #_sendFF                    ' CRC16 byte 2/2
+                call    #_getreply                  '
+                and     sd_reply, #$1F
+                cmp     sd_reply, #$5          wz
+        if_nz   jmp     #_fail
+                waitx   ##delay20ms                 ' why is this necessary???
+.waitbusy
+                call    #_recvbyte                  ' get a byte
+                cmp     sd_reply, #$FF         wz   ' reply=$FF=busy ?
+        if_nz   jmp     #.checkstatus               ' n: check write status
+                getct   sd_replyR1                  '\ y: timeout ?
+                sub     sd_replyR1, sd_ini_time     '|
+                cmp     sd_replyR1, sd_time_out wc  '| c if < timeout
+        if_c    jmp     #.waitbusy                  '| n: try again
+                jmp     #_fail '90                  '/ y: timed out
+.checkstatus
+                getct   sd_ini_time                 '\ set timeout for cmd13
+                mov     sd_time_out, ##delay1s      '/
+                mov     sd_cmd, #CMD13              '
+                mov     sd_cmdpar, #0               '
+                outl    #_SD_CS                     ' /CS=0 (enable)
+
+                call    #_sendFF                    ' send $FF byte first
+                mov     sd_dataout, sd_cmd          ' CMD
+                call    #_sendbyte                  ' send cmd byte
+                mov     sd_dataout, sd_cmdpar       ' Parameter
+                call    #_sendlong                  ' send 4 bytes (MSB first)
+                mov     sd_dataout, sd_cmdcrc       ' CRC
+                call    #_sendbyte                  ' send crc byte
+
+                call    #_getR2reply                ' recv R2
+
+                outl    #_SD_CK                     ' CLK=0 (idle)          already=0
+
+                outl    #_SD_CK                     ' CLK=0 (idle)          already=0
+                call    #_recvbyte                  ' SEND 8 CLOCKS BEFORE DISABLING CS
+                outh    #_SD_CS                     ' /CS=1 (disable)
+                test    sd_replyR2, sd_ReadyBit wz  ' check ready to receive another
+        if_nz   jmp     #.checkstatus
+                test    sd_replyR2, sd_ErrorBits wz ' Z means all error bits clear
+                ret
+
+'+-----------------------------------------------------------------------------+
+'+      SEND: CMDx, PARx, CRCx, GET REPLY                                      +
+'+-----------------------------------------------------------------------------+
+_cmdRZA41                                           ' cmd55:       r1 response
+_cmdRZtoken                                         ' cmd9,10,17,24: r1+$fe response
+                mov     sd_cmdtype, #1              ' returns w /CS=0(ena)
+                jmp     #_cmdxx                     '
+_cmdR1R3                                            ' cmd58:    r1+r3 response
+_cmdR1R7                                            ' cmd8:     r1+r7 response
+_cmdR1                                              ' cmd0,a41,16: r1 response
+                mov     sd_cmdtype, #0              ' returns w /CS=1(disabled)
+_cmdxx                                              '
+                outl    #_SD_CS                     ' /CS=0 (enable)
+
+                call    #_sendFF                    ' send $FF byte first
+                mov     sd_dataout, sd_cmd          ' CMD
+                call    #_sendbyte                  ' send cmd byte
+                mov     sd_dataout, sd_cmdpar       ' Parameter
+                call    #_sendlong                  ' send 4 bytes (MSB first)
+                mov     sd_dataout, sd_cmdcrc       ' CRC
+                call    #_sendbyte                  ' send crc byte
+
+                call    #_getreply                  ' recv R1/R1+R3/R1+R7/RZ..+Token
+
+                outl    #_SD_CK                     ' CLK=0 (idle)           already=0
+
+                skip    sd_cmdtype                  '\ skips next instr if #1
+                outh    #_SD_CS                     '| /CS=1(disable) if reqd
+                ret                                 '/ else /CS=0 cmdRZA41/cmdRZtoken
+
+'+-----------------------------------------------------------------------------+
+'+      READ REPLY: R1/R1+R3/R1+R7/R1+token                                    +
+'+-----------------------------------------------------------------------------+
+_getreply       call    #_recvbyte                  ' recv R1 byte
+                cmp     sd_reply, #$FF      wz      ' reply=$ff=busy ?
+        if_nz   jmp     #.doneR1                    ' n:
+
+' timeout set in CMD0(for CMD0,8,55,A41,58,16) and CMD9,10,17(readblock)
+                getct   sd_replyR1                  '\ timeout ?
+                sub     sd_replyR1, sd_ini_time     '|
+                cmp     sd_replyR1, sd_time_out wc  '| c if < timeout
+        if_c    jmp     #_getreply                  '| n: try again
+                jmp     #_fail '90                  '/ timeout:
+
+.doneR1         mov     sd_replyR1, sd_reply        ' save R1/Token reply
+
+                cmp     sd_cmd, #CMD8    wz
+        if_nz   cmp     sd_cmd, #CMD58   wz
+        if_nz   jmp     #.end                       ' ret if not CMD8/CMD58
+
+                call    #_recvlong                  ' R7=CMD8=volts/R3=CMD58=OCR
+.end                                                '\ returns with...
+                '| nc+z  replyR1=$00(success)
+                test    sd_replyR1, #1      wz      '| nc+nz replyr1=$01(idle)
+        _ret_   cmpr    sd_replyR1, #$01    wc      '/  c    replyr1>$01(error)
+'+-----------------------------------------------------------------------------+
+'+      READ REPLY: R2                                                         +
+'+-----------------------------------------------------------------------------+
+_getR2reply     call    #_recvbyte                  ' recv R2 first byte
+                cmp     sd_reply, #$FF      wz      ' reply=$ff=busy ?
+        if_nz   jmp     #.donebyte1                 ' n:
+
+' timeout set in CMD13
+                getct   sd_replyR1                  '\ timeout ?
+                sub     sd_replyR1, sd_ini_time     '|
+                cmp     sd_replyR1, sd_time_out wc  '| c if < timeout
+        if_c    jmp     #_getR2reply                '| n: try again
+                jmp     #_fail '90                  '/ timeout:
+
+.donebyte1      mov     sd_replyR2, sd_reply        ' save R2 first byte
+                call    #_recvbyte                  ' get R2 second byte
+                shl     sd_replyR2, #8              ' combine ...
+                or      sd_replyR2, sd_reply        ' ... bytes
+                call    #_recvbyte                  ' get R2 third byte
+                shl     sd_replyR2, #8              ' combine ...
+                or      sd_replyR2, sd_reply              ' ... bytes
+                call    #_recvbyte                  ' get R2 fourth byte
+                shl     sd_replyR2, #8              ' combine ...
+                or      sd_replyR2, sd_reply        ' ... bytes
+                ret
+
+'+-----------------------------------------------------------------------------+
+'+      SD SPI Send/Recv Routines... (write/read byte/long simultaneously)     +
+'+              /CS=0 & CLK=0 on both entry and exit                           +
+'+-----------------------------------------------------------------------------+
+_recvlong       neg     sd_dataout, #1              ' call here to Recv a Long (+send 1's)
+_sendlong       mov     sd_bitscnt, #32             ' call here to Send a Long (long=32bits)
+                jmp     #_sendrecv                  '
+_sendFF                                             ' call here to send $ff byte
+_recvbyte       neg     sd_dataout, #1              ' call here to Recv a Byte (+send 1's)
+_sendbyte       rol     sd_dataout, #24             ' call here to Send a Byte (msbit first)
+                mov     sd_bitscnt, #8              '                          (byte=8bits)
+_sendrecv       mov     sd_reply, #0                ' clear reply
+' 8+15 low/high clk cycles (8.7MHz@200MHz, 1.3MHz@30MHz)
+.nextbit        rol     sd_dataout, #1      wc      ' \ prepare output bit (di=0/1)..
+                outl    #_SD_CK                     ' | CLK=0  (already 0 first time)
+                outc    #_SD_DI                     ' / write output bit: output on CLK falling edge
+                waitx   #2                          ' |   setup time to be safe
+                outh    #_SD_CK                     ' \ CLK=1
+                waitx   #3                          ' |   setup time to be safe
+                testp   #_SD_DO             wc      ' | read input bit:   sample on clk rising edge
+                rcl     sd_reply, #1                ' / accum DO input bits
+                djnz    sd_bitscnt, #.nextbit       '   8/32 bits?
+        _ret_   outl    #_SD_CK                     ' CLK=0 on exit
+
+_fail           outh    #_SD_CS                     ' /CS=1 (disable)
+        _ret_   modcz   _set, _clr          wcz     ' c & nz = fail
+
+'
+' Check pin pull-up
+'
+check_pullup    drvl    pa                          'drive pin low
+check_pulldn    waitx   ##300 * 1                   'wait >1us
+                fltl    pa                          'float pin
+                waitx   ##300 * 5                   'wait >5us
+        _ret_   testp   pa                  wc      'sample pin
+
+nec765_lut_end
+
+CON ' SD Card Driver Constants
+
+    _SD_CS = 19                                             '61  { O }  ' serial flash
+    _SD_CK = 17                                             '60  { O }
+    _SD_DI = 18                                             '59  { O } MOSI
+    _SD_DO = 16                                             '58  { I } MISO
+
+    delay1s = _CLKFREQ                                      ' 1s  (xtal * pll)
+    delay10ms = _CLKFREQ / 100                              ' 10ms
+    delay20ms = _CLKFREQ / 50                               ' 20ms
+    delay1ms = _CLKFREQ / 1_000                             ' 1ms
+    delay5us = _CLKFREQ / 200_000                           ' 5us
+
+'------------------------------------------------------------------------------------------------
+' SD Commands & Responses...
+'------------------------------------------------------------------------------------------------
+'   Command             Argument        Response/Data    Description
+    CMD0   =  0 + $40 ' 0               R1       -       GO_IDLE_STATE            *Reqs valid CRC
+'   CMD1   =  1 + $40 ' 0               R1       -       SEND_OP_COND
+    ACMD41 = 41 + $40 ' $4000_0000      R1       -       APP_SEND_OP_COND         *Reqs CMD55 first
+    CMD8   =  8 + $40 ' 0               R1+R7    -       SEND_IF_COND             *Reqs valid CRC
+    CMD9   =  9 + $40 ' 0               R1       Y       SEND_CSD
+    CMD10  = 10 + $40 ' 0               R1       Y       SEND_CID
+'   CMD12  = 12 + $40 ' 0               R2       -       STOP_TRANSMISSION
+    CMD13  = 13 + $40 ' 0               R2       -       SEND_STATUS
+    CMD16  = 16 + $40 ' BlkLen[31:0]    R1       -       SET_BLOCKLEN
+    CMD17  = 17 + $40 ' Addr[31:0]      R1       Y       READ_SINGLE_BLOCK
+'   CMD18  = 18 + $40 ' Addr[31:0]      R1       Y       READ_MULTIPLE_BLOCK
+'   CMD23  = 23 + $40 ' NoBlks[15:0]    R1       -       SET_BLOCK_COUNT
+'   ACMD23 = 23 + $40 ' NoBlks[22:0]    R1       -       SET_WR_BLOCK_ERASE_COUNT *Reqs CMD55 first
+    CMD24  = 24 + $40 ' Addr[31:0]      R1       Y*      WRITE_BLOCK
+'   CMD25  = 25 + $40 ' Addr[31:0]      R1       Y*      WRITE_MULTIPLE_BLOCK
+    CMD55  = 55 + $40 ' 0               R1       -       APP_CMD                  *Prefix for ACMD41/ACMD23
+    CMD58  = 58 + $40 ' 0               R1+R3    -       READ_OCR
+
+' R1 response:  $FF = busy/wait (0-8 bytes?)
+'               b7: 0 (msb first)
+'               b6: Parameter Error
+'               b5: Address Error
+'               b4: Erase Sequence Error
+'               b3: Command CRC Error
+'               b2: Illegal Command
+'               b1: Erase Reset
+'               b0: In Idle State
+' R1b response: ???
+' R3 response:  R1 + OCR(32b)
+' R7 response:  R1($01) + 32b(b11..b0 = $1AA = SDC V2 2V7-3V6, else reject)
+'
+' DataPacket:   DataToken(1byte) + DataBlock(1-2048bytes) + CRC(2bytes)
+'   DataToken:  $FE = CMD17/18/24 (read'1'block/read'n'blocks/write'1'block)
+'               $FC = CMD25 (write'n'blocks)
+'               $FD = CMD25 StopToken  (Single byte packet without data or CRC)
+' ErrorToken:   Single Byte Reply
+'               b7-b5: 000
+'               b4: Card Locked
+'               b3: Out of Range
+'               b2: Card ECC failed
+'               b1: CC Error
+'               b0: Error
+' DataResponse:
+'               b7-b4: xxx0
+'               $x5: Data Accepted
+'               $xB: Data Rejected - CRC Error
+'               $xD: Data Rejected - Write Error
+
+AM_READ_ONLY = $01  ' Read only
+AM_HIDDEN    = $02  ' Hidden
+AM_SYSTEM    = $04  ' System
+AM_VOLUME    = $08  ' Volume ID
+AM_DIR       = $10  ' Directory
+AM_ARCHIVE   = $20  ' Archive
+AM_LFN       = AM_READ_ONLY|AM_HIDDEN|AM_SYSTEM|AM_VOLUME
+AM_LFN_MASK  = AM_READ_ONLY|AM_HIDDEN|AM_SYSTEM|AM_VOLUME|AM_DIR|AM_ARCHIVE
+
 DAT             ' NEC765 I/O HUB code
                 orgh
+
+sd_csd          byte    $00[16]
+sd_cid          byte    $00[16]
+sd_data         byte    $00[512]
 
 fdc_status_rd
                 rdbyte  i_tmpb, #@fdc_msr
@@ -7288,7 +8084,12 @@ cga_charrom     file    "CGA.F08"
 rom_F6000       file    "BASIC110.ROM"
 {rom_FE000}     file    "XTBIOS-REV1.ROM"
 
-drv0            long    0 'file    "PCDOS200-DISK1.IMG"
+fs_file0        byte    "PCDOS_A IMG", $00
+          {12}  long    0               ' file size
+          {16}  long    $00000000       ' first cluster
+          {20}  long    0               ' file position
+          {24}  long    0               ' current cluster (index)
+          {28}  long    $00000000       ' current cluster
 
                 fit     $8_0000 - RAM_SIZE - CGA_VRAM
 
