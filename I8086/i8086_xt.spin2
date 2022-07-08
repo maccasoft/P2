@@ -2865,7 +2865,10 @@ cga_graphics_320x200
 
                 djnz    pb, #.loop2
 
-        _ret_   add     cga_ramptr, #320 / 4
+                sub     cga_ramptr, cga_ram_p
+                bitnot  cga_ramptr, #13     wcz
+        if_x1   add     cga_ramptr, #320 / 4
+        _ret_   add     cga_ramptr, cga_ram_p
 
 cga_muxc00      long    %0000__0000__0000__1010
 cga_muxz00      long    %0000__0000__0000__0101
@@ -2901,7 +2904,10 @@ cga_graphics_640x200
 
                 djnz    pb, #.loop2
 
-        _ret_   add     cga_ramptr, #640 / 8
+                sub     cga_ramptr, cga_ram_p
+                bitnot  cga_ramptr, #13     wcz
+        if_x1   add     cga_ramptr, #640 / 8
+        _ret_   add     cga_ramptr, cga_ram_p
 
 cga_reg_p       long    0
 cga_ram_p       long    @ram_00000 + RAM_SIZE
@@ -5712,7 +5718,12 @@ i_trap          getword i_data, i_flags, #0
                 call    #\i_readw
                 getword i_ip, i_data, #0
                 call    #\i_readw
-        _ret_   getword i_cs, i_data, #0
+                getword i_cs, i_data, #0
+                cmp     i_temp0, #$EF       wz
+        if_nz   cmp     i_temp0, #8+1       wz
+        if_nz   ret
+                debug(udec(i_temp0),uhex_long(i_cs,i_ip))
+                ret
 
 i_iret
                 call    #i_pop
@@ -7663,7 +7674,7 @@ ppi_60_rd
                 testb   i_ppi, #PPI_PA_INPUT        wz  ' PA input ?
         if_x0   getbyte i_tmpb, i_ppi, #PPI_PA_BYTE     ' no, return the out state
         if_x1   rdbyte  i_tmpb, #@kbd_data
-        if_x1   wrbyte  #0, #@kbd_data
+        'if_x1   wrbyte  #0, #@kbd_data
                 ret     wcz
 
 ppi_61_wr
