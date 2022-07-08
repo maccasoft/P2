@@ -15,6 +15,11 @@ CON
     VGA_PIN = 48
     USB_BASE_PIN = 40
 
+    SD_CS = 19 '61  { O }  ' serial flash
+    SD_CK = 17 '60  { O }
+    SD_DI = 18 '59  { O } MOSI
+    SD_DO = 16 '58  { I } MISO
+
 DAT             ' Startup
                 org     $000
 
@@ -6366,7 +6371,10 @@ nec765
                 call    #\sd_init
   if_c_and_nz   jmp     #n_loop
 
-                call    #\fs_mount                  ' TODO check partition not found
+                call    #\fs_mount
+                cmp     fs_type, #0         wz
+        if_z    jmp     #n_loop
+
                 mov     fs_par0, ##@fs_file0
                 call    #\fs_open
                 mov     fs_par0, ##@fs_file1
@@ -6495,13 +6503,13 @@ n_write_sect
                 sub     n_temp0, #1
                 add     fs_par1, n_temp0
 
-.l2             call    #\fs_read_sector
+.l2             call    #\fs_setup_sector
                 mov     ptra, ##@sd_data
                 mov     pb, ##512
 .l1             call    #\n_dma_read
                 wrbyte  pa, ptra++
         if_nc   djnz    pb, #.l1
-                call    #\fs_update_sector
+                call    #\fs_write_sector
         if_nc   add     fs_par1, #1
         if_nc   jmp     #.l2
 
@@ -6560,7 +6568,8 @@ n_read_sect
                 sub     n_temp0, #1
                 add     fs_par1, n_temp0
 
-.l2             call    #\fs_read_sector
+.l2             call    #\fs_setup_sector
+                call    #\fs_read_sector
                 mov     pb, ##512
                 mov     ptra, ##@sd_data
 .l1             rdbyte  pa, ptra++
@@ -6823,9 +6832,9 @@ nec765_lut
 
 '+-------[ Mount Partition ]---------------------------------------------------+
 '+ Call Format:                                                                +
-'+      call    #fs_mount                                                      +
+'+      call    #\fs_mount                                                     +
 '+ On Return:                                                                  +
-'+      fs_type = 1 or 2 if ok, 0 if error                                     +
+'+      fs_type = file system type ($06, $0C), 0 if error                      +
 '+-----------------------------------------------------------------------------+
 fs_mount
                 mov     sd_blocknr, #0
@@ -6913,8 +6922,8 @@ fs_mount
 
 '+-------[ Find first/next directory entry ]-----------------------------------+
 '+ Call Format:                                                                +
-'+      call    #fs_find_first                                                 +
-'+      call    #fs_find_next                                                  +
+'+      call    #\fs_find_first                                                +
+'+      call    #\fs_find_next                                                 +
 '+ On Return:                                                                  +
 '+      ptra    = Entry                                                        +
 '+      Returns "NC" if ok, "C" if error                                       +
@@ -6960,7 +6969,7 @@ fs_find_next
 '+-------[ Open file for read/write ]------------------------------------------+
 '+ Call Format:                                                                +
 '+      mov     fs_par0, #@file_descriptor                                     +
-'+      call    #fs_find_first                                                 +
+'+      call    #\fs_open                                                      +
 '+-----------------------------------------------------------------------------+
 fs_open
                 mov     ptrb, fs_par0
@@ -6998,13 +7007,13 @@ fs_open
 
         _ret_   modz    _set    wz
 
-'+-------[ Read a file sector ]------------------------------------------------+
+'+-------[ Setup SD for file sector read/write ]-------------------------------+
 '+ Call Format:                                                                +
 '+      mov     fs_par0, #@file_descriptor                                     +
 '+      mov     fs_par1, #sector                                               +
-'+      call    #fs_find_first                                                 +
+'+      call    #fs_setup_sector                                               +
 '+-----------------------------------------------------------------------------+
-fs_read_sector
+fs_setup_sector
                 mov     ptrb, fs_par0
 
                 qdiv    fs_par1, fs_cluster_size ' get cluster index
@@ -7051,17 +7060,30 @@ fs_read_sector
                 add     fs_tmp0, fs_data
 
                 add     fs_tmp0, fs_par3
-                cmp     sd_blocknr, fs_tmp0 wz
-        if_nz   mov     sd_blocknr, fs_tmp0
+        _ret_   mov     sd_blocknr, fs_tmp0
+
+'+-------[ Read a file sector ]------------------------------------------------+
+'+ Call Format:                                                                +
+'+      mov     fs_par0, #@file_descriptor                                     +
+'+      mov     fs_par1, #sector                                               +
+'+      call    #\fs_setup_sector                                              +
+'+      call    #\fs_read_sector                                               +
+'+      ' read 512 bytes from #@sd_data                                        +
+'+-----------------------------------------------------------------------------+
+fs_read_sector
                 mov     sd_data_p, ##@sd_data
-        if_nz   call    #\sd_read
+                call    #\sd_read
                 ret     wcz
 
-'+-------[ Update a file sector ]----------------------------------------------+
+'+-------[ Write a file sector ]-----------------------------------------------+
 '+ Call Format:                                                                +
-'+      call    #fs_update_sector                                              +
+'+      mov     fs_par0, #@file_descriptor                                     +
+'+      mov     fs_par1, #sector                                               +
+'+      call    #\fs_setup_sector                                              +
+'+      ' fill #@sd_data with 512 bytes                                        +
+'+      call    #\fs_write_sector                                              +
 '+-----------------------------------------------------------------------------+
-fs_update_sector
+fs_write_sector
                 mov     sd_data_p, ##@sd_data
                 call    #\sd_write
                 ret     wcz
@@ -7081,16 +7103,16 @@ fs_update_sector
 '+      Send >74 clocks with /CS=1 & DI=1 starting & ending with CLK=0         +
 '+-----------------------------------------------------------------------------+
 sd_init
-                callpa  #_SD_CS, #check_pullup      ' check for pull-up on sd_cs
+                callpa  #SD_CS, #check_pullup       ' check for pull-up on sd_cs
         if_nc   jmp     #_fail                      '_pullup                 '
 
-                drvh    #_SD_CS                     ' cs=1 & output
-                drvl    #_SD_CK                     ' ck=0 & output
-                drvh    #_SD_DI                     ' di=1 & output
+                drvh    #SD_CS                      ' cs=1 & output
+                drvl    #SD_CK                      ' ck=0 & output
+                drvh    #SD_DI                      ' di=1 & output
 
                 mov     sd_ctr1, #(96 * 2)
 .count          waitx   ##delay5us                  '\ 5us+5us (ie 100KHz)
-                outnot  #_SD_CK                     '| CLK=0-->1-->0
+                outnot  #SD_CK                      '| CLK=0-->1-->0
                 djnz    sd_ctr1, #.count            '/
                 waitx   ##delay5us                  '  CLK=0 (idle) & /CS=1
 '+-----------------------------------------------------------------------------+
@@ -7275,9 +7297,9 @@ sd_read_block                                       ' CMD17: PAR=sector, 512 byt
                 call    #_recvbyte                  ' read CRC16 1/2
                 call    #_recvbyte                  ' read CRC16 2/2
 ' NOTE: CRC16 not checked - do we want to do this?
-                outl    #_SD_CK                     ' CLK=0 (idle)          already=0
+                outl    #SD_CK                      ' CLK=0 (idle)          already=0
                 call    #_recvbyte                  ' SEND 8 CLOCKS BEFORE DISABLING CS
-                outh    #_SD_CS                     ' /CS=1 (disable)
+                outh    #SD_CS                      ' /CS=1 (disable)
         _ret_   modz    _set                wz      ' "Z" = success
 
 '+-----------------------------------------------------------------------------+
@@ -7320,7 +7342,7 @@ sd_write_block                                      ' CMD24: PAR=sector, 512 byt
                 mov     sd_time_out, ##delay1s      '/
                 mov     sd_cmd, #CMD13              '
                 mov     sd_cmdpar, #0               '
-                outl    #_SD_CS                     ' /CS=0 (enable)
+                outl    #SD_CS                      ' /CS=0 (enable)
 
                 call    #_sendFF                    ' send $FF byte first
                 mov     sd_dataout, sd_cmd          ' CMD
@@ -7332,11 +7354,11 @@ sd_write_block                                      ' CMD24: PAR=sector, 512 byt
 
                 call    #_getR2reply                ' recv R2
 
-                outl    #_SD_CK                     ' CLK=0 (idle)          already=0
+                outl    #SD_CK                      ' CLK=0 (idle)          already=0
 
-                outl    #_SD_CK                     ' CLK=0 (idle)          already=0
+                outl    #SD_CK                      ' CLK=0 (idle)          already=0
                 call    #_recvbyte                  ' SEND 8 CLOCKS BEFORE DISABLING CS
-                outh    #_SD_CS                     ' /CS=1 (disable)
+                outh    #SD_CS                      ' /CS=1 (disable)
                 test    sd_replyR2, sd_ReadyBit wz  ' check ready to receive another
         if_nz   jmp     #.checkstatus
                 test    sd_replyR2, sd_ErrorBits wz ' Z means all error bits clear
@@ -7354,7 +7376,7 @@ _cmdR1R7                                            ' cmd8:     r1+r7 response
 _cmdR1                                              ' cmd0,a41,16: r1 response
                 mov     sd_cmdtype, #0              ' returns w /CS=1(disabled)
 _cmdxx                                              '
-                outl    #_SD_CS                     ' /CS=0 (enable)
+                outl    #SD_CS                      ' /CS=0 (enable)
 
                 call    #_sendFF                    ' send $FF byte first
                 mov     sd_dataout, sd_cmd          ' CMD
@@ -7366,10 +7388,10 @@ _cmdxx                                              '
 
                 call    #_getreply                  ' recv R1/R1+R3/R1+R7/RZ..+Token
 
-                outl    #_SD_CK                     ' CLK=0 (idle)           already=0
+                outl    #SD_CK                      ' CLK=0 (idle)           already=0
 
                 skip    sd_cmdtype                  '\ skips next instr if #1
-                outh    #_SD_CS                     '| /CS=1(disable) if reqd
+                outh    #SD_CS                      '| /CS=1(disable) if reqd
                 ret                                 '/ else /CS=0 cmdRZA41/cmdRZtoken
 
 '+-----------------------------------------------------------------------------+
@@ -7437,17 +7459,17 @@ _sendbyte       rol     sd_dataout, #24             ' call here to Send a Byte (
 _sendrecv       mov     sd_reply, #0                ' clear reply
 ' 8+15 low/high clk cycles (8.7MHz@200MHz, 1.3MHz@30MHz)
 .nextbit        rol     sd_dataout, #1      wc      ' \ prepare output bit (di=0/1)..
-                outl    #_SD_CK                     ' | CLK=0  (already 0 first time)
-                outc    #_SD_DI                     ' / write output bit: output on CLK falling edge
+                outl    #SD_CK                      ' | CLK=0  (already 0 first time)
+                outc    #SD_DI                      ' / write output bit: output on CLK falling edge
                 waitx   #2                          ' |   setup time to be safe
-                outh    #_SD_CK                     ' \ CLK=1
+                outh    #SD_CK                      ' \ CLK=1
                 waitx   #3                          ' |   setup time to be safe
-                testp   #_SD_DO             wc      ' | read input bit:   sample on clk rising edge
+                testp   #SD_DO              wc      ' | read input bit:   sample on clk rising edge
                 rcl     sd_reply, #1                ' / accum DO input bits
                 djnz    sd_bitscnt, #.nextbit       '   8/32 bits?
-        _ret_   outl    #_SD_CK                     ' CLK=0 on exit
+        _ret_   outl    #SD_CK                      ' CLK=0 on exit
 
-_fail           outh    #_SD_CS                     ' /CS=1 (disable)
+_fail           outh    #SD_CS                      ' /CS=1 (disable)
         _ret_   modcz   _set, _clr          wcz     ' c & nz = fail
 
 '
@@ -7462,11 +7484,6 @@ check_pulldn    waitx   ##300 * 1                   'wait >1us
 nec765_lut_end
 
 CON ' SD Card Driver Constants
-
-    _SD_CS = 19                                             '61  { O }  ' serial flash
-    _SD_CK = 17                                             '60  { O }
-    _SD_DI = 18                                             '59  { O } MOSI
-    _SD_DO = 16                                             '58  { I } MISO
 
     delay1s = _CLKFREQ                                      ' 1s  (xtal * pll)
     delay10ms = _CLKFREQ / 100                              ' 10ms
