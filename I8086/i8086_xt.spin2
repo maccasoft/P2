@@ -6801,7 +6801,7 @@ fs_begin        long    0       ' Partition start sector
 fs_sectors      long    0       ' Partition sectors
 
 fs_type         long    0       ' Filesystem type: 1=FAT16, 2=FAT32
-fs_cluster_size long    0       ' Number of sectors per cluster
+fs_cluster_sh   long    0       ' Cluster sectors shift
 fs_fat          long    0       ' FAT table start sector
 fs_root         long    0       ' Root directory start sector
 fs_root_entries long    0       ' Root directory entries
@@ -6863,11 +6863,9 @@ fs_mount
                 mov     sd_data_p, ##@sd_data
                 call    #\sd_read
 
-                call    #\.check_type
-        'if_nz   TODO not fat16 or fat32, raise error
-
 .l1
-                rdbyte  fs_cluster_size, ##@sd_data + $0D ' sectors per cluster
+                rdbyte  fs_cluster_sh, ##@sd_data + $0D ' sectors per cluster
+                encod   fs_cluster_sh
 
                 rdword  fs_fat, ##@sd_data + $0E    ' reserved sectors
                 add     fs_fat, fs_begin            ' + fs_begin = FAT start sector
@@ -6895,11 +6893,11 @@ fs_mount
                 add     fs_data, fs_tmp0            ' + total fat sectors = data section start
 
                 rdlong  fs_root, ##@sd_data + $2C   ' root directory first cluster
-                sub     fs_root, #1                 '
-                mul     fs_root, fs_cluster_size    '
+                sub     fs_root, #2                 '
+                shl     fs_root, fs_cluster_sh      '
                 add     fs_root, fs_data            ' = root directory start sector
 
-                mov     fs_root_entries, fs_cluster_size
+                decod   fs_root_entries, fs_cluster_sh
                 shl     fs_root_entries, #4
                 ret
 
@@ -7007,7 +7005,7 @@ fs_open
                 wrlong  fs_tmp0, ptrb[12/4]     ' fle size
 
                 rdword  fs_tmp0, ptra[26/2]     ' lower cluster
-                cmp     fs_type, #2     wz
+                cmp     fs_type, #$0C   wz
         if_z    rdword  fs_tmp1, ptra[20/2]     ' upper cluster
         if_z    setword fs_tmp0, fs_tmp1, #1
                 wrlong  fs_tmp0, ptrb[16/4]     ' first cluster
@@ -7027,9 +7025,11 @@ fs_open
 fs_setup_sector
                 mov     ptrb, fs_par0
 
-                qdiv    fs_par1, fs_cluster_size ' get cluster index
-                getqx   fs_par2         ' | cluster index
-                getqy   fs_par3         ' | cluster sector index
+                mov     fs_par2, fs_par1        ' get cluster index
+                shr     fs_par2, fs_cluster_sh  ' |
+                decod   fs_par3, fs_cluster_sh  ' cluster sector mask
+                sub     fs_par3, #1             ' |
+                and     fs_par3, fs_par1        ' get sector index
 
                 rdlong  fs_tmp0, ptrb[24/4] ' current cluster index
                 cmp     fs_par2, fs_tmp0    wz
@@ -7067,7 +7067,7 @@ fs_setup_sector
                 wrlong  fs_tmp0, ptrb[28/4] ' update current cluster
 
                 sub     fs_tmp0, #2
-                mul     fs_tmp0, fs_cluster_size
+                shl     fs_tmp0, fs_cluster_sh
                 add     fs_tmp0, fs_data
 
                 add     fs_tmp0, fs_par3
