@@ -20,6 +20,9 @@ CON
     SD_DI = 18 '59  { O } MOSI
     SD_DO = 16 '58  { I } MISO
 
+    CPU_PIN = 7
+    FDC_PIN = 6
+
 DAT             ' Startup
                 org     $000
 
@@ -30,10 +33,10 @@ DAT             ' Startup
                 nop
 .l1
 
-                coginit #4, ##@video_driver
-                coginit #3, ##@usb_host_start
+                coginit #5, ##@video_driver
+                coginit #4, ##@usb_host_start
 
-                wrword  #0, ##@ram_00000 + $00472 ' force cold boot
+                coginit #3, ##@bus_arbiter
 
                 coginit #2, ##@nec765
                 coginit #1, ##@i8254
@@ -153,6 +156,143 @@ fdc_cmd         byte    $00[16]
 fdc_cmd_len     byte    0
 
                 alignl
+
+DAT
+                org     $000
+bus_arbiter
+                dirl    #CPU_PIN
+                wrpin   ##SP_REPO1_MODE, #CPU_PIN
+                setse1  #%001_000000 | CPU_PIN
+                dirh    #CPU_PIN
+
+                dirl    #FDC_PIN
+                wrpin   ##SP_REPO1_MODE, #FDC_PIN
+                setse2  #%001_000000 | FDC_PIN
+                dirh    #FDC_PIN
+
+                pollse1                     ' probabily doesn't work or matter...
+                pollse2
+
+                wrword  #0, ##@ram_00000 + $00472 ' force cold boot
+                cogatn  #%00000101          ' signal we are ready to CPU and FDC
+
+s_loop
+                pollse1                 wc  ' wait client request
+        if_c    mov     s_source, #CPU_PIN
+        if_c    jmp     #s_request
+                pollse2                 wc  ' wait client request
+        if_c    mov     s_source, #FDC_PIN
+        if_c    jmp     #s_request
+                jmp     #s_loop
+
+s_request
+                rdpin   s_ea, s_source
+                bitl    s_ea, #31       wcz ' get write and clear it to avoid address mismatch
+        if_c    jmp     #s_write
+
+                'and     s_ea, ##$F_FFFF
+                mov     pa, s_ea
+                shr     pa, #12             ' get 4k-bank number
+                                            ' 00000
+                cmp     pa, #$40        wcz ' 3FFFF ram (256k)
+        if_b    jmp     #.ram
+                cmp     pa, #$B8        wcz ' B8000
+        if_ae   cmpr    pa, #$BC-1      wcz ' BBFFF video ram (16k)
+        if_ae   jmp     #.cga
+                cmp     pa, #$F6        wcz ' F6000
+        if_ae   jmp     #.rom               ' FFFFF rom (32k+8k)
+
+                'debug("??? (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
+                wxpin   #$FF, s_source
+                cmp     s_source, #CPU_PIN  wz
+        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
+        if_nz   waitse2                     ' |
+                jmp     #s_loop
+.ram
+                mov     pa, s_ea
+                add     pa, s_rambase
+                rdbyte  s_tmpb, pa
+                'debug("RAM (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
+                wxpin   s_tmpb, s_source
+                cmp     s_source, #CPU_PIN  wz
+        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
+        if_nz   waitse2                     ' |
+                jmp     #s_loop
+.cga
+                mov     pb, s_ea
+                and     pb, s_3fffh
+                add     pb, s_cgabase
+                rdbyte  s_tmpb, pb
+                'debug("CGA (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
+                wxpin   s_tmpb, s_source
+                cmp     s_source, #CPU_PIN  wz
+        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
+        if_nz   waitse2                     ' |
+                jmp     #s_loop
+.rom
+                mov     pa, s_ea
+                add     pa, s_rombase
+                rdbyte  s_tmpb, pa
+                'debug("ROM (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
+                wxpin   s_tmpb, s_source
+                cmp     s_source, #CPU_PIN  wz
+        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
+        if_nz   waitse2                     ' |
+                jmp     #s_loop
+
+s_write
+                getbyte s_tmpb, s_ea, #0    ' get byte to write
+                shr     s_ea, #8            ' shift address into position
+
+                'and     s_ea, ##$F_FFFF
+                mov     pa, s_ea
+                shr     pa, #12             ' get 4k-bank number
+                                            ' 00000
+                cmp     pa, #$40        wcz ' 3FFFF ram (256k)
+        if_b    jmp     #.ram
+                cmp     pa, #$B8        wcz ' B8000
+        if_ae   cmpr    pa, #$BC-1      wcz ' BBFFF video ram (16k)
+        if_ae   jmp     #.cga
+
+                'debug("??? (W): ", uhex_long(s_ea),uhex_byte(s_tmpb),dly(#500))
+                wxpin   s_tmpb, s_source    ' notify write complete
+                cmp     s_source, #CPU_PIN  wz
+        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
+        if_nz   waitse2                     ' |
+                jmp     #s_loop
+.ram
+                mov     pa, s_ea
+                add     pa, s_rambase
+                wrbyte  s_tmpb, pa
+                'debug("RAM (W): ", uhex_long(s_ea),uhex_byte(s_tmpb),dly(#500))
+                wxpin   s_tmpb, s_source    ' notify write complete
+                cmp     s_source, #CPU_PIN  wz
+        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
+        if_nz   waitse2                     ' |
+                jmp     #s_loop
+.cga
+                mov     pb, s_ea
+                and     pb, s_3fffh
+                add     pb, s_cgabase
+                wrbyte  s_tmpb, pb
+                'debug("CGA (R): ", uhex_long(s_ea),uhex_byte(s_tmpb),dly(#500))
+                wxpin   s_tmpb, s_source    ' notify write complete
+                cmp     s_source, #CPU_PIN  wz
+        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
+        if_nz   waitse2                     ' |
+                jmp     #s_loop
+
+s_rambase       long    @ram_00000
+s_cgabase       long    @ram_00000 + RAM_SIZE
+s_rombase       long    @rom_F6000 - $F6000
+
+s_3fffh         long    $3FFF
+s_ffffh         long    $FFFF
+s_eamask        long    $FFFFF
+
+s_source        res     1
+s_ea            res     1
+s_tmpb          res     1
 
 DAT             ' USB Host driver
                 org     $000
@@ -3002,6 +3142,10 @@ i8086
                 setq2   #(@i8086_lut_end - @i8086_lut) / 4 -1
                 rdlong  0, ptrb
 
+                setse1  #%001_000000 | CPU_PIN  ' setup events from CPU arbiter pin
+                waitatn                         ' wait arbiter COG ready
+                pollse1                         ' clear stale the event
+
                 'call    #\@i_system_init
 
                 mov     i_optable, ##@i8086_optable
@@ -3660,64 +3804,23 @@ DAT             ' 8086 LUT
 i8086_lut
 
 i_readmemb
-                ' i_ea   = address
-                ' i_tmpb = data
                 and     i_ea, i_eamask
-                mov     i_tmpb, #$FF
-                mov     pa, i_ea
-                shr     pa, #12             ' get 4k-bank number
-                                            ' 00000
-                cmp     pa, #$40        wcz ' 3FFFF ram (256k)
-        if_b    jmp     #.ram
-                cmp     pa, #$B8        wcz ' B8000
-        if_b    ret     wcz                 ' |
-                cmp     pa, #$BC        wcz ' BBFFF video ram (16k)
-        if_b    jmp     #.cga
-                cmp     pa, #$F6        wcz ' F6000
-        if_ae   jmp     #.rom               ' FFFFF rom (32k+8k)
-                ret     wcz
-.ram
-                mov     pa, i_ea
-                add     pa, i_rambase
-                rdbyte  i_tmpb, pa
-                ret     wcz
-.cga
-                mov     pb, i_ea
-                and     pb, i_3fffh
-                add     pb, i_cgabase
-                rdbyte  i_tmpb, pb
-                ret     wcz
-.rom
-                mov     pa, i_ea
-                sub     pa, ##$F6000
-                add     pa, ##@rom_F6000
-                rdbyte  i_tmpb, pa
+                wxpin   i_ea, #CPU_PIN      ' send read request (bit31=0)
+                waitse1                     ' | clear our own event (why pollseX doesn't work here ?)
+                waitse1                     ' | wait read complete
+                rdpin   i_tmpb, #CPU_PIN    ' | read byte
                 ret     wcz
 
 i_writememb
-                ' i_ea   = address
-                ' i_tmpb = data
                 and     i_ea, i_eamask
+
                 mov     pa, i_ea
-                shr     pa, #12             ' get 4k-bank number
-                                            ' 00000
-                cmp     pa, #$40        wcz ' 3FFFF ram (256k)
-        if_b    jmp     #.ram
-                cmp     pa, #$B8        wcz ' B8000
-        if_b    ret     wcz                 ' |
-                cmp     pa, #$BC        wcz ' BBFFF video ram (16k)
-        if_b    jmp     #.cga
-                ret     wcz
-.ram
-                mov     pa, i_ea
-                add     pa, i_rambase
-                wrbyte  i_tmpb, pa
-                ret     wcz
-.cga
-                mov     pb, i_ea
-                and     pb, i_3fffh
-                add     pb, i_cgabase
-                wrbyte  i_tmpb, pb
+                shl     pa, #8              ' shift address to bits [27:8]
+                setbyte pa, i_tmpb, #0      ' set data to write to bits [7:0]
+                bith    pa, #31             ' send write request (bit31=1)
+                wxpin   pa, #CPU_PIN        ' |
+                waitse1                     ' | clear our own event (why pollseX doesn't work here ?)
+                waitse1                     ' | wait write complete
                 ret     wcz
 
 i_readiob
@@ -6379,6 +6482,10 @@ nec765
                 setq2   #(@nec765_lut_end - @nec765_lut) / 4 -1
                 rdlong  0, ptrb
 
+                setse1  #%001_000000 | FDC_PIN  ' setup events from FDC arbiter pin
+                waitatn                         ' wait arbiter COG ready
+                pollse1                         ' clear stale the event
+
                 call    #\sd_init
   if_c_and_nz   jmp     #n_loop
 
@@ -6717,15 +6824,13 @@ n_dma_write
                 rdlong  n_dma, #@dma+8          ' get dma address and count
                 setword n_ea, n_dma, #0         ' set address into ea
 
-                mov     n_temp0, n_ea
-                shr     n_temp0, #12
-                cmp     n_temp0, #$40       wcz ' check ram size
-        if_ae   jmp     #.no_ram                ' |
+                shl     n_ea, #8                ' shift address to bits [27:8]
+                setbyte n_ea, pa, #0            ' set byte to write to bits [7:0]
+                bith    n_ea, #31               ' send write request (bit31=1)
+                wxpin   n_ea, #FDC_PIN          ' |
+                waitse1                         ' | clear our own event (why pollseX doesn't work here ?)
+                waitse1                         ' | wait write complete
 
-                add     n_ea, ##@ram_00000
-                wrbyte  pa, n_ea
-
-.no_ram
                 getword n_temp0, n_dma, #0      ' increment address
                 incmod  n_temp0, ##$FFFF        ' |
                 setword n_dma, n_temp0, #0      ' |
@@ -6738,22 +6843,16 @@ n_dma_write
 
 ' read pa from dma address
 n_dma_read
-                mov     pa, #$FF
-
                 rdbyte  n_ea, #@dma_page+2      ' get page address
                 setnib  n_ea, n_ea, #4
                 rdlong  n_dma, #@dma+8          ' get dma address and count
                 setword n_ea, n_dma, #0         ' set address into ea
 
-                mov     n_temp0, n_ea
-                shr     n_temp0, #12
-                cmp     n_temp0, #$40       wcz ' check ram size
-        if_ae   jmp     #.no_ram                ' |
+                wxpin   n_ea, #FDC_PIN          ' send read request (bit31=0)
+                waitse1                         ' | clear our own event (why pollseX doesn't work here ?)
+                waitse1                         ' | wait read complete
+                rdpin   pa, #FDC_PIN            ' | read byte
 
-                add     n_ea, ##@ram_00000
-                rdbyte  pa, n_ea
-
-.no_ram
                 getword n_temp0, n_dma, #0      ' increment address
                 incmod  n_temp0, ##$FFFF        ' |
                 setword n_dma, n_temp0, #0      ' |
@@ -6905,14 +7004,14 @@ fs_mount
                 rdlong  fs_tmp0, ##@sd_data + $36
                 cmp     fs_tmp0, ##$31544146    wz  ' FAT1
         if_z    rdbyte  fs_tmp0, ##@sd_data + $3A
-        if_z    cmp     fs_tmp0, #$36               ' 6
+        if_z    cmp     fs_tmp0, #$36           wz  ' 6
         if_z    mov     fs_type, #$06
         if_z    ret
 
                 rdlong  fs_tmp0, ##@sd_data + $52
                 cmp     fs_tmp0, ##$33544146    wz  ' FAT3
         if_z    rdbyte  fs_tmp0, ##@sd_data + $56
-        if_z    cmp     fs_tmp0, #$32               ' 2
+        if_z    cmp     fs_tmp0, #$32           wz  ' 2
         if_z    mov     fs_type, #$0C
                 ret
 
