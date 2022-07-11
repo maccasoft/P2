@@ -5821,12 +5821,7 @@ i_trap          getword i_data, i_flags, #0
                 call    #\i_readw
                 getword i_ip, i_data, #0
                 call    #\i_readw
-                getword i_cs, i_data, #0
-                cmp     i_temp0, #$EF       wz
-        if_nz   cmp     i_temp0, #8+1       wz
-        if_nz   ret
-                debug(udec(i_temp0),uhex_long(i_cs,i_ip))
-                ret
+        _ret_   getword i_cs, i_data, #0
 
 i_iret
                 call    #i_pop
@@ -6578,14 +6573,14 @@ n_specify
                 jmp     #n_loop
 
 n_check_stat
-                cmp     n_cmd_len, #2           wcz
+                cmp     n_cmd_len, #2       wcz
         if_lt   jmp     #n_loop
 
                 wrbyte  #$00, #@fdc_cmd_len
                 jmp     #n_loop
 
 n_write_sect
-                cmp     n_cmd_len, #9           wcz
+                cmp     n_cmd_len, #9       wcz
         if_lt   jmp     #n_loop
 
                 bith    n_msr, #MSR_BUSY
@@ -6610,26 +6605,51 @@ n_write_sect
         if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
         if_z    jmp     #n_loop                 ' |
 
-                rdbyte  fs_par1, #@fdc_cmd+2    ' track#
-                altsb   n_drv, #n_track
-                setbyte fs_par1
-                cmp     fs_par1, #0         wz
-                bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
+                cmp     n_temp0, ##184_320  wz  ' 180KB
+        if_e    mov     n_disk_params, ##$0028_09_01
+                cmp     n_temp0, ##368_640  wz  ' 360KB
+        if_e    mov     n_disk_params, ##$0028_09_02
 
-                mul     fs_par1, #9
-                rdbyte  n_temp0, #@fdc_cmd+4    ' sector#
-                sub     n_temp0, #1
-                add     fs_par1, n_temp0
+                rdbyte  n_ctrack, #@fdc_cmd+2   ' track#
+                rdbyte  n_chead, #@fdc_cmd+3    ' head#
+                rdbyte  n_csector, #@fdc_cmd+4  ' sector#
+                sub     n_csector, #1
 
-.l2             call    #\fs_setup_sector
-                mov     ptra, ##@sd_data
+.l2             mov     fs_par1, n_ctrack
+                getbyte n_temp0, n_disk_params, #0 ' heads
+                mul     fs_par1, n_temp0
+                add     fs_par1, n_chead
+                getbyte n_temp0, n_disk_params, #1 ' sectors
+                mul     fs_par1, n_temp0
+                add     fs_par1, n_csector
+
+                call    #\fs_setup_sector
+                mov     ptrb, ##@sd_data
                 mov     pb, ##512
 .l1             call    #\n_dma_read
-                wrbyte  pa, ptra++
+                wrbyte  pa, ptrb++
         if_nc   djnz    pb, #.l1
                 call    #\fs_write_sector
-        if_nc   add     fs_par1, #1
-        if_nc   jmp     #.l2
+        if_c    jmp     #.done
+                add     n_csector, #1
+                getbyte n_temp0, n_disk_params, #1 ' sectors
+                cmp     n_csector, n_temp0  wcz
+        if_lt   jmp     #.l2
+                mov     n_csector, #0
+                add     n_chead, #1
+                getbyte n_temp0, n_disk_params, #0 ' heads
+                cmp     n_chead, n_temp0    wcz
+        if_lt   jmp     #.l2
+                mov     n_chead, #0
+                add     n_ctrack, #1
+                jmp     #.l2
+
+.done           altsb   n_drv, #n_track         ' update drive track#
+                setbyte n_ctrack
+
+                cmp     n_ctrack, #0        wz
+                bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
+                add     n_csector, #1
 
                 getbyte pa, n_stat, #0          ' st0
                 call    #n_fifo_write
@@ -6637,11 +6657,11 @@ n_write_sect
                 call    #n_fifo_write
                 getbyte pa, n_stat, #2          ' st2
                 call    #n_fifo_write
-                rdbyte  pa, #@fdc_cmd+2         ' track#
+                mov     pa, n_ctrack            ' track#
                 call    #n_fifo_write
-                rdbyte  pa, #@fdc_cmd+3
+                mov     pa, n_chead             ' head#
                 call    #n_fifo_write
-                rdbyte  pa, #@fdc_cmd+4         ' sector#
+                mov     pa, n_csector           ' sector#
                 call    #n_fifo_write
                 rdbyte  pa, #@fdc_cmd+5
                 call    #n_fifo_write
@@ -6650,7 +6670,7 @@ n_write_sect
                 jmp     #n_trigger_irq
 
 n_read_sect
-                cmp     n_cmd_len, #9           wcz
+                cmp     n_cmd_len, #9       wcz
         if_lt   jmp     #n_loop
 
                 bith    n_msr, #MSR_BUSY
@@ -6675,26 +6695,51 @@ n_read_sect
         if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
         if_z    jmp     #n_loop                 ' |
 
-                rdbyte  fs_par1, #@fdc_cmd+2    ' track#
-                altsb   n_drv, #n_track
-                setbyte fs_par1
-                cmp     fs_par1, #0         wz
-                bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
+                cmp     n_temp0, ##184_320  wz  ' 180KB
+        if_e    mov     n_disk_params, ##$0028_09_01
+                cmp     n_temp0, ##368_640  wz  ' 360KB
+        if_e    mov     n_disk_params, ##$0028_09_02
 
-                mul     fs_par1, #9
-                rdbyte  n_temp0, #@fdc_cmd+4    ' sector#
-                sub     n_temp0, #1
-                add     fs_par1, n_temp0
+                rdbyte  n_ctrack, #@fdc_cmd+2   ' track#
+                rdbyte  n_chead, #@fdc_cmd+3    ' head#
+                rdbyte  n_csector, #@fdc_cmd+4  ' sector#
+                sub     n_csector, #1
 
-.l2             call    #\fs_setup_sector
+.l2             mov     fs_par1, n_ctrack
+                getbyte n_temp0, n_disk_params, #0 ' heads
+                mul     fs_par1, n_temp0
+                add     fs_par1, n_chead
+                getbyte n_temp0, n_disk_params, #1 ' sectors
+                mul     fs_par1, n_temp0
+                add     fs_par1, n_csector
+
+                call    #\fs_setup_sector
                 call    #\fs_read_sector
                 mov     pb, ##512
-                mov     ptra, ##@sd_data
-.l1             rdbyte  pa, ptra++
+                mov     ptrb, ##@sd_data
+.l1             rdbyte  pa, ptrb++
                 call    #\n_dma_write
         if_nc   djnz    pb, #.l1
-        if_nc   add     fs_par1, #1
-        if_nc   jmp     #.l2
+        if_c    jmp     #.done
+                add     n_csector, #1
+                getbyte n_temp0, n_disk_params, #1 ' sectors
+                cmp     n_csector, n_temp0  wcz
+        if_lt   jmp     #.l2
+                mov     n_csector, #0
+                add     n_chead, #1
+                getbyte n_temp0, n_disk_params, #0 ' heads
+                cmp     n_chead, n_temp0    wcz
+        if_lt   jmp     #.l2
+                mov     n_chead, #0
+                add     n_ctrack, #1
+                jmp     #.l2
+
+.done           altsb   n_drv, #n_track         ' update drive track#
+                setbyte n_ctrack
+
+                cmp     n_ctrack, #0        wz
+                bitz    n_stat, #STATUS3_TRK0   ' set track0 flag
+                add     n_csector, #1
 
                 getbyte pa, n_stat, #0          ' st0
                 call    #n_fifo_write
@@ -6702,11 +6747,11 @@ n_read_sect
                 call    #n_fifo_write
                 getbyte pa, n_stat, #2          ' st2
                 call    #n_fifo_write
-                rdbyte  pa, #@fdc_cmd+2         ' track#
+                mov     pa, n_ctrack            ' track#
                 call    #n_fifo_write
-                rdbyte  pa, #@fdc_cmd+3
+                mov     pa, n_chead             ' head#
                 call    #n_fifo_write
-                rdbyte  pa, #@fdc_cmd+4         ' sector#
+                mov     pa, n_csector           ' sector#
                 call    #n_fifo_write
                 rdbyte  pa, #@fdc_cmd+5
                 call    #n_fifo_write
@@ -6715,7 +6760,7 @@ n_read_sect
                 jmp     #n_trigger_irq
 
 n_calibrate
-                cmp     n_cmd_len, #2           wcz
+                cmp     n_cmd_len, #2       wcz
         if_lt   jmp     #n_loop
 
                 rdbyte  n_drv, #@fdc_cmd+1      ' drive number
@@ -6868,6 +6913,15 @@ n_stat          long    STATUS0_INT_ABNORMAL_POLL
 
 n_drv           long    0                       ' current drive number
 n_track         long    $00_00_00_00            ' drive track position
+
+n_ctrack        long    0
+n_chead         long    0
+n_csector       long    0
+
+n_disk_params   long    $0028_09_02
+                '        |||| || ++-------------- heads
+                '        |||| ++----------------- sectors/track
+                '        ++++-------------------- tracks (cylinders)
 
 '-------------------------------------------------------------------------------
 
@@ -8229,14 +8283,14 @@ cga_charrom     file    "CGA.F08"
 rom_F6000       file    "BASIC110.ROM"
 {rom_FE000}     file    "XTBIOS-REV1.ROM"
 
-fs_file0        byte    "PCDOS_A IMG", $00
+fs_file0        byte    "PCDOS3_AIMG", $00
           {12}  long    0               ' file size
           {16}  long    $00000000       ' first cluster
           {20}  long    0               ' file position
           {24}  long    0               ' current cluster (index)
           {28}  long    $00000000       ' current cluster
 
-fs_file1        byte    "PCDOS_B IMG", $00
+fs_file1        byte    "PCDOS3_BIMG", $00
           {12}  long    0               ' file size
           {16}  long    $00000000       ' first cluster
           {20}  long    0               ' file position
