@@ -6605,8 +6605,12 @@ n_write_sect
         if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
         if_z    jmp     #n_loop                 ' |
 
+                cmp     n_temp0, ##163_840  wz  ' 160KB
+        if_e    mov     n_disk_params, ##$0028_08_01
                 cmp     n_temp0, ##184_320  wz  ' 180KB
         if_e    mov     n_disk_params, ##$0028_09_01
+                cmp     n_temp0, ##368_640  wz  ' 320KB
+        if_e    mov     n_disk_params, ##$0028_08_02
                 cmp     n_temp0, ##368_640  wz  ' 360KB
         if_e    mov     n_disk_params, ##$0028_09_02
 
@@ -6695,8 +6699,12 @@ n_read_sect
         if_z    wrbyte  #$00, #@fdc_cmd_len     ' 0 means no file found
         if_z    jmp     #n_loop                 ' |
 
+                cmp     n_temp0, ##163_840  wz  ' 160KB
+        if_e    mov     n_disk_params, ##$0028_08_01
                 cmp     n_temp0, ##184_320  wz  ' 180KB
         if_e    mov     n_disk_params, ##$0028_09_01
+                cmp     n_temp0, ##368_640  wz  ' 320KB
+        if_e    mov     n_disk_params, ##$0028_08_02
                 cmp     n_temp0, ##368_640  wz  ' 360KB
         if_e    mov     n_disk_params, ##$0028_09_02
 
