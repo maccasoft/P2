@@ -6276,11 +6276,11 @@ DAT             ' 8254 Programmable Interval Timer
 
 i8254
                 getct   t_lastct1
-                addct1  t_lastct1, #_CLKFREQ / 1_193_180
 
 t_loop
-                pollct1 wc
-        if_nc   jmp     #t_loop
+                addct1  t_lastct1, #(_CLKFREQ / 1_193_180) + 1
+.wait           pollct1 wc
+        if_nc   jmp     #.wait
 
 .lock           locktry #I_TIMER_LOCK wc ' acquire timer lock
         if_nc   jmp     #.lock
