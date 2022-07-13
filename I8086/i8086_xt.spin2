@@ -157,7 +157,7 @@ fdc_cmd_len     byte    0
 
                 alignl
 
-DAT
+DAT             ' Bus arbiter
                 org     $000
 bus_arbiter
                 dirl    #CPU_PIN
@@ -170,21 +170,25 @@ bus_arbiter
                 setse2  #%001_000000 | FDC_PIN
                 dirh    #FDC_PIN
 
-                pollse1                     ' probabily doesn't work or matter...
+                pollse1                     ' probabily doesn't matter...
                 pollse2
 
                 wrword  #0, ##@ram_00000 + $00472 ' force cold boot
                 cogatn  #%00000101          ' signal we are ready to CPU and FDC
 
 s_loop
-                pollse1                 wc  ' wait client request
-        if_c    mov     s_source, #CPU_PIN
-        if_c    jmp     #s_request
-                pollse2                 wc  ' wait client request
-        if_c    mov     s_source, #FDC_PIN
-        if_c    jmp     #s_request
-                jmp     #s_loop
+                mov     s_source, #CPU_PIN  ' assume CPU request by default after each request returns
+                setd    s_end_wait, #%000010100 ' waitse1
 
+                rep     #2, #0
+                jse1    #cpu_handler
+                jse2    #fdc_handler
+                nop                         ' needed to avoid instruction skip?
+
+fdc_handler
+                mov     s_source, #FDC_PIN
+                setd    s_end_wait, #%000010101 ' waitse2
+cpu_handler ' alias
 s_request
                 rdpin   s_ea, s_source
                 bitl    s_ea, #31       wcz ' get write and clear it to avoid address mismatch
@@ -203,42 +207,24 @@ s_request
         if_ae   jmp     #.rom               ' FFFFF rom (32k+8k)
 
                 'debug("??? (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
-                wxpin   #$FF, s_source
-                cmp     s_source, #CPU_PIN  wz
-        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
-        if_nz   waitse2                     ' |
-                jmp     #s_loop
+                mov     s_tmpb, #$FF
+                jmp     #s_end
 .ram
-                mov     pa, s_ea
-                add     pa, s_rambase
-                rdbyte  s_tmpb, pa
+                add     s_ea, s_rambase
+                rdbyte  s_tmpb, s_ea
                 'debug("RAM (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
-                wxpin   s_tmpb, s_source
-                cmp     s_source, #CPU_PIN  wz
-        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
-        if_nz   waitse2                     ' |
-                jmp     #s_loop
+                jmp     #s_end
 .cga
-                mov     pb, s_ea
-                and     pb, s_3fffh
-                add     pb, s_cgabase
-                rdbyte  s_tmpb, pb
+                and     s_ea, s_3fffh
+                add     s_ea, s_cgabase
+                rdbyte  s_tmpb, s_ea
                 'debug("CGA (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
-                wxpin   s_tmpb, s_source
-                cmp     s_source, #CPU_PIN  wz
-        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
-        if_nz   waitse2                     ' |
-                jmp     #s_loop
+                jmp     #s_end
 .rom
-                mov     pa, s_ea
-                add     pa, s_rombase
-                rdbyte  s_tmpb, pa
+                add     s_ea, s_rombase
+                rdbyte  s_tmpb, s_ea
                 'debug("ROM (R): ", uhex_long(s_ea),uhex_byte(s_tmpb))
-                wxpin   s_tmpb, s_source
-                cmp     s_source, #CPU_PIN  wz
-        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
-        if_nz   waitse2                     ' |
-                jmp     #s_loop
+                jmp     #s_end
 
 s_write
                 getbyte s_tmpb, s_ea, #0    ' get byte to write
@@ -255,31 +241,22 @@ s_write
         if_ae   jmp     #.cga
 
                 'debug("??? (W): ", uhex_long(s_ea),uhex_byte(s_tmpb),dly(#500))
-                wxpin   s_tmpb, s_source    ' notify write complete
-                cmp     s_source, #CPU_PIN  wz
-        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
-        if_nz   waitse2                     ' |
-                jmp     #s_loop
+                jmp     #s_end
 .ram
-                mov     pa, s_ea
-                add     pa, s_rambase
-                wrbyte  s_tmpb, pa
+                add     s_ea, s_rambase
+                wrbyte  s_tmpb, s_ea
                 'debug("RAM (W): ", uhex_long(s_ea),uhex_byte(s_tmpb),dly(#500))
-                wxpin   s_tmpb, s_source    ' notify write complete
-                cmp     s_source, #CPU_PIN  wz
-        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
-        if_nz   waitse2                     ' |
-                jmp     #s_loop
+                jmp     #s_end
 .cga
-                mov     pb, s_ea
-                and     pb, s_3fffh
-                add     pb, s_cgabase
-                wrbyte  s_tmpb, pb
+                and     s_ea, s_3fffh
+                add     s_ea, s_cgabase
+                wrbyte  s_tmpb, s_ea
                 'debug("CGA (R): ", uhex_long(s_ea),uhex_byte(s_tmpb),dly(#500))
-                wxpin   s_tmpb, s_source    ' notify write complete
-                cmp     s_source, #CPU_PIN  wz
-        if_z    waitse1                     ' clears our own event (pollseX doesn't work here)
-        if_nz   waitse2                     ' |
+                jmp     #s_end
+
+s_end
+                wxpin   s_tmpb, s_source
+s_end_wait      waitse1                     ' changed to waitse1/2 in the request handler
                 jmp     #s_loop
 
 s_rambase       long    @ram_00000
@@ -7835,7 +7812,6 @@ ppi_60_rd
                 testb   i_ppi, #PPI_PA_INPUT        wz  ' PA input ?
         if_x0   getbyte i_tmpb, i_ppi, #PPI_PA_BYTE     ' no, return the out state
         if_x1   rdbyte  i_tmpb, #@kbd_data
-        'if_x1   wrbyte  #0, #@kbd_data
                 ret     wcz
 
 ppi_61_wr
@@ -7854,9 +7830,9 @@ ppi_61_wr
 
 .reset
                 bitl    i_flags, #I_KB_RESET    wcz
-        if_x0   ret     wcz
-                wrbyte  #$AA, #@kbd_data
-                bith    i_pic_irr, #1       ' signal irq
+        if_x0   wrbyte  #$00, #@kbd_data
+        if_x1   wrbyte  #$AA, #@kbd_data
+        if_x1   bith    i_pic_irr, #1       ' signal irq
                 ret     wcz
 
 ppi_62_rd
