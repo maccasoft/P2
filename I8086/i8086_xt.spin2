@@ -2023,6 +2023,7 @@ hkbd_key
                 add     htmp, ##@kbd_table
                 rdbyte  htmp, htmp      wz
         if_nz   jmp     #\hkbd_out_char
+                'debug(uhex_byte(hpar1),ubin_byte(hpar2),uhex_byte(htmp))
                 ret
 
 hkbd_shift
@@ -2059,9 +2060,9 @@ hkbd_shift
                 ret
 
 hkbd_out_char
-                'debug(uhex_byte(hpar1),ubin_byte(hpar2),uhex_byte(htmp))
                 bitc    htmp, #7
                 wrbyte  htmp, #@kbd_data
+                'debug(uhex_byte(hpar1),ubin_byte(hpar2),uhex_byte(htmp))
 
 .lock           locktry #I_INT_LOCK     wc  ' acquire lock for interrupt lines
         if_nc   jmp     #.lock
@@ -2080,13 +2081,13 @@ kbd_table ' Index is the key scan code
           {$18} byte    $16, $2F, $11, $2D, $15, $2C, $02, $03  ' $1f: u v w x y z 1 2
           {$20} byte    $04, $05, $06, $07, $08, $09, $0A, $0B  ' $27: 3 4 5 6 7 8 9 0
           {$28} byte    $1C, $01, $0E, $0F, $39, $0C, $0D, $1A  ' $2f: Enter Esc BkSpc Tab Spc - = [
-          {$30} byte    $1B, $00, $2B, $27, $28, $29, $33, $34  ' $37: ] \ # ; ' ` , .
+          {$30} byte    $1B, $00, $29, $27, $28, $00, $33, $34  ' $37: ] \ # ; ' ` , .
           {$38} byte    $35, $3A, $3B, $3C, $3D, $3E, $3F, $40  ' $3f: / CapsLock F1 F2 F3 F4 F5 F6
-          {$40} byte    $41, $42, $43, $44, $00, $00, $37, $46  ' $47: F7 F8 F9 F10 F11 F12 PrtSc, ScrLk
-          {$48} byte    $00, $52, $47, $49, $53, $4F, $51, $4D  ' $4f: Pause, Ins, Home PgUp BkSpc_Del End PgDn Right
-          {$50} byte    $4B, $50, $4C, $45, $35, $00, $4A, $4E  ' $57: Left Down Up KpdNumLck Kp/ Kp* Kp- Kp+
-          {$58} byte    $1C, $00, $00, $00, $00, $4C, $00, $00  ' $5f: KpEnter Kp1_End Kp2_Down Kp3_PgDn Kp4_Left Kp5 Kp6_Right Kp7_Home
-          {$60} byte    $00, $00, $00, $00, $56, $00            ' $65: Kp8_Up Kp9_PgUp Kp0_Ins Kp._Del Kp\_| App
+          {$40} byte    $41, $42, $43, $44, $00, $00, $54, $46  ' $47: F7 F8 F9 F10 F11 F12 PrtSc, ScrLk
+          {$48} byte    $1D, $52, $47, $49, $53, $4F, $51, $4D  ' $4f: Pause, Ins, Home PgUp BkSpc_Del End PgDn Right
+          {$50} byte    $4B, $50, $48, $45, $35, $37, $4A, $4E  ' $57: Left Down Up KpdNumLck Kp/ Kp* Kp- Kp+
+          {$58} byte    $1C, $4F, $50, $51, $4B, $4C, $4D, $47  ' $5f: KpEnter Kp1_End Kp2_Down Kp3_PgDn Kp4_Left Kp5 Kp6_Right Kp7_Home
+          {$60} byte    $48, $49, $52, $53, $2B, $00            ' $65: Kp8_Up Kp9_PgUp Kp0_Ins Kp._Del Kp\_| App
 
 '------------------------------------------------------------------------------
 ' Partially populated SETUP packets
