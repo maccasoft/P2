@@ -15,10 +15,13 @@ CON
     VGA_PIN = 48
     USB_BASE_PIN = 40
 
-    SD_CS = 19 '61  { O }  ' serial flash
-    SD_CK = 17 '60  { O }
-    SD_DI = 18 '59  { O } MOSI
-    SD_DO = 16 '58  { I } MISO
+    SD_CK = 61 ' { O } pin SD Card clock
+    SD_CS = 60 ' { O } pin SD Card select
+    SD_DI = 59 ' { O } pin SD Card MOSI
+    SD_DO = 58 ' { I } pin SD Card MISO
+
+    A_LED = 56 ' A drive motor LED
+    B_LED = 57 ' B drive motor LED
 
     CPU_PIN = 7
     FDC_PIN = 6
@@ -6478,9 +6481,9 @@ n_loop
         if_01   jmp     #n_reset
 
                 testb   n_dor, #DOR_DRIVE0_MOTOR  wz
-                drvz    #56
+                drvz    #A_LED
                 testb   n_dor, #DOR_DRIVE1_MOTOR  wz
-                drvz    #57
+                drvz    #B_LED
 
                 rdbyte  n_temp0, #@fdc_fifo_tail
                 rdbyte  n_temp1, #@fdc_fifo_head
