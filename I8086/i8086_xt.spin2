@@ -31,10 +31,8 @@ DAT             ' Startup
 
                 asmclk
 
-                rep     @.l1,#16    ' allocate all locks, to be safe...
-                locknew pb
-                nop
-.l1
+                rep     #1, #16     ' allocate all locks, to be safe...
+                locknew pa
 
                 coginit #5, ##@video_driver
                 coginit #4, ##@usb_host_start
@@ -6265,7 +6263,7 @@ CON             ' 8086 Constants
 
     I_SYS_DMA_HL     = 6
 
-DAT             ' 8254 Programmable Interval Timer
+DAT             ' PIT 8254
                 org     $000
 
 i8254
@@ -6287,7 +6285,7 @@ t_loop
                 lockrel #I_TIMER_LOCK ' release lock
 
                 getbyte t_temp0, t_ctrl, #3
-                and     t_flags, %00111000
+                and     t_flags, #%00111000
                 or      t_flags, t_temp0
 
 t_timer0
@@ -6385,27 +6383,25 @@ t_dma_tick
         if_nc   jmp     #.lock
 
                 rdlong  t_dma_ctl, #@dma_ctl
-                testb   t_dma_ctl, #8 + 2     wz  ' controller enable
-        if_x1   jmp     #.unlock
-                testb   t_dma_ctl, #16 + 0    wz  ' ch0 mask
-        if_x1   jmp     #.unlock
-                bitl    t_dma_ctl, #4 + 0     wcz ' ch0 request
-        if_x1   jmp     #.unlock
 
                 rdlong  t_dma_mode, #@dma_mode
-                testb   t_dma_mode, #4        wz  ' auto init
-        if_x0   jmp     #.unlock
+                testb   t_dma_mode, #4        wz    ' auto init?
+        if_x0   bitl    t_dma_ctl, #16 + 0          ' | yes, clear dma mask
 
-                wrlong  #0, #@dma
-                bith    t_dma_ctl, #0             ' signal ch0 end
+                testb   t_dma_ctl, #8 + 2     wz    ' controller enable
+        if_x1   jmp     #.unlock
+                testb   t_dma_ctl, #16 + 0    wz    ' ch0 mask
+        if_x1   jmp     #.unlock
+                bitl    t_dma_ctl, #4 + 0     wcz   ' ch0 request
+        if_x1   jmp     #.unlock
 
-'                rdword  t_temp0, #@dma            ' ch0 address
-'                incmod  t_temp0, i_ffffh
-'                wrword  t_temp0, #@dma
-'                rdword  t_temp0, #@dma + 2        ' ch0 counter
-'                sub     t_temp0, #1           wz
-'                wrword  t_temp0, #@dma + 2
-'        if_z    bith    t_dma_ctl, #0             ' signal ch0 end
+                rdword  t_temp0, #@dma              ' ch0 address
+                incmod  t_temp0, i_ffffh
+                wrword  t_temp0, #@dma
+                rdword  t_temp0, #@dma + 2          ' ch0 counter
+                sub     t_temp0, #1           wz
+                wrword  t_temp0, #@dma + 2
+        if_z    bith    t_dma_ctl, #0               ' signal ch0 end
 
 .unlock
                 wrbyte  t_dma_ctl, #@dma_ctl
@@ -6471,7 +6467,257 @@ t_dma_mode      res     1
 
 t_temp0         res     1
 
-CON ' 8254 Constants
+DAT             ' PIT 8254 HUB I/O
+                orgh
+
+pit_40_wr
+.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
+        if_nc   jmp     #.lock
+                rdlong  i_pit, #@tmr0
+
+                testb   i_pit, #PIT_TMR0_MODE5 wc
+                testb   i_pit, #PIT_TMR0_MODE4 wz
+        if_01   call    #.ctl_01    ' write counter bits 0-7 only
+        if_10   call    #.ctl_10    ' write counter bits 8-15 only
+        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
+
+                wrlong  i_pit, #@tmr0
+                lockrel #I_TIMER_LOCK ' release lock
+
+                ret     wcz
+.ctl_01
+                wrword  i_tmpb, #@tmr0_reload
+                bith    i_pit, #PIT_TMR0_ENABLE ' enable timer
+        _ret_   bith    i_pit, #PIT_TMR0_RELOAD ' signal reload counter
+.ctl_10
+                shl     i_tmpb, #8
+                wrword  i_tmpb, #@tmr0_reload
+                bith    i_pit, #PIT_TMR0_ENABLE ' enable timer
+        _ret_   bith    i_pit, #PIT_TMR0_RELOAD ' signal reload counter
+.ctl_11
+                bitnot  i_sys_flags, #I_SYS_TMR0_HL wcz
+                rdword  i_temp0, #@tmr0_reload
+        if_0x   setbyte i_temp0, i_tmpb, #0
+        if_1x   setbyte i_temp0, i_tmpb, #1
+                wrword  i_temp0, #@tmr0_reload
+        if_1x   bith    i_pit, #PIT_TMR0_ENABLE ' enable timer (if write complete)
+        if_1x   bith    i_pit, #PIT_TMR0_RELOAD ' signal reload counter
+                ret
+
+pit_40_rd
+                rdlong  i_pit, #@tmr0
+                testb   i_pit, #PIT_TMR0_MODE5 wc
+                testb   i_pit, #PIT_TMR0_MODE4 wz
+        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
+        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
+        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
+                ret     wcz
+.ctl_01
+                bitl    i_sys_flags, #I_SYS_TMR0_LATCH  wcz
+        if_x0   rdword  i_temp0, #@tmr0_cnt
+        if_x1   getword i_temp0, i_pit_latches, #0
+                getbyte i_tmpb, i_temp0, #0
+                ret     wcz
+.ctl_10
+                bitl    i_sys_flags, #I_SYS_TMR0_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr0_cnt
+        if_x1   getword i_temp0, i_pit_latches, #0
+                getbyte i_tmpb, i_temp0, #1
+                ret     wcz
+.ctl_11
+                bitnot  i_sys_flags, #I_SYS_TMR0_HL       wcz
+                testb   i_sys_flags, #I_SYS_TMR0_LATCH    wz
+        if_x0   rdword  i_temp0, #@tmr0_cnt
+        if_x1   getword i_temp0, i_pit_latches, #0
+
+        if_0x   getbyte i_tmpb, i_temp0, #0
+        if_1x   getbyte i_tmpb, i_temp0, #1
+        if_1x   bitl    i_sys_flags, #I_SYS_TMR0_LATCH
+                ret     wcz
+
+pit_41_wr
+.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
+        if_nc   jmp     #.lock
+                rdlong  i_pit, #@tmr0
+
+                testb   i_pit, #PIT_TMR1_MODE5 wc
+                testb   i_pit, #PIT_TMR1_MODE4 wz
+        if_01   call    #.ctl_01    ' write counter bits 0-7 only
+        if_10   call    #.ctl_10    ' write counter bits 8-15 only
+        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
+
+                wrlong  i_pit, #@tmr0
+                lockrel #I_TIMER_LOCK ' release lock
+
+                ret     wcz
+.ctl_01
+                wrword  i_tmpb, #@tmr1_reload
+                bith    i_pit, #PIT_TMR1_ENABLE ' enable timer
+        _ret_   bith    i_pit, #PIT_TMR1_RELOAD ' signal reload counter
+.ctl_10
+                shl     i_tmpb, #8
+                wrword  i_tmpb, #@tmr1_reload
+                bith    i_pit, #PIT_TMR1_ENABLE ' enable timer
+        _ret_   bith    i_pit, #PIT_TMR1_RELOAD ' signal reload counter
+.ctl_11
+                bitnot  i_sys_flags, #I_SYS_TMR1_HL   wcz
+                rdword  i_temp0, #@tmr1_reload
+        if_0x   setbyte i_temp0, i_tmpb, #0
+        if_1x   setbyte i_temp0, i_tmpb, #1
+                wrword  i_temp0, #@tmr1_reload
+        if_1x   bith    i_pit, #PIT_TMR1_ENABLE ' enable timer (if write complete)
+        if_1x   bith    i_pit, #PIT_TMR1_RELOAD ' signal reload counter
+                ret
+
+pit_41_rd
+                rdlong  i_pit, #@tmr0
+                testb   i_pit, #PIT_TMR1_MODE5 wc
+                testb   i_pit, #PIT_TMR1_MODE4 wz
+        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
+        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
+        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
+                ret     wcz
+.ctl_01
+                bitl    i_sys_flags, #I_SYS_TMR1_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches, #1
+                getbyte i_tmpb, i_temp0, #0
+                ret     wcz
+.ctl_10
+                bitl    i_sys_flags, #I_SYS_TMR1_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches, #1
+                getbyte i_tmpb, i_temp0, #1
+                ret     wcz
+.ctl_11
+                bitnot  i_sys_flags, #I_SYS_TMR1_HL       wcz
+                testb   i_sys_flags, #I_SYS_TMR1_LATCH    wz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches, #1
+
+        if_0x   getbyte i_tmpb, i_temp0, #0
+        if_1x   getbyte i_tmpb, i_temp0, #1
+        if_1x   bitl    i_sys_flags, #I_SYS_TMR1_LATCH
+                ret     wcz
+
+pit_42_wr
+.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
+        if_nc   jmp     #.lock
+                rdlong  i_pit, #@tmr0
+
+                testb   i_pit, #PIT_TMR2_MODE5 wc
+                testb   i_pit, #PIT_TMR2_MODE4 wz
+        if_01   call    #.ctl_01    ' write counter bits 0-7 only
+        if_10   call    #.ctl_10    ' write counter bits 8-15 only
+        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
+
+                wrlong  i_pit, #@tmr0
+                lockrel #I_TIMER_LOCK ' release lock
+
+                ret     wcz
+.ctl_01
+                wrword  i_tmpb, #@tmr2_reload
+                bith    i_pit, #PIT_TMR2_ENABLE ' enable timer
+        _ret_   bith    i_pit, #PIT_TMR2_RELOAD ' signal reload counter
+.ctl_10
+                shl     i_tmpb, #8
+                wrword  i_tmpb, #@tmr2_reload
+                bith    i_pit, #PIT_TMR2_ENABLE ' enable timer
+        _ret_   bith    i_pit, #PIT_TMR2_RELOAD ' signal reload counter
+.ctl_11
+                bitnot  i_sys_flags, #I_SYS_TMR2_HL   wcz
+                rdword  i_temp0, #@tmr2_reload
+        if_0x   setbyte i_temp0, i_tmpb, #0
+        if_1x   setbyte i_temp0, i_tmpb, #1
+                wrword  i_temp0, #@tmr2_reload
+        if_1x   bith    i_pit, #PIT_TMR2_ENABLE ' enable timer (if write complete)
+        if_1x   bith    i_pit, #PIT_TMR2_RELOAD ' signal reload counter
+                ret
+
+pit_42_rd
+                rdlong  i_pit, #@tmr0
+                testb   i_pit, #PIT_TMR2_MODE5 wc
+                testb   i_pit, #PIT_TMR2_MODE4 wz
+        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
+        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
+        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
+                ret     wcz
+.ctl_01
+                bitl    i_sys_flags, #I_SYS_TMR2_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr2_cnt
+        if_x1   getword i_temp0, i_pit_latches+1, #0
+                getbyte i_tmpb, i_temp0, #0
+                ret     wcz
+.ctl_10
+                bitl    i_sys_flags, #I_SYS_TMR2_LATCH    wcz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches+1, #0
+                getbyte i_tmpb, i_temp0, #1
+                ret     wcz
+.ctl_11
+                bitnot  i_sys_flags, #I_SYS_TMR2_HL       wcz
+                testb   i_sys_flags, #I_SYS_TMR2_LATCH    wz
+        if_x0   rdword  i_temp0, #@tmr1_cnt
+        if_x1   getword i_temp0, i_pit_latches+1, #0
+
+        if_0x   getbyte i_tmpb, i_temp0, #0
+        if_1x   getbyte i_tmpb, i_temp0, #1
+        if_1x   bitl    i_sys_flags, #I_SYS_TMR2_LATCH
+                ret     wcz
+
+pit_43_wr
+                testb   i_tmpb, #5          wc
+                testb   i_tmpb, #4          wz
+        if_00   jmp     #.latch
+
+.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
+        if_nc   jmp     #.lock
+                rdlong  i_pit, #@tmr0
+
+                testb   i_tmpb, #7          wc
+                testb   i_tmpb, #6          wz
+                debug("pit_43_wr ", ubin_byte(i_tmpb))
+
+        if_00   setbyte i_pit, i_tmpb, #0
+        if_00   bitl    i_pit, #PIT_TMR0_ENABLE
+        if_00   bitl    i_sys_flags, #I_SYS_TMR0_LATCH
+        if_00   bitl    i_sys_flags, #I_SYS_TMR0_HL
+
+        if_01   setbyte i_pit, i_tmpb, #1
+        if_01   bitl    i_pit, #PIT_TMR1_ENABLE
+        if_01   bitl    i_sys_flags, #I_SYS_TMR1_LATCH
+        if_01   bitl    i_sys_flags, #I_SYS_TMR1_HL
+
+        if_10   setbyte i_pit, i_tmpb, #2
+        if_10   bitl    i_pit, #PIT_TMR2_ENABLE
+        if_10   bitl    i_sys_flags, #I_SYS_TMR2_LATCH
+        if_10   bitl    i_sys_flags, #I_SYS_TMR2_HL
+
+                wrlong  i_pit, #@tmr0
+                lockrel #I_TIMER_LOCK ' release lock
+                ret     wcz
+.latch
+                testb   i_tmpb, #7          wc
+                testb   i_tmpb, #6          wz
+
+        if_00   rdword  i_temp0, #@tmr0_cnt
+        if_00   setword i_pit_latches, i_temp0, #0
+        if_00   bith    i_sys_flags, #I_SYS_TMR0_LATCH
+        if_00   bitl    i_sys_flags, #I_SYS_TMR0_HL
+
+        if_01   rdword  i_temp0, #@tmr1_cnt
+        if_01   setword i_pit_latches, i_temp0, #1
+        if_01   bith    i_sys_flags, #I_SYS_TMR1_LATCH
+        if_01   bitl    i_sys_flags, #I_SYS_TMR1_HL
+
+        if_10   rdword  i_temp0, #@tmr2_cnt
+        if_10   setword i_pit_latches+1, i_temp0, #0
+        if_10   bith    i_sys_flags, #I_SYS_TMR2_LATCH
+        if_10   bitl    i_sys_flags, #I_SYS_TMR2_HL
+
+                ret     wcz
+
+CON ' PIT 8254 Constants
 
     TIMER0_ENABLE   = 0
     TIMER1_ENABLE   = 1
@@ -6480,6 +6726,20 @@ CON ' 8254 Constants
     TIMER0_RELOAD   = 3
     TIMER1_RELOAD   = 4
     TIMER2_RELOAD   = 5
+
+    PIT_TMR0_MODE5 = 5
+    PIT_TMR0_MODE4 = 4
+    PIT_TMR1_MODE5 = 8 + 5
+    PIT_TMR1_MODE4 = 8 + 4
+    PIT_TMR2_MODE5 = 16 + 5
+    PIT_TMR2_MODE4 = 16 + 4
+
+    PIT_TMR0_ENABLE = 24 + TIMER0_ENABLE
+    PIT_TMR0_RELOAD = 24 + TIMER0_RELOAD
+    PIT_TMR1_ENABLE = 24 + TIMER1_ENABLE
+    PIT_TMR1_RELOAD = 24 + TIMER1_RELOAD
+    PIT_TMR2_ENABLE = 24 + TIMER2_ENABLE
+    PIT_TMR2_RELOAD = 24 + TIMER2_RELOAD
 
 DAT             ' NEC765
                 org     $000
@@ -7989,269 +8249,6 @@ CON ' PIC 8259A Constants
     PIC_POLL_BYTE = 3
     PIC_IS_BIT    = 31
     PIC_IR_NIB    = 6
-
-    I_TMR0_MODE5 = 5
-    I_TMR0_MODE4 = 4
-    I_TMR1_MODE5 = 8 + 5
-    I_TMR1_MODE4 = 8 + 4
-    I_TMR2_MODE5 = 16 + 5
-    I_TMR2_MODE4 = 16 + 4
-
-    I_TMR0_ENABLE = 24 + TIMER0_ENABLE
-    I_TMR0_RELOAD = 24 + TIMER0_RELOAD
-    I_TMR1_ENABLE = 24 + TIMER1_ENABLE
-    I_TMR1_RELOAD = 24 + TIMER1_RELOAD
-    I_TMR2_ENABLE = 24 + TIMER2_ENABLE
-    I_TMR2_RELOAD = 24 + TIMER2_RELOAD
-
-DAT             ' PIT 8254
-                orgh
-
-pit_40_wr
-.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
-        if_nc   jmp     #.lock
-                rdlong  i_pit, #@tmr0
-
-                testb   i_pit, #I_TMR0_MODE5 wc
-                testb   i_pit, #I_TMR0_MODE4 wz
-        if_01   call    #.ctl_01    ' write counter bits 0-7 only
-        if_10   call    #.ctl_10    ' write counter bits 8-15 only
-        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
-
-                wrlong  i_pit, #@tmr0
-                lockrel #I_TIMER_LOCK ' release lock
-
-                ret     wcz
-.ctl_01
-                wrword  i_tmpb, #@tmr0_reload
-                bith    i_pit, #I_TMR0_ENABLE ' enable timer
-        _ret_   bith    i_pit, #I_TMR0_RELOAD ' signal reload counter
-.ctl_10
-                shl     i_tmpb, #8
-                wrword  i_tmpb, #@tmr0_reload
-                bith    i_pit, #I_TMR0_ENABLE ' enable timer
-        _ret_   bith    i_pit, #I_TMR0_RELOAD ' signal reload counter
-.ctl_11
-                bitnot  i_sys_flags, #I_SYS_TMR0_HL wcz
-                rdword  i_temp0, #@tmr0_reload
-        if_0x   setbyte i_temp0, i_tmpb, #0
-        if_1x   setbyte i_temp0, i_tmpb, #1
-                wrword  i_temp0, #@tmr0_reload
-        if_1x   bith    i_pit, #I_TMR0_ENABLE ' enable timer (if write complete)
-        if_1x   bith    i_pit, #I_TMR0_RELOAD ' signal reload counter
-                ret
-
-pit_40_rd
-                rdlong  i_pit, #@tmr0
-                testb   i_pit, #I_TMR0_MODE5 wc
-                testb   i_pit, #I_TMR0_MODE4 wz
-        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
-        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
-        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
-                ret     wcz
-.ctl_01
-                bitl    i_sys_flags, #I_SYS_TMR0_LATCH  wcz
-        if_x0   rdword  i_temp0, #@tmr0_cnt
-        if_x1   getword i_temp0, i_pit_latches, #0
-                getbyte i_tmpb, i_temp0, #0
-                ret     wcz
-.ctl_10
-                bitl    i_sys_flags, #I_SYS_TMR0_LATCH    wcz
-        if_x0   rdword  i_temp0, #@tmr0_cnt
-        if_x1   getword i_temp0, i_pit_latches, #0
-                getbyte i_tmpb, i_temp0, #1
-                ret     wcz
-.ctl_11
-                bitnot  i_sys_flags, #I_SYS_TMR0_HL       wcz
-                testb   i_sys_flags, #I_SYS_TMR0_LATCH    wz
-        if_x0   rdword  i_temp0, #@tmr0_cnt
-        if_x1   getword i_temp0, i_pit_latches, #0
-
-        if_0x   getbyte i_tmpb, i_temp0, #0
-        if_1x   getbyte i_tmpb, i_temp0, #1
-        if_11   bitl    i_sys_flags, #I_SYS_TMR0_LATCH
-                ret     wcz
-
-pit_41_wr
-.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
-        if_nc   jmp     #.lock
-                rdlong  i_pit, #@tmr0
-
-                testb   i_pit, #I_TMR1_MODE5 wc
-                testb   i_pit, #I_TMR1_MODE4 wz
-        if_01   call    #.ctl_01    ' write counter bits 0-7 only
-        if_10   call    #.ctl_10    ' write counter bits 8-15 only
-        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
-
-                wrlong  i_pit, #@tmr0
-                lockrel #I_TIMER_LOCK ' release lock
-
-                ret     wcz
-.ctl_01
-                wrword  i_tmpb, #@tmr1_reload
-                bith    i_pit, #I_TMR1_ENABLE ' enable timer
-        _ret_   bith    i_pit, #I_TMR1_RELOAD ' signal reload counter
-.ctl_10
-                shl     i_tmpb, #8
-                wrword  i_tmpb, #@tmr1_reload
-                bith    i_pit, #I_TMR1_ENABLE ' enable timer
-        _ret_   bith    i_pit, #I_TMR1_RELOAD ' signal reload counter
-.ctl_11
-                bitnot  i_sys_flags, #I_SYS_TMR1_HL   wcz
-                rdword  i_temp0, #@tmr1_reload
-        if_0x   setbyte i_temp0, i_tmpb, #0
-        if_1x   setbyte i_temp0, i_tmpb, #1
-                wrword  i_temp0, #@tmr1_reload
-        if_1x   bith    i_pit, #I_TMR1_ENABLE ' enable timer (if write complete)
-        if_1x   bith    i_pit, #I_TMR1_RELOAD ' signal reload counter
-                ret
-
-pit_41_rd
-                rdlong  i_pit, #@tmr0
-                testb   i_pit, #I_TMR1_MODE5 wc
-                testb   i_pit, #I_TMR1_MODE4 wz
-        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
-        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
-        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
-                ret     wcz
-.ctl_01
-                bitl    i_sys_flags, #I_SYS_TMR1_LATCH    wcz
-        if_x0   rdword  i_temp0, #@tmr1_cnt
-        if_x1   getword i_temp0, i_pit_latches, #1
-                getbyte i_tmpb, i_temp0, #0
-                ret     wcz
-.ctl_10
-                bitl    i_sys_flags, #I_SYS_TMR1_LATCH    wcz
-        if_x0   rdword  i_temp0, #@tmr1_cnt
-        if_x1   getword i_temp0, i_pit_latches, #1
-                getbyte i_tmpb, i_temp0, #1
-                ret     wcz
-.ctl_11
-                bitnot  i_sys_flags, #I_SYS_TMR1_HL       wcz
-                testb   i_sys_flags, #I_SYS_TMR1_LATCH    wz
-        if_x0   rdword  i_temp0, #@tmr1_cnt
-        if_x1   getword i_temp0, i_pit_latches, #1
-
-        if_0x   getbyte i_tmpb, i_temp0, #0
-        if_1x   getbyte i_tmpb, i_temp0, #1
-        if_11   bitl    i_sys_flags, #I_SYS_TMR1_LATCH
-                ret     wcz
-
-pit_42_wr
-.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
-        if_nc   jmp     #.lock
-                rdlong  i_pit, #@tmr0
-
-                testb   i_pit, #I_TMR2_MODE5 wc
-                testb   i_pit, #I_TMR2_MODE4 wz
-        if_01   call    #.ctl_01    ' write counter bits 0-7 only
-        if_10   call    #.ctl_10    ' write counter bits 8-15 only
-        if_11   call    #.ctl_11    ' write counter bits 0-7 first, then 8-15
-
-                wrlong  i_pit, #@tmr0
-                lockrel #I_TIMER_LOCK ' release lock
-
-                ret     wcz
-.ctl_01
-                wrword  i_tmpb, #@tmr2_reload
-                bith    i_pit, #I_TMR2_ENABLE ' enable timer
-        _ret_   bith    i_pit, #I_TMR2_RELOAD ' signal reload counter
-.ctl_10
-                shl     i_tmpb, #8
-                wrword  i_tmpb, #@tmr2_reload
-                bith    i_pit, #I_TMR2_ENABLE ' enable timer
-        _ret_   bith    i_pit, #I_TMR2_RELOAD ' signal reload counter
-.ctl_11
-                bitnot  i_sys_flags, #I_SYS_TMR2_HL   wcz
-                rdword  i_temp0, #@tmr2_reload
-        if_0x   setbyte i_temp0, i_tmpb, #0
-        if_1x   setbyte i_temp0, i_tmpb, #1
-                wrword  i_temp0, #@tmr2_reload
-        if_1x   bith    i_pit, #I_TMR2_ENABLE ' enable timer (if write complete)
-        if_1x   bith    i_pit, #I_TMR2_RELOAD ' signal reload counter
-                ret
-
-pit_42_rd
-                rdlong  i_pit, #@tmr0
-                testb   i_pit, #I_TMR2_MODE5 wc
-                testb   i_pit, #I_TMR2_MODE4 wz
-        if_01   jmp     #.ctl_01    ' read counter bits 0-7 only
-        if_10   jmp     #.ctl_10    ' read counter bits 8-15 only
-        if_11   jmp     #.ctl_11    ' read counter bits 0-7 first, then 8-15
-                ret     wcz
-.ctl_01
-                bitl    i_sys_flags, #I_SYS_TMR2_LATCH    wcz
-        if_x0   rdword  i_temp0, #@tmr2_cnt
-        if_x1   getword i_temp0, i_pit_latches+1, #0
-                getbyte i_tmpb, i_temp0, #0
-                ret     wcz
-.ctl_10
-                bitl    i_sys_flags, #I_SYS_TMR2_LATCH    wcz
-        if_x0   rdword  i_temp0, #@tmr1_cnt
-        if_x1   getword i_temp0, i_pit_latches+1, #0
-                getbyte i_tmpb, i_temp0, #1
-                ret     wcz
-.ctl_11
-                bitnot  i_sys_flags, #I_SYS_TMR2_HL       wcz
-                testb   i_sys_flags, #I_SYS_TMR2_LATCH    wz
-        if_x0   rdword  i_temp0, #@tmr1_cnt
-        if_x1   getword i_temp0, i_pit_latches+1, #0
-
-        if_0x   getbyte i_tmpb, i_temp0, #0
-        if_1x   getbyte i_tmpb, i_temp0, #1
-        if_11   bitl    i_sys_flags, #I_SYS_TMR2_LATCH
-                ret     wcz
-
-pit_43_wr
-                testb   i_tmpb, #5          wc
-                testb   i_tmpb, #4          wz
-        if_00   jmp     #.latch
-
-.lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
-        if_nc   jmp     #.lock
-                rdlong  i_pit, #@tmr0
-
-                testb   i_tmpb, #7          wc
-                testb   i_tmpb, #6          wz
-
-        if_00   setbyte i_pit, i_tmpb, #0
-        if_00   bitl    i_pit, #I_TMR0_ENABLE
-        if_00   bitl    i_sys_flags, #I_SYS_TMR0_LATCH
-        if_00   bitl    i_sys_flags, #I_SYS_TMR0_HL
-
-        if_01   setbyte i_pit, i_tmpb, #1
-        if_01   bitl    i_pit, #I_TMR1_ENABLE
-        if_01   bitl    i_sys_flags, #I_SYS_TMR1_LATCH
-        if_01   bitl    i_sys_flags, #I_SYS_TMR1_HL
-
-        if_10   setbyte i_pit, i_tmpb, #2
-        if_10   bitl    i_pit, #I_TMR2_ENABLE
-        if_10   bitl    i_sys_flags, #I_SYS_TMR2_LATCH
-        if_10   bitl    i_sys_flags, #I_SYS_TMR2_HL
-
-                wrlong  i_pit, #@tmr0
-                lockrel #I_TIMER_LOCK ' release lock
-                ret     wcz
-.latch
-                testb   i_tmpb, #7          wc
-                testb   i_tmpb, #6          wz
-
-        if_00   rdword  i_temp0, #@tmr0_cnt
-        if_00   setword i_pit_latches, i_temp0, #0
-        if_00   bith    i_sys_flags, #I_SYS_TMR0_LATCH
-        if_00   bitl    i_sys_flags, #I_SYS_TMR0_HL
-
-        if_01   rdword  i_temp0, #@tmr1_cnt
-        if_01   setword i_pit_latches, i_temp0, #1
-        if_01   bith    i_sys_flags, #I_SYS_TMR1_LATCH
-        if_01   bitl    i_sys_flags, #I_SYS_TMR1_HL
-
-        if_10   rdword  i_temp0, #@tmr2_cnt
-        if_10   setword i_pit_latches+1, i_temp0, #0
-        if_10   bith    i_sys_flags, #I_SYS_TMR2_LATCH
-        if_10   bitl    i_sys_flags, #I_SYS_TMR2_HL
-
-                ret     wcz
 
 DAT             ' DMA 8237A
                 orgh
