@@ -6881,7 +6881,7 @@ n_write_sect
         if_e    mov     n_disk_params, ##$0028_08_01
                 cmp     n_temp0, ##184_320  wz  ' 180KB
         if_e    mov     n_disk_params, ##$0028_09_01
-                cmp     n_temp0, ##368_640  wz  ' 320KB
+                cmp     n_temp0, ##327_680  wz  ' 320KB
         if_e    mov     n_disk_params, ##$0028_08_02
                 cmp     n_temp0, ##368_640  wz  ' 360KB
         if_e    mov     n_disk_params, ##$0028_09_02
@@ -6975,7 +6975,7 @@ n_read_sect
         if_e    mov     n_disk_params, ##$0028_08_01
                 cmp     n_temp0, ##184_320  wz  ' 180KB
         if_e    mov     n_disk_params, ##$0028_09_01
-                cmp     n_temp0, ##368_640  wz  ' 320KB
+                cmp     n_temp0, ##327_680  wz  ' 320KB
         if_e    mov     n_disk_params, ##$0028_08_02
                 cmp     n_temp0, ##368_640  wz  ' 360KB
         if_e    mov     n_disk_params, ##$0028_09_02
