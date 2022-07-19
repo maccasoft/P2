@@ -7205,9 +7205,6 @@ n_disk_params   long    $0028_09_02
 
 '-------------------------------------------------------------------------------
 
-sd_ReadyBit     long    %0000_0000_0000_0000_0000_001_0000_0000
-sd_ErrorBits    long    %1111_1111_1111_1111_1000_000_0000_0000
-
 sd_cmd          long    0                           ' The 8b CMDxx | $40
 sd_cmdpar       long    0                           ' The 32b parameters
 sd_cmdcrc       long    0                           ' The 8b CRC (must be valid for CMD0 & CMD8)
@@ -7696,8 +7693,8 @@ sd_read
                 mov     sd_cmd, #CMD17              '
                 mov     sd_cmdpar, sd_blocknr       '
                 shl     sd_cmdpar, sd_blocksh       ' <<0 or <<9
-                call    #sd_read_block              ' read 512 bytes
-                ret                                 ' "Z" = success
+                jmp     #sd_read_block              ' read 512 bytes
+                                                    ' "Z" = success
 
 '+-----------------------------------------------------------------------------+
 '+ Write Sector:                                                               +
@@ -7711,8 +7708,8 @@ sd_write
                 mov     sd_cmd, #CMD24              '
                 mov     sd_cmdpar, sd_blocknr       '
                 shl     sd_cmdpar, sd_blocksh       ' <<0 or <<9
-                call    #sd_write_block             ' write 512 bytes
-                ret                                 ' "Z" = success
+                jmp     #sd_write_block             ' write 512 bytes
+                                                    ' "Z" = success
 
 '+-----------------------------------------------------------------------------+
 '+ Read Block/Sector:  (512 bytes)                                             +
@@ -7775,38 +7772,14 @@ sd_write_block                                      ' CMD24: PAR=sector, 512 byt
 .waitbusy
                 call    #_recvbyte                  ' get a byte
                 cmp     sd_reply, #$FF         wz   ' reply=$FF=busy ?
-        if_nz   jmp     #.checkstatus               ' n: check write status
+        if_nz   jmp     #.writedone                 ' n: done
                 getct   sd_replyR1                  '\ y: timeout ?
                 sub     sd_replyR1, sd_ini_time     '|
                 cmp     sd_replyR1, sd_time_out wc  '| c if < timeout
         if_c    jmp     #.waitbusy                  '| n: try again
                 jmp     #_fail '90                  '/ y: timed out
-.checkstatus
-                getct   sd_ini_time                 '\ set timeout for cmd13
-                mov     sd_time_out, ##delay1s      '/
-                mov     sd_cmd, #CMD13              '
-                mov     sd_cmdpar, #0               '
-                outl    #SD_CS                      ' /CS=0 (enable)
-
-                call    #_sendFF                    ' send $FF byte first
-                mov     sd_dataout, sd_cmd          ' CMD
-                call    #_sendbyte                  ' send cmd byte
-                mov     sd_dataout, sd_cmdpar       ' Parameter
-                call    #_sendlong                  ' send 4 bytes (MSB first)
-                mov     sd_dataout, sd_cmdcrc       ' CRC
-                call    #_sendbyte                  ' send crc byte
-
-                call    #_getR2reply                ' recv R2
-
-                outl    #SD_CK                      ' CLK=0 (idle)          already=0
-
-                outl    #SD_CK                      ' CLK=0 (idle)          already=0
-                call    #_recvbyte                  ' SEND 8 CLOCKS BEFORE DISABLING CS
-                outh    #SD_CS                      ' /CS=1 (disable)
-                test    sd_replyR2, sd_ReadyBit wz  ' check ready to receive another
-        if_nz   jmp     #.checkstatus
-                test    sd_replyR2, sd_ErrorBits wz ' Z means all error bits clear
-                ret
+.writedone
+        _ret_   modz    _set                        ' "Z" = success
 
 '+-----------------------------------------------------------------------------+
 '+      SEND: CMDx, PARx, CRCx, GET REPLY                                      +
@@ -7863,31 +7836,6 @@ _getreply       call    #_recvbyte                  ' recv R1 byte
                 '| nc+z  replyR1=$00(success)
                 test    sd_replyR1, #1      wz      '| nc+nz replyr1=$01(idle)
         _ret_   cmpr    sd_replyR1, #$01    wc      '/  c    replyr1>$01(error)
-'+-----------------------------------------------------------------------------+
-'+      READ REPLY: R2                                                         +
-'+-----------------------------------------------------------------------------+
-_getR2reply     call    #_recvbyte                  ' recv R2 first byte
-                cmp     sd_reply, #$FF      wz      ' reply=$ff=busy ?
-        if_nz   jmp     #.donebyte1                 ' n:
-
-' timeout set in CMD13
-                getct   sd_replyR1                  '\ timeout ?
-                sub     sd_replyR1, sd_ini_time     '|
-                cmp     sd_replyR1, sd_time_out wc  '| c if < timeout
-        if_c    jmp     #_getR2reply                '| n: try again
-                jmp     #_fail '90                  '/ timeout:
-
-.donebyte1      mov     sd_replyR2, sd_reply        ' save R2 first byte
-                call    #_recvbyte                  ' get R2 second byte
-                shl     sd_replyR2, #8              ' combine ...
-                or      sd_replyR2, sd_reply        ' ... bytes
-                call    #_recvbyte                  ' get R2 third byte
-                shl     sd_replyR2, #8              ' combine ...
-                or      sd_replyR2, sd_reply              ' ... bytes
-                call    #_recvbyte                  ' get R2 fourth byte
-                shl     sd_replyR2, #8              ' combine ...
-                or      sd_replyR2, sd_reply        ' ... bytes
-                ret
 
 '+-----------------------------------------------------------------------------+
 '+      SD SPI Send/Recv Routines... (write/read byte/long simultaneously)     +
