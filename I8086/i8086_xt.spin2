@@ -1,4 +1,4 @@
-{
+      {
     INTEL 8086 XT Emulator
     Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
 
@@ -6240,8 +6240,6 @@ CON             ' 8086 Constants
 
     ALL_FLAGS = (1 << I_CF_BIT) | (1 << I_PF_BIT) | (1 << I_AF_BIT) | (1 << I_ZF_BIT) | (1 << I_SF_BIT) | (1 << I_TF_BIT) | (1 << I_IF_BIT) | (1 << I_DF_BIT) | (1 << I_OF_BIT)
 
-    I_KB_RESET   = 17
-
     I_REP_BIT    = 26
     I_REP_ZF_BIT = 27
 
@@ -6263,6 +6261,8 @@ CON             ' 8086 Constants
 
     I_SYS_DMA_HL     = 6
 
+    I_SYS_KB_RESET   = 7
+
 DAT             ' PIT 8254
                 org     $000
 
@@ -6282,7 +6282,7 @@ t_loop
                 and     t_temp0, t_reload_mask
                 wrlong  t_temp0, #@tmr0
 
-                lockrel #I_TIMER_LOCK ' release lock
+                lockrel #I_TIMER_LOCK    ' release lock
 
                 getbyte t_temp0, t_ctrl, #3
                 and     t_flags, #%00111000
@@ -6293,8 +6293,8 @@ t_timer0
         if_x0   jmp     #t_timer1
 
                 bitl    t_flags, #TIMER0_RELOAD wcz
-        if_x1   rdword  t_temp0, #@tmr0_reload
-        if_x1   wrword  t_temp0, #@tmr0_cnt
+        if_x1   rdword  t_count0, #@tmr0_reload
+        if_x1   wrword  t_count0, #@tmr0_cnt
         if_x1   jmp     #t_timer1
 
                 getbyte t_temp0, t_ctrl, #0
@@ -6315,16 +6315,14 @@ t_timer0
 '                jmp     #t_timer1
 .mode0
 .mode4
-                rdword  t_count, #@tmr0_cnt
-                sub     t_count, #1           wcz
-                wrword  t_count, #@tmr0_cnt
+                decmod  t_count0, t_ffffh       wcz
+                wrword  t_count0, #@tmr0_cnt
         if_nz   jmp     #t_timer1
                 jmp     #t_trigger_irq
 .mode2
 .mode3
-                rdword  t_count, #@tmr0_cnt
-                sub     t_count, #1           wcz
-                wrword  t_count, #@tmr0_cnt
+                decmod  t_count0, t_ffffh       wcz
+                wrword  t_count0, #@tmr0_cnt
         if_nz   jmp     #t_timer1
                 bith    t_flags, #TIMER0_RELOAD
 
@@ -6343,8 +6341,8 @@ t_timer1
         if_x0   jmp     #t_timer2
 
                 bitl    t_flags, #TIMER1_RELOAD wcz
-        if_x1   rdword  t_temp0, #@tmr1_reload
-        if_x1   wrword  t_temp0, #@tmr1_cnt
+        if_x1   rdword  t_count1, #@tmr1_reload
+        if_x1   wrword  t_count1, #@tmr1_cnt
         if_x1   jmp     #t_timer2
 
                 getbyte t_temp0, t_ctrl, #1
@@ -6365,16 +6363,14 @@ t_timer1
 '                jmp     #t_timer1
 .mode0
 .mode4
-                rdword  t_count, #@tmr1_cnt
-                sub     t_count, #1           wcz
-                wrword  t_count, #@tmr1_cnt
+                decmod  t_count1, t_ffffh       wcz
+                wrword  t_count1, #@tmr1_cnt
         if_nz   jmp     #t_timer2
                 jmp     #t_dma_tick
 .mode2
 .mode3
-                rdword  t_count, #@tmr1_cnt
-                sub     t_count, #1           wcz
-                wrword  t_count, #@tmr1_cnt
+                decmod  t_count1, t_ffffh       wcz
+                wrword  t_count1, #@tmr1_cnt
         if_nz   jmp     #t_timer2
                 bith    t_flags, #TIMER1_RELOAD
 
@@ -6412,8 +6408,8 @@ t_timer2
         if_x0   jmp     #t_done
 
                 bitl    t_flags, #TIMER2_RELOAD wcz
-        if_x1   rdword  t_temp0, #@tmr2_reload
-        if_x1   wrword  t_temp0, #@tmr2_cnt
+        if_x1   rdword  t_count2, #@tmr2_reload
+        if_x1   wrword  t_count2, #@tmr2_cnt
         if_x1   jmp     #t_done
 
                 getbyte t_temp0, t_ctrl, #2
@@ -6434,17 +6430,22 @@ t_timer2
 '                jmp     #t_timer1
 .mode0
 .mode4
-                rdword  t_count, #@tmr2_cnt
-                sub     t_count, #1           wcz
-                wrword  t_count, #@tmr2_cnt
+                decmod  t_count2, t_ffffh       wcz
+                wrword  t_count2, #@tmr2_cnt
         if_nz   jmp     #t_done
                 ' TODO ???
                 jmp     #t_done
 .mode2
+                decmod  t_count2, t_ffffh       wcz
+                wrword  t_count2, #@tmr2_cnt
+        if_nz   jmp     #t_done
+                bith    t_flags, #TIMER2_RELOAD
+                ' TODO ???
+                jmp     #t_done
 .mode3
-                rdword  t_count, #@tmr2_cnt
-                sub     t_count, #1           wcz
-                wrword  t_count, #@tmr2_cnt
+                decmod  t_count2, t_ffffh       wcz
+        if_nz   decmod  t_count2, t_ffffh       wcz
+                wrword  t_count2, #@tmr2_cnt
         if_nz   jmp     #t_done
                 bith    t_flags, #TIMER2_RELOAD
                 ' TODO ???
@@ -6455,12 +6456,14 @@ t_done
 
 t_flags         long    %00111000
 t_reload_mask   long    %11000111_11111111_11111111_11111111
+t_ffffh         long    $FFFF
 
 t_lastct1       res     1
 
 t_ctrl          res     1
-t_count         res     1
-t_reload        res     1
+t_count0        res     1
+t_count1        res     1
+t_count2        res     1
 
 t_dma_ctl       res     1
 t_dma_mode      res     1
@@ -6471,6 +6474,7 @@ DAT             ' PIT 8254 HUB I/O
                 orgh
 
 pit_40_wr
+                debug("I/O (W): ", uhex_byte(i_ea,i_tmpb))
 .lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
         if_nc   jmp     #.lock
                 rdlong  i_pit, #@tmr0
@@ -6536,6 +6540,7 @@ pit_40_rd
                 ret     wcz
 
 pit_41_wr
+                debug("I/O (W): ", uhex_byte(i_ea,i_tmpb))
 .lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
         if_nc   jmp     #.lock
                 rdlong  i_pit, #@tmr0
@@ -6601,6 +6606,7 @@ pit_41_rd
                 ret     wcz
 
 pit_42_wr
+                debug("I/O (W): ", uhex_byte(i_ea,i_tmpb))
 .lock           locktry #I_TIMER_LOCK  wc      ' acquire timer lock
         if_nc   jmp     #.lock
                 rdlong  i_pit, #@tmr0
@@ -6666,6 +6672,7 @@ pit_42_rd
                 ret     wcz
 
 pit_43_wr
+                debug("I/O (W): ", uhex_byte(i_ea,i_tmpb))
                 testb   i_tmpb, #5          wc
                 testb   i_tmpb, #4          wz
         if_00   jmp     #.latch
@@ -6676,7 +6683,6 @@ pit_43_wr
 
                 testb   i_tmpb, #7          wc
                 testb   i_tmpb, #6          wz
-                debug("pit_43_wr ", ubin_byte(i_tmpb))
 
         if_00   setbyte i_pit, i_tmpb, #0
         if_00   bitl    i_pit, #PIT_TMR0_ENABLE
@@ -8060,7 +8066,7 @@ ppi_60_rd
 ppi_61_wr
                 testb   i_ppi, #(PPI_PB_BYTE * 8) + 6 wc
                 testb   i_tmpb, #6                  wz
-        if_01   bitnz   i_flags, #I_KB_RESET
+        if_01   bitnz   i_sys_flags, #I_SYS_KB_RESET
 
                 testb   i_ppi, #(PPI_PB_BYTE * 8) + 7 wc
                 testb   i_tmpb, #7                  wz
@@ -8072,7 +8078,7 @@ ppi_61_wr
                 ret     wcz
 
 .reset
-                bitl    i_flags, #I_KB_RESET    wcz
+                bitl    i_sys_flags, #I_SYS_KB_RESET    wcz
         if_x0   wrbyte  #$00, #@kbd_data
         if_x1   wrbyte  #$AA, #@kbd_data
         if_x1   bith    i_pic_irr, #1       ' signal irq
