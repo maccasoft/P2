@@ -1640,7 +1640,7 @@ hset_config
         if_nz   mov     hpad_ep_addr, #0
         if_nz   jmp     #.notify_client
                 mov     gp_descr_len, total_data
-                'debug(uhex_byte_array(gp_descr,gp_descr_len))
+                'debug(uhex_byte_array(gp_descr_p,gp_descr_len))
 
                 mov     htmp2, #GP_READY                ' Standard gamepad
                 jmp     #.notify_client
@@ -2567,6 +2567,18 @@ CON ' USB Host Shared constants
     #0, ERR_NONE, ERR_CMD, ERR_URX, ERR_SE1, ERR_PACKET, ERR_TAT, ERR_TXN_RETRY
     ERR_XFER_RETRY, ERR_NAK, ERR_DATAX_SYNC, ERR_CONFIG_FAIL, ERR_TIMEOUT
 '------------------------------------------------------------------------------
+' Keyboard LED output report toggle key bit postions:
+    #0, LED_NUMLKB, LED_CAPSLKB, LED_SCRLKB, LED_COMPOSEB
+    LED_KANAB, LED_CONST0B, LED_CONST1B, LED_CONST2B
+' Keyboard LED output report toggle key bitflags:
+    LED_NUMLKF   = decod(LED_NUMLKB)
+    LED_CAPSLKF  = decod(LED_CAPSLKB)
+    LED_SCRLKF   = decod(LED_SCRLKB)
+    LED_COMPOSEF = decod(LED_COMPOSEB)
+    LED_KANAF    = decod(LED_KANAB)
+    LED_CONST0F  = decod(LED_CONST0B)
+    LED_CONST1F  = decod(LED_CONST1B)
+    LED_CONST2F  = decod(LED_CONST2B)
 ' Keyboard modifier key bit positions:
     #0, LEFT_CTRLB, LEFT_SHIFTB, LEFT_ALTB, LEFT_GUIB
     RIGHT_CTRLB, RIGHT_SHIFTB, RIGHT_ALTB, RIGHT_GUIB

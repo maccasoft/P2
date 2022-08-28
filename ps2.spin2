@@ -63,33 +63,33 @@ ps2_ext_ret     testbn  ps2_state, #29  wz
 
                 cmp     ps2_code, #$14  wz  ' left control
         if_z    testbn  ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #LEFT_CTRL
+        if_z    muxnc   ps2_shift, #LEFT_CTRLF
 
                 cmp     ps2_code, #$14  wz  ' right control
         if_z    testb   ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #RIGHT_CTRL
+        if_z    muxnc   ps2_shift, #RIGHT_CTRLF
 
                 cmp     ps2_code, #$12  wz  ' left shift
         if_z    testbn  ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #LEFT_SHIFT
+        if_z    muxnc   ps2_shift, #LEFT_SHIFTF
                 cmp     ps2_data, #$59  wz  ' right shift
         if_z    testbn  ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #RIGHT_SHIFT
+        if_z    muxnc   ps2_shift, #RIGHT_SHIFTF
 
                 cmp     ps2_code, #$11  wz  ' left alt
         if_z    testbn  ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #LEFT_ALT
+        if_z    muxnc   ps2_shift, #LEFT_ALTF
 
                 cmp     ps2_code, #$11  wz  ' right alt
         if_z    testb   ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #RIGHT_ALT
+        if_z    muxnc   ps2_shift, #RIGHT_ALTF
 
                 cmp     ps2_code, #$1F  wz  ' left gui
         if_z    testb   ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #LEFT_GUI
+        if_z    muxnc   ps2_shift, #LEFT_GUIF
                 cmp     ps2_code, #$27  wz  ' right gui
         if_z    testb   ps2_state, #28  andz
-        if_z    muxnc   ps2_shift, #RIGHT_GUI
+        if_z    muxnc   ps2_shift, #RIGHT_GUIF
 
                 cmp     ps2_code, #$77  wz  ' num. lock
   if_z_and_c    jmp     #ps2_loop           ' | ignore if released
@@ -226,7 +226,7 @@ ps2_rx
 
 
 '------------------------------------------------------------------------------
-' Translate keyboard scancode to ASCII
+' Translate keyboard scancodes
 '------------------------------------------------------------------------------
 ' On entry:
 '   ps2_key   - scancode
@@ -241,7 +241,7 @@ ps2_rx
 ps2_translate
                 mov     ps2_temp, ps2_key
                 shl     ps2_temp, #1
-                test    ps2_shift, #LEFT_SHIFT|RIGHT_SHIFT wz
+                test    ps2_shift, #LEFT_SHIFTF|RIGHT_SHIFTF wz
         if_nz   add     ps2_temp, #1
                 add     ps2_temp, ##@kbd_table
                 rdbyte  ps2_temp, ps2_temp
@@ -428,14 +428,37 @@ kbd_table ' Index is the key scan code
 
 CON ' PS/2 keyboard constants
 
-    LEFT_CTRL   = %0000_0001
-    LEFT_SHIFT  = %0000_0010
-    LEFT_ALT    = %0000_0100
-    LEFT_GUI    = %0000_1000
-    RIGHT_CTRL  = %0001_0000
-    RIGHT_SHIFT = %0010_0000
-    RIGHT_ALT   = %0100_0000
-    RIGHT_GUI   = %1000_0000
+' Keyboard LED output report toggle key bit postions:
+    #0, LED_NUMLKB, LED_CAPSLKB, LED_SCRLKB
+' Keyboard LED output report toggle key bitflags:
+    LED_NUMLKF   = decod(LED_NUMLKB)
+    LED_CAPSLKF  = decod(LED_CAPSLKB)
+    LED_SCRLKF   = decod(LED_SCRLKB)
+' Keyboard modifier key bit positions:
+    #0, LEFT_CTRLB, LEFT_SHIFTB, LEFT_ALTB, LEFT_GUIB
+    RIGHT_CTRLB, RIGHT_SHIFTB, RIGHT_ALTB, RIGHT_GUIB
+' Keyboard modifier bitflags
+    LEFT_CTRLF   = decod(LEFT_CTRLB)
+    LEFT_SHIFTF  = decod(LEFT_SHIFTB)
+    LEFT_ALTF    = decod(LEFT_ALTB)
+    LEFT_GUIF    = decod(LEFT_GUIB)
+    RIGHT_CTRLF  = decod(RIGHT_CTRLB)
+    RIGHT_SHIFTF = decod(RIGHT_SHIFTB)
+    RIGHT_ALTF   = decod(RIGHT_ALTB)
+    RIGHT_GUIF   = decod(RIGHT_GUIB)
+' Consolidated left/right modkeys. Add the modifier keys you want to trap
+' together, then add the key scan code e.g. CTRL+ALT+"X" would be: $600 + KEY_X_x.
+' The key() Spin2 method does this and the rawKey() method returns the key data
+' as packed by the USB keyboard driver.
+'   SHIFT = $100
+'   CTRL  = $200
+'   ALT   = $400
+'   APP   = $800
+' L|R key modifier flag combinations:
+    KEYS_APP   = LEFT_GUIF + RIGHT_GUIF
+    KEYS_ALT   = LEFT_ALTF + RIGHT_ALTF
+    KEYS_CTRL  = LEFT_CTRLF + RIGHT_CTRLF
+    KEYS_SHIFT = LEFT_SHIFTF + RIGHT_SHIFTF
 
 CON ' License
 {{
