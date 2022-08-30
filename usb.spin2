@@ -568,17 +568,17 @@ con_desc_buff_p long    @con_desc_buff
 cache_start_p   long    @usb_cache_start
 cache_end_p     long    @usb_cache_end
 
+next_datax      long    0
+
 hdev_init_start
 kb_intf_num     long    0
 kb_interval     long    0
 kb_in_max_pkt   long    0
-kb_next_datax   long    0
 kb_max_index    long    0
 kb_led_states   long    0
 gp_intf_num     long    0
 gp_interval     long    0
 gp_in_max_pkt   long    0
-gp_next_datax   long    0
 gp_max_index    long    0
 gp_descr_len    long    0
 hdev_init_end
@@ -1452,7 +1452,7 @@ hparse_con_desc
                 mov     pa, #CON_wTotalLen
                 add     pa, hconfig_base
                 rdword  hcon_tot_len, pa                ' Keep config chain size handy
-                'debug(uhex_byte_array(hconfig_base, hcon_tot_len))
+                debug(uhex_byte_array(hconfig_base, hcon_tot_len))
 ' Search the configuration descriptor for the Class/Subclass/Protocol "triad"
 ' that defines a keyboard and/or mouse.
                 rdbyte  hnext_desc, hconfig_base        ' Config desc size is offset to first desc in chain
@@ -1640,7 +1640,7 @@ hset_config
         if_nz   mov     hpad_ep_addr, #0
         if_nz   jmp     #.notify_client
                 mov     gp_descr_len, total_data
-                'debug(uhex_byte_array(gp_descr_p,gp_descr_len))
+                debug(uhex_byte_array(gp_descr_p,gp_descr_len))
 
                 mov     htmp2, #GP_READY                ' Standard gamepad
                 jmp     #.notify_client
@@ -1702,8 +1702,7 @@ init_kbdm_data
                 add     pa, #1
                 cmp     pa, #hdev_init_end      wz
         if_nz   jmp     #.regloop
-                mov     kb_next_datax, #PID_DATA0   ' Reset interrupt IN datax sequence PIDs
-        _ret_   mov     gp_next_datax, #PID_DATA0
+        _ret_   mov     next_datax, #PID_DATA0      ' Reset interrupt IN datax sequence PIDs
 
 '------------------------------------------------------------------------------
 ' Execute a ControlWrite() that will perform the HID-specific HID_SET_IDLE
@@ -1750,7 +1749,7 @@ hset_kbdled_report
 hget_kbd_in_report
                 mov     ep_addr_pid, hkbd_ep_addr
                 mov     hpar2, kb_cur_report_p
-                setword hpar3, kb_next_datax, #0
+                setword hpar3, next_datax, #0
                 setword hpar3, kb_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
@@ -1762,11 +1761,9 @@ hget_kbd_in_report
                 drvnot  host_active_led                 ' Show keypress activity on the feedback LED
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
-                mov     hpar1, kb_next_datax
-                cmp     hpar1, #PID_DATA0       wz
-        if_z    mov     hpar1, #PID_DATA1               ' Txn success, so toggle DATAx
-        if_nz   mov     hpar1, #PID_DATA0
-                mov     kb_next_datax, hpar1
+                cmp     next_datax, #PID_DATA0  wz
+        if_z    mov     next_datax, #PID_DATA1          ' Txn success, so toggle DATAx
+        if_nz   mov     next_datax, #PID_DATA0
                 mov     kb_max_index, hpar3             ' Save actual bytes read
                 call    #hkbd_compare
 .led_check
@@ -1898,7 +1895,7 @@ kbd_table ' Index is the key scan code
 hget_gp_in_report
                 mov     ep_addr_pid, hpad_ep_addr
                 mov     hpar2, gp_cur_report_p
-                setword hpar3, gp_next_datax, #0
+                setword hpar3, next_datax, #0
                 setword hpar3, gp_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
@@ -1911,11 +1908,9 @@ hget_gp_in_report
         if_c    drvnot  host_active_led
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
-                mov     hpar1, gp_next_datax
-                cmp     hpar1, #PID_DATA0       wz
-        if_z    mov     hpar1, #PID_DATA1               ' Txn success, so toggle DATAx
-        if_nz   mov     hpar1, #PID_DATA0
-                mov     gp_next_datax, hpar1
+                cmp     next_datax, #PID_DATA0  wz
+        if_z    mov     next_datax, #PID_DATA1          ' Txn success, so toggle DATAx
+        if_nz   mov     next_datax, #PID_DATA0
                 mov     gp_max_index, hpar3             ' Save actual bytes read
 
 ' Note: the following code compares the current and previous reports
