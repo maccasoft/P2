@@ -63,8 +63,7 @@ txn_setup
         if_z    ret
                 mov     ptra, pa                        ' Restore SETUP's DATAx pointer
                 jmp     #.setup
-' */
-' /* txn_in
+
 '------------------------------------------------------------------------------
 ' IN/INTERRUPT transaction.
 ' Possible function response: STALL or NAK handshake, or DATAx packet.
@@ -562,6 +561,7 @@ kb_pre_report_p long    @kb_pre_report
 gp_descr_p      long    @gp_descr
 gp_cur_report_p long    @gp_cur_report
 gp_pre_report_p long    @gp_pre_report
+hub_descr_p     long    @hub_descr
 urx_buff_p      long    @urx_buff
 dev_desc_buff_p long    @dev_desc_buff
 con_desc_buff_p long    @con_desc_buff
@@ -571,6 +571,10 @@ cache_end_p     long    @usb_cache_end
 next_datax      long    0
 
 hdev_init_start
+hub_intf_num    long    0
+hub_status_chg  long    0
+hub_curr_port   long    0
+hub_port_status long    0
 kb_intf_num     long    0
 kb_interval     long    0
 kb_in_max_pkt   long    0
@@ -618,7 +622,6 @@ retry           long    0         ' Transaction retry count
 utx             long    0         ' Byte to transmit on USB
 urx             long    0         ' LSByte receiver status flags, MSByte received data
 newb_flg        long    0         ' Receive "new byte" bit toggle detector
-poll_target     long    0         ' Address of a subroutine that polls an interrupt IN endpoint
 max_pkt_size    long    0         ' Maximum payload bytes allowed, likely to change on device connect.
 total_data      long    0         ' Total bytes to tx/rx in a transfer data stage
 stage_data      long    0         ' Count of bytes sent/received so far during a data stage.
@@ -646,12 +649,13 @@ hdev_subclass   long    0
 hdev_protocol   long    0
 hsearch_key     long    0         ' Descriptor type to search for in the config chain
 hnext_desc      long    0         ' Offset from the config descriptor start address to the next descriptor in the chain
+hhub_ctrl_ep    long    0         ' Hub control endpoint address
+hhub_ep_addr    long    0         ' Hub interface endpoint address
 hkbd_ep_addr    long    0         ' Keyboard interface endpoint address
 hkbd_poll_cnt   long    0         ' Poll interval counter used for key auto-repeat
 hkbd_ledstates  long    0         ' Off/on state of keyboard LEDs
 hpad_ep_addr    long    0
 hpad_out_addr   long    0
-hpad_poll_cnt   long    0
 hreg_init_end
 ' Variables dependent on the system freqency
 _var_64_lower_  res     1
@@ -775,7 +779,7 @@ on_connect
                 mov     ep_addr_pid, ##EP_ADDR_ZERO     ' New connect, use pre-calc CRC for ep/addr zero
                 loc     ptra, #@get_dev_desc - @usb_host_start ' Hub start address of GetDeviceDescriptor SETUP struct
                 add     ptra, hcog_base_addr
-                wrword  #$40, ptra[wLength]             ' Request IN data stage max of 64 bytes will test actual < requested logic
+                wrword  #8, ptra[wLength]               ' Request IN data stage max of 8 bytes will test actual < requested logic
                 mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct for IN data
                 call    #control_read                   ' Execute GetDeviceDescriptor()
                 cmp     retval, #PID_ACK        wz
@@ -833,6 +837,9 @@ on_connect
         if_z    cmp     htmp, total_data        wcz
         if_b    mov     retval, #ERR_CONFIG_FAIL
         if_b    jmp     #host_error
+                loc     pa, #@init_kbdm_data - @usb_host_start
+                add     pa, hcog_base_addr
+                call    pa
                 loc     pa, #@hparse_con_desc - @usb_host_start
                 add     pa, hcog_base_addr
                 jmp     pa
@@ -1173,12 +1180,6 @@ connected
                 call    #on_connect                     ' Initial device configuration
                 cmp     retval, #PID_ACK        wz      ' Anything other than ACK means the device is unusable
         if_nz   jmp     #discon_entry
-set_poll_target
-                mov     poll_target, #0                 ' If unknown device, no interrupt targets
-                cmp     hkbd_ep_addr, #0        wz
-        if_nz   mov     poll_target, #poll_kbd
-                cmp     hpad_ep_addr, #0        wz
-        if_nz   mov     poll_target, #poll_gamepad
 .set_pulse
                 getct   _pulse_time_
                 add     _pulse_time_, _500ms_           ' Set activity LED pulse to the bus idle toggle rate
@@ -1195,10 +1196,16 @@ hidle
                 rqpin   urx, dm
                 testb   urx, #SE0_RESETB        wc
         if_c    jmp     #.se0_test
-                cmp     poll_target, #0         wz
-        if_z    jmp     #.nopoll
                 pollct3                         wc
-        if_c    call    poll_target                     ' Call the current poll/wait subroutine
+        if_nc   jmp     #.nopoll
+                cmp     hhub_ep_addr, #0        wz
+        if_nz   call    #\hget_hub_status
+                cmp     hkbd_ep_addr, #0        wz
+        if_nz   call    #\hget_kbd_in_report
+                cmp     hpad_ep_addr, #0        wz
+        if_nz   call    #\hget_gp_in_report
+                getct   hct3
+                addct3  hct3, _8ms_                     ' Set the timer for next poll interval
 .nopoll
                 cmp     cmd_data, #CMD_SUSPEND  wz
         if_z    jmp     #hsuspend
@@ -1267,8 +1274,7 @@ hwait_resume
                 setint1 #1                              ' Enable the 1ms frame ISR
                 mov     hctwait, _4ms_
                 call    #poll_waitx                     ' Delay until at least three 1ms frames transmitted
-                mov     cmd_data, #ERR_NONE             ' Acknowledge resume cmd complete
-                jmp     #set_poll_target                ' This addr configs a USB poll transaction and falls thru to hidle
+        _ret_   mov     cmd_data, #ERR_NONE             ' Acknowledge resume cmd complete
 
 hlut_end
                 fit     $400
@@ -1440,8 +1446,6 @@ hinit_usb_timings
 ' On exit:
 '------------------------------------------------------------------------------
 hparse_con_desc
-                call    #init_kbdm_data                 ' Reset device data area to start-up values
-
                 mov     ptrb, dev_desc_buff_p
                 rdword  htmp, ptrb[4]       ' idVendor
                 rdword  hdev_id, ptrb[5]    ' idProduct
@@ -1521,6 +1525,8 @@ hparse_con_desc
         if_z    cmp     hdev_subclass, #$5D     wz
         if_z    cmp     hdev_protocol, #$01     wz
         if_z    jmp     #.gamepad
+                cmp     hdev_class, #CLASS_HUB  wz
+        if_z    jmp     #.hub
                 cmp     hdev_class, #CLASS_HID              wz
         if_nz   jmp     #.next_intf                     ' No HID class, ignore
                 cmp     hdev_subclass, #SUBCLASS_INTF_NONE  wz
@@ -1552,6 +1558,22 @@ hparse_con_desc
                 'debug(udec(gp_intf_num))
                 debug(uhex_long(hpad_ep_addr),udec(gp_in_max_pkt,gp_interval),uhex_long(hpad_out_addr))
                 jmp     #.next_intf
+.hub
+                cmp     hdev_subclass, #SUBCLASS_INTF_NONE  wz
+        if_nz   jmp     #.next_intf
+                cmp     hdev_protocol, #INTF_PROTO_NONE     wz
+        if_nz   cmp     hdev_protocol, #2                   wz
+        if_nz   jmp     #.next_intf
+                cmp     hhub_ep_addr, #0    wz
+        if_nz   jmp     #.next_intf
+                getbyte hub_intf_num, hdev_intf_idx, #0 ' Save interface index and poll interval values
+                mov     hhub_ctrl_ep, hctrl_ep_addr     ' CONTROL endpoint address
+                mov     ep_addr_pid, hpar2              ' IN endpoint address
+                call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+                mov     hhub_ep_addr, ep_addr_pid
+                mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr
+                debug(uhex_long(hhub_ctrl_ep,hhub_ep_addr))
+                jmp     #.next_intf
 
 '------------------------------------------------------------------------------
 ' If a newly-connected device is recognized, do whatever is needed to configure
@@ -1571,6 +1593,7 @@ hset_config
                 mov     htmp2, #DEV_UNKNOWN
                 cmp     hkbd_ep_addr, #0        wz
         if_z    cmp     hpad_ep_addr, #0        wz
+        if_z    cmp     hhub_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No boot keyboard or mouse interface
 .set_config
                 loc     ptra, #set_config
@@ -1586,6 +1609,13 @@ hset_config
 .kbd_config
                 cmp     hkbd_ep_addr, #0        wz
         if_z    jmp     #.gamepad_config                ' No keyboard
+                mov     htmp, hkbd_ep_addr
+                and     htmp, ##ADDR_MASK
+                mov     htmp1, ep_addr_pid
+                and     htmp1, ##ADDR_MASK
+                cmp     htmp, htmp1             wz
+        if_nz   jmp     #.gamepad_config                ' No keyboard
+
                 getbyte htmp, kb_intf_num, #0
                 loc     ptra, #set_protocol
                 wrword  #BOOT_PROTOCOL, ptra[wValue]
@@ -1616,7 +1646,13 @@ hset_config
                 jmp     #.notify_client
 .gamepad_config
                 cmp     hpad_ep_addr, #0        wz
-        if_z    jmp     #.notify_client                 ' No gamepad
+        if_z    jmp     #.hub_config                    ' No gamepad
+                mov     htmp, hpad_ep_addr
+                and     htmp, ##ADDR_MASK
+                mov     htmp1, ep_addr_pid
+                and     htmp1, ##ADDR_MASK
+                cmp     htmp, htmp1             wz
+        if_nz   jmp     #.hub_config                    ' No gamepad
 
                 mov     ep_addr_pid, hpad_ep_addr
                 call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
@@ -1674,9 +1710,49 @@ hset_config
         if_nz   mov     hpad_ep_addr, #0
         if_nz   jmp     #.notify_client
                 mov     htmp2, #PS3_READY               ' PS3 gamepad ready
+                jmp     #.notify_client
 .notify_client
                 mov     hdev_ready, htmp2               ' Save device ready
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
+
+.hub_config
+                cmp     hhub_ep_addr, #0    wz
+        if_z    ret                                     ' No HUB
+                mov     htmp, hhub_ep_addr
+                and     htmp, ##ADDR_MASK
+                mov     htmp1, ep_addr_pid
+                and     htmp1, ##ADDR_MASK
+                cmp     htmp, htmp1             wz
+        if_nz   ret                                     ' No HUB
+
+                loc     ptra, #get_hub_desc             ' Get HUB descriptor
+                wrword  #$ff, ptra[wLength]
+                mov     pb, hub_descr_p
+                call    #control_read
+                cmp     retval, #PID_ACK        wz
+        if_nz   mov     hhub_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                debug(uhex_byte_array(hub_descr_p,total_data))
+
+                loc     ptra, #set_port_feat            ' Power on ports
+                wrword  #HUB_PORT_POWER, ptra[wValue]
+                wrword  #1, ptra[wIndex]
+                call    #control_write
+                loc     ptra, #set_port_feat
+                wrword  #2, ptra[wIndex]
+                call    #control_write
+                loc     ptra, #set_port_feat
+                wrword  #3, ptra[wIndex]
+                call    #control_write
+                loc     ptra, #set_port_feat
+                wrword  #4, ptra[wIndex]
+                call    #control_write
+
+                bith    hstatus, #DWNSTRM_HUBB
+
+                mov     hctwait, _500ms_
+                add     hctwait, _100ms_
+                jmp     #poll_waitx                     ' Hub doesn't notify client
 
 '------------------------------------------------------------------------------
 ' Initialize the keyboard/mouse data area to start-up values.
@@ -1758,7 +1834,6 @@ hget_kbd_in_report
         if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
                 ret                                     ' No auto-repeat action
 .data
-                drvnot  host_active_led                 ' Show keypress activity on the feedback LED
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
                 cmp     next_datax, #PID_DATA0  wz
@@ -1904,8 +1979,6 @@ hget_gp_in_report
         if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
                 ret
 .data
-                incmod  hpad_poll_cnt, #62      wc
-        if_c    drvnot  host_active_led
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
                 cmp     next_datax, #PID_DATA0  wz
@@ -2426,6 +2499,168 @@ hpad_translate
                 ret
 
 '------------------------------------------------------------------------------
+' Execute an IN interrupt transaction to poll for gamepad activity.
+'------------------------------------------------------------------------------
+' On entry:
+' On exit:
+'------------------------------------------------------------------------------
+hget_hub_status
+                mov     ep_addr_pid, hhub_ep_addr
+                loc     ptra, #hub_status
+                mov     hpar2, ptra
+                setword hpar3, next_datax, #0
+                setword hpar3, #1, #1
+                call    #do_int_in
+                cmp     retval, #PID_ACK        wz
+        if_z    jmp     #.data
+                cmp     retval, #PID_NAK        wz
+        if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
+                ret
+.data
+                cmp     hpar3, #0               wz
+        if_z    ret                                     ' Ignore an empty DATAx packet
+                cmp     next_datax, #PID_DATA0  wz
+        if_z    mov     next_datax, #PID_DATA1          ' Txn success, so toggle DATAx
+        if_nz   mov     next_datax, #PID_DATA0
+                mov     kb_max_index, hpar3             ' Save actual bytes read
+                loc     ptra, #hub_status
+                rdbyte  hub_status_chg, ptra
+                debug(ubin_long(hub_status_chg))
+
+                testb   hub_status_chg, #1      wz
+        if_x0   jmp     #.port2
+                mov     hub_curr_port, #1
+                call    #hub_port_handler
+.port2
+                testb   hub_status_chg, #2      wz
+        if_x0   jmp     #.port3
+                mov     hub_curr_port, #2
+                call    #hub_port_handler
+.port3
+                testb   hub_status_chg, #3      wz
+        if_x0   jmp     #.port4
+                mov     hub_curr_port, #3
+                call    #hub_port_handler
+.port4
+                testb   hub_status_chg, #4      wz
+        if_x0   jmp     #.portN
+                mov     hub_curr_port, #4
+                call    #hub_port_handler
+.portN
+                ret
+
+hub_port_handler
+                mov     ep_addr_pid, hhub_ctrl_ep
+                loc     ptra, #get_port_status          ' Get HUB port status
+                loc     pb, #hub_status
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_read
+                loc     ptra, #hub_status
+                rdlong  hub_port_status, ptra
+                debug(udec(hub_curr_port), ubin_long(hub_port_status))
+
+                testb   hub_port_status, #HUB_C_PORT_RESET wz ' Reset change bit
+        if_x0   jmp     #.check_connection
+                loc     ptra, #clr_port_feat
+                wrword  #HUB_C_PORT_RESET, ptra[wValue]
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_write
+
+.retry
+                mov     ep_addr_pid, ##EP_ADDR_ZERO     ' New connect, use pre-calc CRC for ep/addr zero
+                loc     ptra, #get_dev_desc             ' Hub start address of GetDeviceDescriptor SETUP struct
+                wrword  #8, ptra[wLength]               ' Request IN data stage max of 8 bytes will test actual < requested logic
+                mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct for IN data
+                call    #control_read                   ' Execute GetDeviceDescriptor()
+                debug(uhex(retval),udec(total_data),uhex_byte_array(dev_desc_buff_p, total_data))
+                cmp     retval, #PID_ACK        wz
+        if_nz   jmp     #.done
+.get_dev_desc
+                mov     pa, dev_desc_buff_p             ' Fetch the max packet size for control transactions from the
+                add     pa, #DEV_bMaxPktSize0           ' appropriate Device Descriptor struct member offset
+                rdbyte  max_pkt_size, pa
+                loc     ptra, #set_address              ' Hub start address of SetAddress SETUP struct
+                mov     htmp, #1                        ' Address is 1 + hub port number
+                add     htmp, hub_curr_port
+                wrword  htmp, ptra[wValue]
+                call    #control_write                  ' Execute SetAddress()
+                cmp     retval, #PID_ACK        wz
+        if_nz   jmp     #.done                          ' Back to idle if not ACK
+                mov     hctwait, _8ms_
+                call    #poll_waitx                     ' Allow SetAddress() a minimum 2ms recovery interval
+                mov     htmp, #1
+                add     htmp, hub_curr_port
+                setbyte ep_addr_pid, htmp, #1           ' Device ep/addr now #1 and endpoint zero
+                call    #calc_crc5
+                loc     ptra, #get_dev_desc             ' Repeat SETUP for GetDeviceDescriptor()
+                mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct has exact descriptor length
+                rdbyte  total_data, pb
+                wrword  total_data, ptra[wLength]       ' Assign it to the SETUP wLength struct member
+                call    #control_read                   ' Execute GetDeviceDescriptor() again, but with updated data length
+                cmp     retval, #PID_ACK        wz
+        if_nz   jmp     #.done                          ' Back to idle if not ACK
+                mov     hctrl_ep_addr, ep_addr_pid      ' Make the device control address and endpoint official
+                mov     ptra, dev_desc_buff_p           ' Do the same with the control max packet size
+                'rdbyte  hctrl_max_pkt, ptra[DEV_bMaxPktSize0]
+                mov     hctwait, _500us_
+                call    #poll_waitx
+                loc     ptra, #get_config_desc          ' Hub start address of GetConfigurationDescriptor SETUP struct
+                wrword  #$ff, ptra[wLength]             ' Maximum DATAx bytes for receive to the SETUP struct
+                mov     pb, con_desc_buff_p             ' Hub start address of ConfigurationDescriptor structure
+                call    #control_read                   ' Execute GetConfigurationDescriptor()
+                cmp     retval, #PID_ACK        wz
+        if_nz   jmp     #.done
+                mov     ptra, con_desc_buff_p           ' Check the config descriptor struct for expected data
+                mov     hconfig_base, ptra              ' Will need this for configuration
+                rdbyte  hr0, ptra++                     ' Config.bLength is at offset zero, expect >= CON_DESC_LEN
+                rdbyte  hr1, ptra++                     ' Config.bDescType is next member, expect = TYPE_CONFIG constant
+                rdword  htmp, ptra                      ' Config.wTotalLen is next member, expect >= bytes actually received
+                cmp     hr0, #CON_DESC_LEN      wcz
+        if_ae   cmp     hr1, #TYPE_CONFIG       wcz
+        if_z    cmp     htmp, total_data        wcz
+        if_b    mov     retval, #ERR_CONFIG_FAIL
+        if_b    jmp     #host_error
+                call    #hparse_con_desc
+
+.check_connection
+                testb   hub_port_status, #HUB_C_PORT_CONNECTION wz ' Connection change bit
+        if_x0   jmp     #.done
+                loc     ptra, #clr_port_feat
+                wrword  #HUB_C_PORT_CONNECTION, ptra[wValue]
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_write
+                testb   hub_port_status, #HUB_PORT_CONNECTION wz ' Connection bit
+        if_x0   jmp     #.disconnect
+                mov     hctwait, _100ms_
+                call    #poll_waitx
+                loc     ptra, #set_port_feat            ' reset port
+                wrword  #HUB_PORT_RESET, ptra[wValue]
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_write
+                jmp     #.done
+.disconnect
+                getbyte htmp, hkbd_ep_addr, #1
+                and     htmp, #$7F
+                sub     htmp, #1
+                cmp     htmp, hub_curr_port     wz
+        if_z    mov     hkbd_ep_addr, #0
+                getbyte htmp, hpad_ep_addr, #1
+                and     htmp, #$7F
+                sub     htmp, #1
+                cmp     htmp, hub_curr_port     wz
+        if_z    mov     hpad_ep_addr, #0
+
+.done
+                loc     ptra, #get_port_status          ' Get HUB port status
+                loc     pb, #hub_status
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_read
+                loc     ptra, #hub_status
+                rdlong  hub_port_status, ptra
+                debug(udec(hub_curr_port), ubin_long(hub_port_status))
+                ret
+
+'------------------------------------------------------------------------------
 ' Partially populated SETUP packets
 '------------------------------------------------------------------------------
 get_dev_desc    byte    (DIR_DEV_TO_HOST | TYPE_STANDARD | RECIP_DEVICE)
@@ -2483,6 +2718,27 @@ get_desc        byte    (DIR_DEV_TO_HOST | TYPE_STANDARD | RECIP_INTERFACE)
                 word    0       ' Zero or Language ID (Section 9.6.7)
                 word    0       ' Number of bytes to transfer if there is a data stage
 '------------------------------------------------------------------------------
+get_hub_desc    byte    (DIR_DEV_TO_HOST | TYPE_CLASS | RECIP_DEVICE)
+                byte    REQ_GET_DESC
+                word    TYPE_HUB << 8
+                word    0       ' Zero or Language ID (Section 9.6.7)
+                word    0       ' Number of bytes to transfer if there is a data stage
+set_port_feat   byte    (DIR_HOST_TO_DEV | TYPE_CLASS | RECIP_OTHER)
+                byte    REQ_SET_FEATURE
+                word    0       ' port power
+                word    1       ' Port index number (1+)
+                word    0       ' Number of bytes to transfer if there is a data stage
+clr_port_feat   byte    (DIR_HOST_TO_DEV | TYPE_CLASS | RECIP_OTHER)
+                byte    REQ_CLEAR_FEATURE
+                word    0       ' port power
+                word    1       ' Port index number (1+)
+                word    0       ' Number of bytes to transfer if there is a data stage
+get_port_status byte    (DIR_DEV_TO_HOST | TYPE_CLASS | RECIP_OTHER)
+                byte    REQ_GET_STATUS
+                word    0
+                word    1       ' Port index number (1+)
+                word    4       ' Number of bytes to transfer if there is a data stage
+'------------------------------------------------------------------------------
 ps3_enable_cmd  byte    $42, $0C, $00, $00
 ps3_command_buff
                 byte    $00, $00, $00, $00, $00
@@ -2528,6 +2784,17 @@ kb_pre_report   byte    0[KBD_IN_RPT_LEN]
 gp_descr        byte    0[HID_DESCR_LEN]
 gp_cur_report   byte    0[HID_IN_RPT_LEN]
 gp_pre_report   byte    0[HID_IN_RPT_LEN]
+
+' HUB descriptor
+hub_descr       byte    0   ' bDescLength
+                byte    0   ' bDescriptorType
+                byte    0   ' bNbrPorts
+                word    0   ' wHubCharacteristics
+                byte    0   ' bPwrOn2PwrGood
+                byte    0   ' bHubContrCurrent
+                byte    0   ' DeviceRemoveable
+                byte    0   ' PortPwrCtrlMask
+hub_status      word    0[2]
 
 usb_cache_end
 
@@ -2777,12 +3044,20 @@ CON ' USB Descriptor Definitions
     CLASS_APP_SPECIFIC    = $fe
     CLASS_VENDOR_SPECIFIC = $ff
 '------------------------------------------------------------------------------
+' HUB Class Requests
+'------------------------------------------------------------------------------
+    #0, HUB_PORT_CONNECTION, HUB_PORT_ENABLE, HUB_PORT_SUSPEND, HUB_PORT_OVERCURRENT
+    HUB_PORT_RESET[4], HUB_PORT_POWER, HUB_PORT_LOWSPEED[7]
+    HUB_C_PORT_CONNECTION, HUB_C_PORT_ENABLE, HUB_C_PORT_SUSPEND, HUB_C_PORT_OVERCURRENT
+    HUB_C_PORT_RESET, HUB_PORT_TEST, HUB_PORT_INDICATOR
+'------------------------------------------------------------------------------
 ' HID Class Requests (v1.11 HID Device Class Definition, Section 7.2):
 '------------------------------------------------------------------------------
     #$01, HID_GET_REPORT, HID_GET_IDLE, HID_GET_PROTO[6] ' $04 - $08 reserved
     HID_SET_REPORT, HID_SET_IDLE, HID_SET_PROTO
 ' HID Descriptor types:
     #$21, TYPE_HID, TYPE_REPORT, TYPE_PHYSICAL ' HID types $24 - $2f are reserved
+    #$29, TYPE_HUB
 '------------------------------------------------------------------------------
 ' HID report types (v1.11 HID Device Class Definition, Section 7.2.1):
 '------------------------------------------------------------------------------
