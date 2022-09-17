@@ -157,6 +157,8 @@ utx_token
                 rqpin   urx, dm
                 testb   urx, #J_IDLEB           wc
         if_nc   jmp     #utx_token
+                testb   hstatus, #DWNSTRM_HUBB  wc
+        if_c    call    #utx_pre
                 mov     utx, #OUT_SOP
                 call    #utx_byte                       ' Send sync byte
                 mov     htmp, ep_addr_pid               ' Preserve the PID and destination
@@ -207,6 +209,8 @@ utx_data
         if_c    jmp     #utx_data
                 mov     hctwait, ip_delay
                 call    #poll_waitx                     ' SETUP/OUT token always precedes tx DATAx so insert IP delay
+                testb   hstatus, #DWNSTRM_HUBB  wc
+        if_c    call    #utx_pre
                 mov     utx, #OUT_SOP
                 call    #utx_byte                       ' Send sync
                 bmask   crc, #15                        ' Prime the CRC16 pump
@@ -313,6 +317,8 @@ urx_data
 '   retval unchanged.
 '------------------------------------------------------------------------------
 utx_handshake
+                testb   hstatus, #DWNSTRM_HUBB  wc
+        if_c    call    #utx_pre
                 mov     utx, #OUT_SOP
                 call    #utx_byte                       ' Send sync
                 mov     utx, retval
@@ -402,6 +408,7 @@ isr1_fsframe
                 getct   iframe_ct_base
                 mov     iframe_ct_new, iframe_ct_base
                 addct1  iframe_ct_new, _frame1ms_clks_
+                wxpin   _usb_h_fs_nco_, dm              ' Restore host mode and 12Mbs baud
 .wait
                 testp   dp                      wc
         if_nc   jmp     #.wait
@@ -1025,6 +1032,10 @@ pre_status_in
 '   hpar3 - the count of IN data bytes actually received.
 '------------------------------------------------------------------------------
 do_int_in
+                testb   ep_addr_pid, #31        wc
+        if_c    bith    hstatus, #DWNSTRM_HUBB
+        if_c    bith    _usb_h_ls_nco_, #14
+
                 getword htmp, hpar3, #0
                 cmp     htmp, #PID_DATA0        wz
                 bitnz   hstatus, #DATAx_TGLB            ' Set/reset flag for DATAx to expect
@@ -1050,7 +1061,16 @@ do_int_in
                 call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
 .post_ret
                 mov     hpar3, pkt_cnt                  ' IN bytes actually received
-                ret
+
+                testb   ep_addr_pid, #31        wc
+        if_nc   ret
+
+                bitl    _usb_h_ls_nco_, #14
+                bitl    hstatus, #DWNSTRM_HUBB
+                wxpin   _usb_h_fs_nco_, dm              ' Restore host mode and 12Mbs baud
+                mov     max_pkt_size, #64               ' Set LS control read/write DATAx packet size
+                mov     tat_wait, _tat_wait_fs_         ' Bus turn-around time in low-speed bit periods
+        _ret_   mov     ip_delay, _ip_delay_fs_         ' Inter-packet delay in low-speed bit periods
 
 '------------------------------------------------------------------------------
 ' The one millisecond frame timer is implemented as an interrupt service
@@ -1206,10 +1226,6 @@ hidle
                 cmp     hkbd_ep_addr, #0        wz
         if_nz   call    #\hget_kbd_in_report
 
-                mov     gp_descr_p, ##@gp_descr
-                mov     gp_cur_report_p, ##@gp_cur_report
-                mov     gp_pre_report_p, ##@gp_pre_report
-
                 cmp     hhub_ep_addr, #0        wz
         if_nz   jmp     #.hub_devices
 
@@ -1219,8 +1235,9 @@ hidle
 
 .hub_devices
                 mov     hdev_ready, hdev_ready + 1
-                add     gp_descr_p, #HID_DESCR_LEN
+
                 mov     gp_descr_len, gp_descr_len + 1
+                add     gp_descr_p, #HID_DESCR_LEN
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
                 mov     gp_next_datax, gp_next_datax + 1
@@ -1230,9 +1247,9 @@ hidle
 
                 mov     hdev_ready, hdev_ready + 2
                 add     gp_descr_p, #HID_DESCR_LEN
-                mov     gp_descr_len, gp_descr_len + 1
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
+                mov     gp_descr_len, gp_descr_len + 1
                 mov     gp_next_datax, gp_next_datax + 2
                 mov     ep_addr_pid, hpad_ep_addr + 2 wz
         if_nz   call    #\hget_gp_in_report
@@ -1240,9 +1257,9 @@ hidle
 
                 mov     hdev_ready, hdev_ready + 3
                 add     gp_descr_p, #HID_DESCR_LEN
-                mov     gp_descr_len, gp_descr_len + 1
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
+                mov     gp_descr_len, gp_descr_len + 1
                 mov     gp_next_datax, gp_next_datax + 3
                 mov     ep_addr_pid, hpad_ep_addr + 3 wz
         if_nz   call    #\hget_gp_in_report
@@ -1250,16 +1267,18 @@ hidle
 
                 mov     hdev_ready, hdev_ready + 4
                 add     gp_descr_p, #HID_DESCR_LEN
-                mov     gp_descr_len, gp_descr_len + 1
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
+                mov     gp_descr_len, gp_descr_len + 1
                 mov     gp_next_datax, gp_next_datax + 4
                 mov     ep_addr_pid, hpad_ep_addr + 4 wz
         if_nz   call    #\hget_gp_in_report
                 mov     gp_next_datax + 4, gp_next_datax
 
-'                cmp     hpad_ep_addr, #0        wz
-'        if_nz   call    #\hget_gp_in_report
+                sub     gp_descr_p, ##HID_DESCR_LEN * 4
+                sub     gp_cur_report_p, ##HID_IN_RPT_LEN * 4
+                sub     gp_pre_report_p, ##HID_IN_RPT_LEN * 4
+
 .nopoll
                 cmp     cmd_data, #CMD_SUSPEND  wz
         if_z    jmp     #hsuspend
@@ -1329,6 +1348,42 @@ hwait_resume
                 mov     hctwait, _4ms_
                 call    #poll_waitx                     ' Delay until at least three 1ms frames transmitted
         _ret_   mov     cmd_data, #ERR_NONE             ' Acknowledge resume cmd complete
+
+'------------------------------------------------------------------------------
+' Send preamble to enable low-speed HUB ports
+'------------------------------------------------------------------------------
+' On entry:
+' On exit:
+'   USB baud rate set to low-speed
+'------------------------------------------------------------------------------
+utx_pre
+                dirl    dm                              ' Put smart pins into reset
+                dirl    dp
+                wrpin   ##0, dm                         ' Disable smartpin mode
+                wrpin   ##0, dp
+                drvl    dm
+                drvh    dp
+
+                mov     htmp, ##OUT_SOP | (PID_PRE << 8)
+
+                rep     @.l1, #16 + 1
+                shr     htmp, #1        wc
+        if_nc   outnot  #(USB_BASE_PIN + 2) addpins 1   ' Bit-bang sync+preamble+idle
+                waitx   #(_CLKFREQ / _12m) + 1 - 7
+.l1
+
+                dirl    dm                              ' Put smart pins into reset
+                dirl    dp
+                wrpin   ##USB_V2_DRVOUT, dm             ' The same USB smart pin mode for D- and D+ pins
+                wrpin   ##USB_V2_DRVOUT, dp
+                wxpin   _usb_h_ls_nco_, dm              ' Host mode and 1.5Mbs baud
+                dirh    dm                              ' Crank them smart pins up
+                dirh    dp
+                wypin   #OUT_IDLE, dm
+
+                mov     max_pkt_size, #8                ' Set LS control read/write DATAx packet size
+                mov     tat_wait, _tat_wait_ls_         ' Bus turn-around time in low-speed bit periods
+        _ret_   mov     ip_delay, _ip_delay_ls_         ' Inter-packet delay in low-speed bit periods
 
 hlut_end
                 fit     $400
@@ -1694,6 +1749,8 @@ hset_config
         if_nz   jmp     #.notify_client
                 mov     ep_addr_pid, hkbd_ep_addr
                 call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+                testb   hub_port_status, #HUB_PORT_LOWSPEED wc
+                bitc    ep_addr_pid, #31
                 mov     hkbd_ep_addr, ep_addr_pid
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
@@ -1714,11 +1771,15 @@ hset_config
                 alts    hub_curr_port, #hpad_ep_addr
                 mov     ep_addr_pid, hpad_ep_addr
                 call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+                testb   hub_port_status, #HUB_PORT_LOWSPEED wc
+                bitc    ep_addr_pid, #31
                 altd    hub_curr_port, #hpad_ep_addr
                 mov     hpad_ep_addr, ep_addr_pid
                 mov     ep_addr_pid, hpad_out_addr  wz
         if_nz   setbyte ep_addr_pid, #PID_OUT, #0
         if_nz   call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+        if_nz   testb   hub_port_status, #HUB_PORT_LOWSPEED wc
+        if_nz   bitc    ep_addr_pid, #31
         if_nz   mov     hpad_out_addr, ep_addr_pid
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
 
@@ -1732,6 +1793,7 @@ hset_config
                 mov     pb, hub_curr_port
                 mul     pb, #HID_DESCR_LEN
                 add     pb, gp_descr_p
+                'mov     pb, gp_descr_p
                 call    #control_read
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hpad_ep_addr, #0
@@ -1741,7 +1803,8 @@ hset_config
                 mov     pb, hub_curr_port
                 mul     pb, #HID_DESCR_LEN
                 add     pb, gp_descr_p
-                debug(uhex_byte_array(pb,gp_descr_len))
+                'mov     pb, gp_descr_p
+                debug(uhex(pb),uhex_byte_array(pb,total_data))
 
                 mov     htmp2, #GP_READY                ' Standard gamepad
                 jmp     #.notify_client
@@ -1837,8 +1900,6 @@ hset_config
                 loc     ptra, #set_port_feat
                 wrword  #4, ptra[wIndex]
                 call    #control_write
-
-                bith    hstatus, #DWNSTRM_HUBB
 
                 mov     hctwait, _500ms_
                 add     hctwait, _100ms_
@@ -2128,7 +2189,7 @@ hid_decode
 '   ptrb - controller report
 '------------------------------------------------------------------------------
 hpad_hid
-                debug("HID ", uhex_long(ep_addr_pid,ptrb))
+                debug("HID ", uhex_long(ep_addr_pid))
                 mov     ptra, gp_descr_p
                 mov     pa, gp_descr_len
                 mov     hidr_usage, ##$76543210
@@ -2660,20 +2721,49 @@ hub_port_handler
                 rdlong  hub_port_status, ptra
                 debug(udec(hub_curr_port), ubin_long(hub_port_status))
 
+                testb   hub_port_status, #HUB_C_PORT_CONNECTION wz ' Connection change bit
+        if_x0   jmp     #.other
+                loc     ptra, #clr_port_feat
+                wrword  #HUB_C_PORT_CONNECTION, ptra[wValue]
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_write
+                testb   hub_port_status, #HUB_PORT_CONNECTION wz ' Connection bit
+        if_x0   jmp     #.disconnect
+                mov     hctwait, _100ms_
+                call    #poll_waitx
+
+                loc     ptra, #set_port_feat            ' reset port
+                wrword  #HUB_PORT_RESET, ptra[wValue]
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_write
+
+.wait_reset
+                mov     hctwait, _8ms_
+                call    #poll_waitx
+
+                loc     ptra, #get_port_status          ' Get HUB port status
+                loc     pb, #hub_status
+                wrword  hub_curr_port, ptra[wIndex]
+                call    #control_read
+                loc     ptra, #hub_status
+                rdlong  hub_port_status, ptra
                 testb   hub_port_status, #HUB_C_PORT_RESET wz ' Reset change bit
-        if_x0   jmp     #.check_connection
+        if_x0   jmp     #.wait_reset
+
                 loc     ptra, #clr_port_feat
                 wrword  #HUB_C_PORT_RESET, ptra[wValue]
                 wrword  hub_curr_port, ptra[wIndex]
                 call    #control_write
 
-.retry
+                testb   hub_port_status, #HUB_PORT_LOWSPEED wc
+        if_c    bith    hstatus, #DWNSTRM_HUBB
+        if_c    bith    _usb_h_ls_nco_, #14
+
                 mov     ep_addr_pid, ##EP_ADDR_ZERO     ' New connect, use pre-calc CRC for ep/addr zero
                 loc     ptra, #get_dev_desc             ' Hub start address of GetDeviceDescriptor SETUP struct
                 wrword  #8, ptra[wLength]               ' Request IN data stage max of 8 bytes will test actual < requested logic
                 mov     pb, dev_desc_buff_p             ' Start address of DeviceDescriptor struct for IN data
                 call    #control_read                   ' Execute GetDeviceDescriptor()
-                debug(uhex(retval),udec(total_data),uhex_byte_array(dev_desc_buff_p, total_data))
                 cmp     retval, #PID_ACK        wz
         if_nz   jmp     #.done
 .get_dev_desc
@@ -2721,19 +2811,31 @@ hub_port_handler
         if_b    jmp     #host_error
                 call    #hparse_con_desc
 
-.check_connection
-                testb   hub_port_status, #HUB_C_PORT_CONNECTION wz ' Connection change bit
-        if_x0   jmp     #.done
+                bitl    _usb_h_ls_nco_, #14
+                bitl    hstatus, #DWNSTRM_HUBB
+
+                wxpin   _usb_h_fs_nco_, dm              ' Restore host mode and 12Mbs baud
+                mov     max_pkt_size, #64               ' Set LS control read/write DATAx packet size
+                mov     tat_wait, _tat_wait_fs_         ' Bus turn-around time in low-speed bit periods
+                mov     ip_delay, _ip_delay_fs_         ' Inter-packet delay in low-speed bit periods
+                jmp     #.done
+
+.other
+                testb   hub_port_status, #HUB_C_PORT_RESET wz
+        if_x1   wrword  #HUB_C_PORT_RESET, ptra[wValue]
+        if_x1   jmp     #.reset_feature
+                testb   hub_port_status, #HUB_C_PORT_ENABLE wz
+        if_x1   wrword  #HUB_C_PORT_ENABLE, ptra[wValue]
+        if_x1   jmp     #.reset_feature
+                testb   hub_port_status, #HUB_C_PORT_SUSPEND wz
+        if_x1   wrword  #HUB_C_PORT_SUSPEND, ptra[wValue]
+        if_x1   jmp     #.reset_feature
+                testb   hub_port_status, #HUB_C_PORT_OVERCURRENT wz
+        if_x1   wrword  #HUB_C_PORT_OVERCURRENT, ptra[wValue]
+        if_x1   jmp     #.reset_feature
+                jmp     #.done
+.reset_feature
                 loc     ptra, #clr_port_feat
-                wrword  #HUB_C_PORT_CONNECTION, ptra[wValue]
-                wrword  hub_curr_port, ptra[wIndex]
-                call    #control_write
-                testb   hub_port_status, #HUB_PORT_CONNECTION wz ' Connection bit
-        if_x0   jmp     #.disconnect
-                mov     hctwait, _100ms_
-                call    #poll_waitx
-                loc     ptra, #set_port_feat            ' reset port
-                wrword  #HUB_PORT_RESET, ptra[wValue]
                 wrword  hub_curr_port, ptra[wIndex]
                 call    #control_write
                 jmp     #.done
@@ -2762,7 +2864,6 @@ hub_port_handler
                 and     htmp, #$7F
                 cmp     htmp, hub_curr_port     wz
         if_z    mov     hpad_ep_addr + 4, #0
-
 .done
                 loc     ptra, #get_port_status          ' Get HUB port status
                 loc     pb, #hub_status
