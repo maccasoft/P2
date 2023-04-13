@@ -1235,9 +1235,8 @@ hidle
 
 .hub_devices
                 mov     hdev_ready, hdev_ready + 1
-
-                mov     gp_descr_len, gp_descr_len + 1
                 add     gp_descr_p, #HID_DESCR_LEN
+                mov     gp_descr_len, gp_descr_len + 1
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
                 mov     gp_next_datax, gp_next_datax + 1
@@ -1247,9 +1246,9 @@ hidle
 
                 mov     hdev_ready, hdev_ready + 2
                 add     gp_descr_p, #HID_DESCR_LEN
+                mov     gp_descr_len, gp_descr_len + 2
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
-                mov     gp_descr_len, gp_descr_len + 1
                 mov     gp_next_datax, gp_next_datax + 2
                 mov     ep_addr_pid, hpad_ep_addr + 2 wz
         if_nz   call    #\hget_gp_in_report
@@ -1257,9 +1256,9 @@ hidle
 
                 mov     hdev_ready, hdev_ready + 3
                 add     gp_descr_p, #HID_DESCR_LEN
+                mov     gp_descr_len, gp_descr_len + 3
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
-                mov     gp_descr_len, gp_descr_len + 1
                 mov     gp_next_datax, gp_next_datax + 3
                 mov     ep_addr_pid, hpad_ep_addr + 3 wz
         if_nz   call    #\hget_gp_in_report
@@ -1267,9 +1266,9 @@ hidle
 
                 mov     hdev_ready, hdev_ready + 4
                 add     gp_descr_p, #HID_DESCR_LEN
+                mov     gp_descr_len, gp_descr_len + 4
                 add     gp_cur_report_p, #HID_IN_RPT_LEN
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
-                mov     gp_descr_len, gp_descr_len + 1
                 mov     gp_next_datax, gp_next_datax + 4
                 mov     ep_addr_pid, hpad_ep_addr + 4 wz
         if_nz   call    #\hget_gp_in_report
@@ -2189,7 +2188,7 @@ hid_decode
 '   ptrb - controller report
 '------------------------------------------------------------------------------
 hpad_hid
-                debug("HID ", uhex_long(ep_addr_pid))
+                debug("HID ", uhex_long(ep_addr_pid),uhex(gp_descr_p))
                 mov     ptra, gp_descr_p
                 mov     pa, gp_descr_len
                 mov     hidr_usage, ##$76543210
