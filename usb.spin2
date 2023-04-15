@@ -30,11 +30,16 @@ DAT             ' USB Host driver
 usb_host_start
                 mov     hcog_base_addr, ptrb
 
-                add     ptrb, ##@hlut_start - @usb_host_start
-                setq2   #512-1
-                rdlong  0, ptrb
+                mov     htmp, ##@hlut_end - 4 - @hlut_start ' Dealing with hub addresses
+                shr     htmp, #2                        ' so byte->long for the lut cell count
+                loc     pb, #@hlut_start - @usb_host_start
+                add     pb, hcog_base_addr
+                setq2   htmp
+                rdlong  0, pb                           ' Do the hub->lut copy
 
-                jmp     #\usb_host_init
+                loc     pb, #@usb_host_init - @usb_host_start
+                add     pb, hcog_base_addr
+                jmp     pb                              ' Initialize host and enter main processing loop
 
 '------------------------------------------------------------------------------
 ' SETUP transaction. The mechanics of SETUP are identical to OUT, but it's
@@ -563,17 +568,17 @@ dp              long    USB_BASE_PIN + 3
 usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
 host_active_led long    57                  ' Client defines the LED pin# for host bus activity
 host_error_led  long    56                  ' Client defines the LED pin# to light on error
-kb_cur_report_p long    @kb_cur_report
-kb_pre_report_p long    @kb_pre_report
-gp_descr_p      long    @gp_descr
-gp_cur_report_p long    @gp_cur_report
-gp_pre_report_p long    @gp_pre_report
-hub_descr_p     long    @hub_descr
-urx_buff_p      long    @urx_buff
-dev_desc_buff_p long    @dev_desc_buff
-con_desc_buff_p long    @con_desc_buff
-cache_start_p   long    @usb_cache_start
-cache_end_p     long    @usb_cache_end
+kb_cur_report_p long    0
+kb_pre_report_p long    0
+gp_descr_p      long    0
+gp_cur_report_p long    0
+gp_pre_report_p long    0
+hub_descr_p     long    0
+urx_buff_p      long    0
+dev_desc_buff_p long    0
+con_desc_buff_p long    0
+cache_start_p   long    0
+cache_end_p     long    0
 
 hdev_init_start
 hub_intf_num    long    0
@@ -1221,16 +1226,23 @@ hidle
                 getct   hct3
                 addct3  hct3, _8ms_                     ' Set the timer for next poll interval
 
+                loc     pa, #@hget_hub_status - @usb_host_start
+                add     pa, hcog_base_addr
                 cmp     hhub_ep_addr, #0        wz
-        if_nz   call    #\hget_hub_status
+        if_nz   call    pa
+
+                loc     pa, #@hget_kbd_in_report - @usb_host_start
+                add     pa, hcog_base_addr
                 cmp     hkbd_ep_addr, #0        wz
-        if_nz   call    #\hget_kbd_in_report
+        if_nz   call    pa
 
                 cmp     hhub_ep_addr, #0        wz
         if_nz   jmp     #.hub_devices
 
-                mov     ep_addr_pid, hpad_ep_addr   wz
-        if_nz   call    #\hget_gp_in_report
+                loc     pa, #@hget_gp_in_report - @usb_host_start
+                add     pa, hcog_base_addr
+                mov     ep_addr_pid, hpad_ep_addr wz
+        if_nz   call    pa
                 jmp     #.nopoll
 
 .hub_devices
@@ -1241,7 +1253,9 @@ hidle
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
                 mov     gp_next_datax, gp_next_datax + 1
                 mov     ep_addr_pid, hpad_ep_addr + 1 wz
-        if_nz   call    #\hget_gp_in_report
+                loc     pa, #@hget_gp_in_report - @usb_host_start
+                add     pa, hcog_base_addr
+        if_nz   call    pa
                 mov     gp_next_datax + 1, gp_next_datax
 
                 mov     hdev_ready, hdev_ready + 2
@@ -1251,7 +1265,9 @@ hidle
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
                 mov     gp_next_datax, gp_next_datax + 2
                 mov     ep_addr_pid, hpad_ep_addr + 2 wz
-        if_nz   call    #\hget_gp_in_report
+                loc     pa, #@hget_gp_in_report - @usb_host_start
+                add     pa, hcog_base_addr
+        if_nz   call    pa
                 mov     gp_next_datax + 2, gp_next_datax
 
                 mov     hdev_ready, hdev_ready + 3
@@ -1261,7 +1277,9 @@ hidle
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
                 mov     gp_next_datax, gp_next_datax + 3
                 mov     ep_addr_pid, hpad_ep_addr + 3 wz
-        if_nz   call    #\hget_gp_in_report
+                loc     pa, #@hget_gp_in_report - @usb_host_start
+                add     pa, hcog_base_addr
+        if_nz   call    pa
                 mov     gp_next_datax + 3, gp_next_datax
 
                 mov     hdev_ready, hdev_ready + 4
@@ -1271,7 +1289,9 @@ hidle
                 add     gp_pre_report_p, #HID_IN_RPT_LEN
                 mov     gp_next_datax, gp_next_datax + 4
                 mov     ep_addr_pid, hpad_ep_addr + 4 wz
-        if_nz   call    #\hget_gp_in_report
+                loc     pa, #@hget_gp_in_report - @usb_host_start
+                add     pa, hcog_base_addr
+        if_nz   call    pa
                 mov     gp_next_datax + 4, gp_next_datax
 
                 sub     gp_descr_p, ##HID_DESCR_LEN * 4
@@ -1399,6 +1419,29 @@ DAT             ' USB Host HUB execution
 ' USB host cog initialization.
 '------------------------------------------------------------------------------
 usb_host_init
+                loc     pb, #kb_cur_report              ' Initialize buffer pointers
+                mov     kb_cur_report_p, pb
+                loc     pb, #kb_pre_report
+                mov     kb_pre_report_p, pb
+                loc     pb, #gp_descr
+                mov     gp_descr_p, pb
+                loc     pb, #gp_cur_report
+                mov     gp_cur_report_p, pb
+                loc     pb, #gp_pre_report
+                mov     gp_pre_report_p, pb
+                loc     pb, #hub_descr
+                mov     hub_descr_p, pb
+                loc     pb, #urx_buff
+                mov     urx_buff_p, pb
+                loc     pb, #dev_desc_buff
+                mov     dev_desc_buff_p, pb
+                loc     pb, #con_desc_buff
+                mov     con_desc_buff_p, pb
+                loc     pb, #usb_cache_start
+                mov     cache_start_p, pb
+                loc     pb, #usb_cache_end
+                mov     cache_end_p, pb
+
                 drvl    host_error_led                  ' Ensure fatal error LED is inactive
 '                mov     p2rev_val, ptrb                 ' Running on P2RevA or P2RevB+ silicon?
 '                setq    #1
@@ -2042,7 +2085,7 @@ hkbd_compare
                 cmp     hpar1, htmp     wz
         if_z    jmp     #.rl3
                 djnz    pb, #.rl2
-                call    #\hkbd_translate
+                call    #hkbd_translate
 .rl3            djnz    pa, #.rl1
 
                 mov     hpar3, #0
@@ -2061,7 +2104,7 @@ hkbd_compare
                 cmp     hpar1, htmp     wz
         if_z    jmp     #.pl3
                 djnz    pb, #.pl2
-                call    #\hkbd_translate
+                call    #hkbd_translate
 .pl3            djnz    pa, #.pl1
 
 .copy           mov     ptra, kb_cur_report_p
@@ -2091,8 +2134,9 @@ hkbd_translate
                 shl     htmp, #1
                 test    hpar2, #KEYS_SHIFT  wz  ' SHIFT
         if_nz   add     htmp, #1
-                add     htmp, ##@kbd_table
-                rdbyte  htmp, htmp
+                loc     pb, #kbd_table
+                add     pb, htmp
+                rdbyte  htmp, pb
 
                 shl     hpar1, #8
                 setbyte hpar1, htmp, #0
