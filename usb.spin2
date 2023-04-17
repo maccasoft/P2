@@ -1692,16 +1692,20 @@ hparse_con_desc
         if_nz   jmp     #.next_intf
                 getbyte kb_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
                 getbyte kb_interval, hr2, #3
-                mov     hkbd_ep_addr, hpar2             ' IN endpoint address
                 getbyte kb_in_max_pkt, hr2, #0
+                mov     hkbd_ep_addr, hpar2             ' IN endpoint address
+                altd    hub_curr_port, #hpad_ep_addr
+                mov     hpad_ep_addr, #0
                 'debug(udec(kb_intf_num))
                 debug(uhex_long(hkbd_ep_addr),udec(kb_in_max_pkt,kb_interval))
                 jmp     #.next_intf
 .gamepad
-                cmp     hkbd_ep_addr, #0    wz
-        if_z    altd    hub_curr_port, #hpad_ep_addr
-        if_z    cmp     hpad_ep_addr, #0    wz
-        if_nz   jmp     #.next_intf
+                mov     htmp, hkbd_ep_addr
+                and     htmp, ##ADDR_MASK
+                mov     htmp1, hpar2
+                and     htmp1, ##ADDR_MASK
+                cmp     htmp, htmp1             wz
+        if_z    jmp     #.next_intf
                 getbyte gp_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
                 getbyte gp_interval, hr2, #3
                 altd    hub_curr_port, #hpad_ep_addr
@@ -1744,6 +1748,7 @@ hset_config
 '                mov     hmouse_ep_addr, #0              ' DEBUG
                 mov     htmp2, #DEV_UNKNOWN
                 cmp     hkbd_ep_addr, #0        wz
+        if_z    alts    hub_curr_port, #hpad_ep_addr
         if_z    cmp     hpad_ep_addr, #0        wz
         if_z    cmp     hhub_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No boot keyboard or mouse interface
