@@ -1,3 +1,6 @@
+/.settings/
+/.vscode/
+/.project
 *.bin
 *.binary
 *.zip
