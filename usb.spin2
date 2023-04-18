@@ -1151,14 +1151,21 @@ host_reset
                 dirh    dp
                 waitx   _1us_
                 wypin   #OUT_IDLE, dm
+
+                ' Handle Port protection enable and startup delay
+                mov     htmp, usb_event_pin             ' I/O + 1 pin is the Serial Host USB Protection enable/disable
+                add     htmp, #1                        ' Protection enable is a one-time operation
+                drvl    htmp                            ' disable port
+                waitx   _21ms_                          ' Wait a while for everything to turn off
+                drvh    htmp                            ' Enable the port
                 waitx   _21ms_                          ' Hold to let the idle state get settled
-                mov     pa, #hreg_init_start            ' Reset all host common registers to startup values
-.regloop
-                altd    pa
+
+                setd    pa, #hreg_init_start            ' Reset all host common registers to startup values
+                rep     @.regloop,#hreg_init_end - hreg_init_start
+                alti    pa, #%000_011_000
                 mov     0-0, #0
-                add     pa, #1
-                cmp     pa, #hreg_init_end      wz
-        if_nz   jmp     #.regloop
+.regloop
+
 discon_entry
                 mov     mod_cnt, #3                     ' Make the first heartbeat pulse a short one
 
@@ -1457,9 +1464,6 @@ usb_host_init
                 wrpin   ##SP_REPO1_MODE, usb_event_pin  ' Mailbox smart pin output is enabled, so this pin# will raise
                 dirh    usb_event_pin                   ' IN at event post and OUT drives the Serial Host activity LED.
 ' Configure and enable the Serial Host USB port.
-                mov     htmp, usb_event_pin             ' I/O + 1 pin is the Serial Host USB Protection enable/disable
-                add     htmp, #1                        ' Protection enable is a one-time operation
-                drvh    htmp                            ' Enable the port
                 jmp     #host_reset                     ' Initialize host and enter main processing loop
 
 '------------------------------------------------------------------------------
