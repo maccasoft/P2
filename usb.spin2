@@ -1387,8 +1387,9 @@ utx_pre
 
                 rep     @.l1, #16 + 1
                 shr     htmp, #1        wc
-        if_nc   outnot  #(USB_BASE_PIN + 2) addpins 1   ' Bit-bang sync+preamble+idle
-                waitx   #(_CLKFREQ / _12m) + 1 - 7
+        if_nc   setq    #1
+        if_nc   outnot  dm                              ' Bit-bang sync+preamble+idle
+                waitx   #(_CLKFREQ / _12m) + 1 - 9
 .l1
 
                 dirl    dm                              ' Put smart pins into reset
