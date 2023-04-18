@@ -1162,7 +1162,7 @@ host_reset
 
                 setd    pa, #hreg_init_start            ' Reset all host common registers to startup values
                 rep     @.regloop,#hreg_init_end - hreg_init_start
-                alti    pa, #%000_011_000
+                alti    pa, #%000_111_000
                 mov     0-0, #0
 .regloop
 
