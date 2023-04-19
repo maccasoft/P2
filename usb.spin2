@@ -686,6 +686,7 @@ _ip_delay_ls_   res     1         ' Low-Speed inter-packet 4 bit-time delay
 _ip_delay_fs_   res     1         ' Full-Speed inter-packet 4 bit-time delay
 _tat_wait_ls_   res     1         ' Low-Speed turnaround 22 bit-time wait
 _tat_wait_fs_   res     1         ' Full-Speed turnaround 28 bit-time wait
+_preamble_wait_ res     1
 _1ms_           res     1         ' 1ms
 _2ms_           res     1         ' 2ms
 _suspend_wait_  res     1         ' 3ms
@@ -1387,8 +1388,9 @@ utx_pre
 
                 rep     @.l1, #16 + 1
                 shr     htmp, #1        wc
-        if_nc   outnot  #(USB_BASE_PIN + 2) addpins 1   ' Bit-bang sync+preamble+idle
-                waitx   #(_CLKFREQ / _12m) + 1 - 7
+        if_nc   setq    #1
+        if_nc   outnot  dm                              ' Bit-bang sync+preamble+idle
+                waitx   _preamble_wait_
 .l1
 
                 dirl    dm                              ' Put smart pins into reset
@@ -1542,6 +1544,9 @@ hinit_usb_timings
                 mul     _tat_wait_fs_, ##FSBTns28       ' Full-Speed turnaround 28 bit-time wait
                 shr     _tat_wait_fs_, #16      wc
                 addx    _tat_wait_fs_, #0
+                qdiv    save_sysclk,##_12m              ' Funny timing value for utx_pre
+                getqx   _preamble_wait_
+                sub     _preamble_wait_,# 9 - 1
                 qmul    save_sysclk, ##1 << 9           ' CORDIC calc for 1ms as 32,9 fixed point
                 getqx   _var_64_lower_
                 getqy   _var_64_upper_
