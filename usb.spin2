@@ -568,11 +568,8 @@ dp              long    USB_BASE_PIN + 3
 usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
 host_active_led long    57                  ' Client defines the LED pin# for host bus activity
 host_error_led  long    56                  ' Client defines the LED pin# to light on error
-kb_cur_report_p long    0
-kb_pre_report_p long    0
 hid_descr_p     long    0, 0[4]
-hid_cur_rpt_p   long    0, 0[4]
-hid_pre_rpt_p   long    0, 0[4]
+hid_report_p    long    0, 0[4]
 hub_descr_p     long    0
 urx_buff_p      long    0
 dev_desc_buff_p long    0
@@ -913,7 +910,8 @@ control_read
         if_z    jmp     #.pre_status                    ' and also end-of-data
                 mov     ptra, urx_buff_p                ' Copy DATAx in rx buffer to dest struct
                 mov     hr0, pkt_cnt
-                call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
+                cmp     ptra, pb                wz
+        if_nz   call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
                 add     stage_data, pkt_cnt             ' Update bytes received on commit
                 cmp     stage_data, total_data  wz      ' Have all asked-for bytes?
         if_z    jmp     #.pre_status                    ' Have all the data that's coming, so done
@@ -1058,12 +1056,11 @@ do_int_in
         if_z    jmp     #.post_ret
                 jmp     #.retry
 .commit
-                cmp     pkt_cnt, #0             wz
-        if_z    jmp     #.post_ret                      ' Skip copy if it's an empty packet
                 mov     ptra, urx_buff_p                ' Copy the rx buffer
                 mov     pb, hpar2                       ' to the destination buffer
-                mov     hr0, pkt_cnt
-                call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
+                mov     hr0, pkt_cnt            wz      ' Skip copy if it's an empty packet
+        if_nz   cmp     ptra, pb                wz
+        if_nz   call    #hmemcpy                        ' hmemcpy(PTRA, PB, hr0)
 .post_ret
                 mov     hpar3, pkt_cnt                  ' IN bytes actually received
 
@@ -1379,12 +1376,7 @@ DAT             ' USB Host HUB execution
 ' USB host cog initialization.
 '------------------------------------------------------------------------------
 usb_host_init
-                loc     pb, #kb_cur_report              ' Initialize buffer pointers
-                mov     kb_cur_report_p, pb
-                loc     pb, #kb_pre_report
-                mov     kb_pre_report_p, pb
-
-                loc     pb, #hid_descr
+                loc     pb, #hid_descr                  ' Initialize buffer pointers
                 mov     hid_descr_p, pb
                 add     pb, #HID_DESCR_LEN
                 mov     hid_descr_p + 1, pb
@@ -1395,27 +1387,16 @@ usb_host_init
                 add     pb, #HID_DESCR_LEN
                 mov     hid_descr_p + 4, pb
 
-                loc     pb, #hid_cur_report
-                mov     hid_cur_rpt_p, pb
+                loc     pb, #hid_report
+                mov     hid_report_p, pb
                 add     pb, #HID_IN_RPT_LEN
-                mov     hid_cur_rpt_p + 1, pb
+                mov     hid_report_p + 1, pb
                 add     pb, #HID_IN_RPT_LEN
-                mov     hid_cur_rpt_p + 2, pb
+                mov     hid_report_p + 2, pb
                 add     pb, #HID_IN_RPT_LEN
-                mov     hid_cur_rpt_p + 3, pb
+                mov     hid_report_p + 3, pb
                 add     pb, #HID_IN_RPT_LEN
-                mov     hid_cur_rpt_p + 4, pb
-
-                loc     pb, #hid_pre_report
-                mov     hid_pre_rpt_p, pb
-                add     pb, #HID_IN_RPT_LEN
-                mov     hid_pre_rpt_p + 1, pb
-                add     pb, #HID_IN_RPT_LEN
-                mov     hid_pre_rpt_p + 2, pb
-                add     pb, #HID_IN_RPT_LEN
-                mov     hid_pre_rpt_p + 3, pb
-                add     pb, #HID_IN_RPT_LEN
-                mov     hid_pre_rpt_p + 4, pb
+                mov     hid_report_p + 4, pb
 
                 loc     pb, #hub_descr
                 mov     hub_descr_p, pb
@@ -2014,7 +1995,7 @@ hset_kbdled_report
 '------------------------------------------------------------------------------
 hget_kbd_in_report
                 mov     ep_addr_pid, hkbd_ep_addr
-                mov     hpar2, kb_cur_report_p
+                mov     hpar2, urx_buff_p
                 altgb   hdev_port, #hdev_next_datax
                 getbyte hpar3, hdev_next_datax, #0
                 setword hpar3, kb_in_max_pkt, #1        ' Always ask for max report size
@@ -2053,8 +2034,9 @@ hget_kbd_in_report
 ' Compare current and previous keyboard data buffers for keypress changes.
 '------------------------------------------------------------------------------
 hkbd_compare
-                mov     ptra, kb_cur_report_p
-                mov     ptrb, kb_pre_report_p
+                mov     ptra, urx_buff_p
+                alts    hdev_port, #hid_report_p
+                mov     ptrb, hid_report_p
                 rdlong  htmp1, ptra++
                 rdlong  htmp2, ptrb++
                 cmp     htmp1, htmp2    wz
@@ -2063,20 +2045,24 @@ hkbd_compare
         if_z    cmp     htmp1, htmp2    wz
         if_z    ret
 
+                alts    hdev_port, #hid_report_p
+                mov     ptra, hid_report_p
+
                 mov     hpar1, #0
-                rdbyte  hpar2, kb_cur_report_p
-                rdbyte  htmp, kb_pre_report_p
+                rdbyte  hpar2, urx_buff_p
+                rdbyte  htmp, ptra
                 cmp     hpar2, htmp     wz
         if_nz   modc    _clr    wc
         if_nz   call    #hkbd_translate
 
 .release        modc    _set    wc
-                mov     ptra, kb_pre_report_p
+                'alts    hdev_port, #hid_report_p
+                'mov     ptra, hid_report_p
                 add     ptra, #2
                 mov     pa, #6
 .rl1            rdbyte  hpar1, ptra++   wz
         if_z    jmp     #.rl3
-                mov     ptrb, kb_cur_report_p
+                mov     ptrb, urx_buff_p
                 add     ptrb, #2
                 mov     pb, #6
 .rl2            rdbyte  htmp, ptrb++
@@ -2090,12 +2076,13 @@ hkbd_compare
                 bith    hpar3, #31
 
 .press          modc    _clr    wc
-                mov     ptra, kb_cur_report_p
+                mov     ptra, urx_buff_p
                 add     ptra, #2
                 mov     pa, #6
 .pl1            rdbyte  hpar1, ptra++   wz
         if_z    jmp     #.pl3
-                mov     ptrb, kb_pre_report_p
+                alts    hdev_port, #hid_report_p
+                mov     ptrb, hid_report_p
                 add     ptrb, #2
                 mov     pb, #6
 .pl2            rdbyte  htmp, ptrb++
@@ -2105,8 +2092,9 @@ hkbd_compare
                 call    #hkbd_translate
 .pl3            djnz    pa, #.pl1
 
-.copy           mov     ptra, kb_cur_report_p
-                mov     ptrb, kb_pre_report_p
+.copy           mov     ptra, urx_buff_p
+                alts    hdev_port, #hid_report_p
+                mov     ptrb, hid_report_p
                 rdlong  htmp, ptra++
                 wrlong  htmp, ptrb++
                 rdlong  htmp, ptra++
@@ -2169,8 +2157,7 @@ hget_gp_in_report
                 alts    hdev_port, #hdev_ep_addr
                 mov     ep_addr_pid, hdev_ep_addr
 
-                alts    hdev_port, #hid_cur_rpt_p
-                mov     hpar2, hid_cur_rpt_p
+                mov     hpar2, urx_buff_p
                 altgb   hdev_port, #hdev_next_datax
                 getbyte hpar3, hdev_next_datax, #0
                 setword hpar3, #255, #1                 ' Always ask for max report size
@@ -2198,10 +2185,9 @@ hget_gp_in_report
 ' gpPreReport buffer.
 
                 ' ----- start of block to remove
-                alts    hdev_port, #hid_cur_rpt_p
-                mov     ptra, hid_cur_rpt_p           ' Attempt to notify changes
-                alts    hdev_port, #hid_pre_rpt_p
-                mov     ptrb, hid_pre_rpt_p           ' by comparing the report bytes
+                mov     ptra, urx_buff_p                ' Attempt to notify changes
+                alts    hdev_port, #hid_report_p
+                mov     ptrb, hid_report_p              ' by comparing the report bytes
 
                 altgb   hdev_port, #hdev_type
                 getbyte htmp, hdev_type, #0
@@ -2230,8 +2216,7 @@ hid_decode
                 cmp     htmp, #hidr_end         wz
         if_nz   jmp     #.cl
 
-                alts    hdev_port, #hid_cur_rpt_p
-                mov     ptrb, hid_cur_rpt_p
+                mov     ptrb, urx_buff_p
 
                 altgb   hdev_port, #hdev_type
                 getbyte htmp, hdev_type, #0
@@ -2727,8 +2712,7 @@ hpad_translate
 '------------------------------------------------------------------------------
 hget_hub_status
                 mov     ep_addr_pid, hhub_ep_addr
-                loc     ptra, #hub_status
-                mov     hpar2, ptra
+                mov     hpar2, urx_buff_p
                 setword hpar3, hub_next_datax, #0
                 setword hpar3, #1, #1
                 call    #do_int_in
@@ -2740,12 +2724,11 @@ hget_hub_status
 .data
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
+
                 cmp     hub_next_datax, #PID_DATA0  wz
         if_z    mov     hub_next_datax, #PID_DATA1      ' Txn success, so toggle DATAx
         if_nz   mov     hub_next_datax, #PID_DATA0
-                mov     kb_max_index, hpar3             ' Save actual bytes read
-                loc     ptra, #hub_status
-                rdbyte  hub_status_chg, ptra
+                rdlong  hub_status_chg, urx_buff_p
                 debug(ubin_long(hub_status_chg))
 
                 testb   hub_status_chg, #1      wz
@@ -2773,11 +2756,10 @@ hget_hub_status
 hub_port_handler
                 mov     ep_addr_pid, hhub_ctrl_ep
                 loc     ptra, #get_port_status          ' Get HUB port status
-                loc     pb, #hub_status
+                mov     pb, urx_buff_p
                 wrword  hdev_port, ptra[wIndex]
                 call    #control_read
-                loc     ptra, #hub_status
-                rdlong  hub_port_status, ptra
+                rdlong  hub_port_status, urx_buff_p
                 debug(udec(hdev_port), ubin_long(hub_port_status))
 
                 testb   hub_port_status, #HUB_C_PORT_CONNECTION wz ' Connection change bit
@@ -2801,11 +2783,10 @@ hub_port_handler
                 call    #poll_waitx
 
                 loc     ptra, #get_port_status          ' Get HUB port status
-                loc     pb, #hub_status
+                mov     pb, urx_buff_p
                 wrword  hdev_port, ptra[wIndex]
                 call    #control_read
-                loc     ptra, #hub_status
-                rdlong  hub_port_status, ptra
+                rdlong  hub_port_status, urx_buff_p
                 testb   hub_port_status, #HUB_C_PORT_RESET wz ' Reset change bit
         if_x0   jmp     #.wait_reset
 
@@ -2911,10 +2892,9 @@ hub_port_handler
 
 .done
                 loc     ptra, #get_port_status          ' Get HUB port status
-                loc     pb, #hub_status
+                mov     pb, urx_buff_p
                 wrword  hdev_port, ptra[wIndex]
                 call    #control_read
-                loc     ptra, #hub_status
                 rdlong  hub_port_status, ptra
                 debug(udec(hdev_port), ubin_long(hub_port_status))
                 ret
@@ -3035,14 +3015,9 @@ xinp_rumble_cmd byte    $00, $08, $00
 '------------------------------------------------------------------------------
 usb_cache_start
 
-' Keyboard report buffers
-kb_cur_report   byte    0[KBD_IN_RPT_LEN]
-kb_pre_report   byte    0[KBD_IN_RPT_LEN]
-
-' Gamepad descriptor and report buffers
+' HID descriptor and report buffers
 hid_descr       byte    0[HID_DESCR_LEN * 5]
-hid_cur_report  byte    0[HID_IN_RPT_LEN * 5]
-hid_pre_report  byte    0[HID_IN_RPT_LEN * 5]
+hid_report      byte    0[HID_IN_RPT_LEN * 5]
 
 ' HUB descriptor
 hub_descr       byte    0   ' bDescLength
@@ -3053,7 +3028,6 @@ hub_descr       byte    0   ' bDescLength
                 byte    0   ' bHubContrCurrent
                 byte    0   ' DeviceRemoveable
                 byte    0   ' PortPwrCtrlMask
-hub_status      word    0[2]
 
 usb_cache_end
 
