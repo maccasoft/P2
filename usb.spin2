@@ -234,7 +234,7 @@ utx_data
                 crcnib  crc, ##USB16_POLY
                 djnz    pkt_cnt, #.read_byte
 .send_crc
-                xor     crc, ##$FFFF                    ' Final XOR, and send the calculated CRC16
+                bitnot  crc,#0 addbits 15               ' Final XOR, and send the calculated CRC16
                 getbyte utx, crc, #0
                 call    #utx_byte
                 getbyte utx, crc, #1
@@ -455,7 +455,7 @@ isr1_wait
                 testb   utx, #SOPB                 wc
         if_c    jmp     #isr1_wait
                 add     frame, #1                       ' Next frame# and check for wrap around
-                and     frame, ##$7ff
+                zerox   frame, #10
                 waitx   isrtmp1                         ' Make sure bus is idle
                 reti1
 
@@ -1314,8 +1314,8 @@ hwait_resume
 utx_pre
                 dirl    dm                              ' Put smart pins into reset
                 dirl    dp
-                wrpin   ##0, dm                         ' Disable smartpin mode
-                wrpin   ##0, dp
+                wrpin   #0, dm                          ' Disable smartpin mode
+                wrpin   #0, dp
                 drvl    dm
                 drvh    dp
 
@@ -1547,9 +1547,11 @@ hinit_usb_timings
 '------------------------------------------------------------------------------
 hparse_con_desc
                 mov     ptrb, dev_desc_buff_p
-                rdword  htmp, ptrb[4]       ' idVendor
-                rdword  hdev_id, ptrb[5]    ' idProduct
-                setword hdev_id, htmp, #1
+                'rdword htmp, ptrb[4]       ' idVendor
+                'rdword hdev_id, ptrb[5]    ' idProduct
+                'setword hdev_id, htmp, #1
+                rdlong hdev_id, ptrb[2]
+                movbyts hdev_id,#%%1032
                 rdword  hdev_bcd, ptrb[6]   ' bcdDevice
                 debug(uhex_long(hdev_id), uhex_word(hdev_bcd))
 
@@ -1802,15 +1804,10 @@ hset_config
                 jmp     #.notify_client
 .xinput
                 loc     ptra, #xinp_led_cmd             ' Turn on LED
-                cmp     hdev_port, #0       wz
-        if_nz   cmp     hdev_port, #1       wz
-        if_z    wrbyte  #$06, ptra[2]
-                cmp     hdev_port, #2       wz
-        if_z    wrbyte  #$07, ptra[2]
-                cmp     hdev_port, #3       wz
-        if_z    wrbyte  #$08, ptra[2]
-                cmp     hdev_port, #4       wz
-        if_z    wrbyte  #$09, ptra[2]
+                mov     pb,hdev_port
+                cmpsub  pb,#1 ' root device is also player 1
+                add     pb,#$06 ' LED patterns 06..09 for players 1..4
+                wrbyte  pb, ptra[2]
 
                 mov     pkt_data, #3
                 bitl    hstatus, #DATAx_TGLB
@@ -1822,15 +1819,11 @@ hset_config
                 jmp     #.notify_client
 .ps3
                 loc     ptra, #ps3_command_buff         ' Turn on LED
-                cmp     hdev_port, #0       wz
-        if_nz   cmp     hdev_port, #1       wz
-        if_z    wrbyte  #%0001_0, ptra[9]
-                cmp     hdev_port, #2       wz
-        if_z    wrbyte  #%0010_0, ptra[9]
-                cmp     hdev_port, #3       wz
-        if_z    wrbyte  #%0100_0, ptra[9]
-                cmp     hdev_port, #4       wz
-        if_z    wrbyte  #%1000_0, ptra[9]
+                mov     pb,hdev_port
+                fge     pb,#1 ' root device is also player 1
+                'fle    pb,#4
+                decod   pb
+                wrbyte  pb, ptra[9]
 
                 getbyte htmp, gp_intf_num, #0
                 loc     ptra, #set_report
@@ -2541,7 +2534,7 @@ hpad_getbits
                 and     retval, hpar2
                 ret
 .l1
-                and     retval, ##$00_FFFFFF
+                zerox   retval, #23
                 add     htmp, #3
                 rdlong  htmp2, htmp
                 sub     hpar2, #24
@@ -2742,6 +2735,12 @@ hub_port_handler
                 wrword  #HUB_C_PORT_RESET, ptra[wValue]
                 wrword  hdev_port, ptra[wIndex]
                 call    #control_write
+                
+                mov     htmp, #36                 ' Allow reset recovery time (Section 9.2.6.2)
+.wait_recover
+                mov     hctwait, _1ms_
+                call    #poll_waitx
+                djnz    htmp,#.wait_recover
 
                 testb   hub_port_status, #HUB_PORT_LOWSPEED wc
         if_c    bith    hstatus, #DWNSTRM_HUBB
@@ -2821,7 +2820,7 @@ hub_port_handler
                 jmp     #.done
 .disconnect
                 alts    hdev_port, #hdev_ep_addr
-                cmp     hkbd_ep_addr, hdev_ep_addr
+                cmp     hkbd_ep_addr, hdev_ep_addr wz
         if_z    mov     hkbd_ep_addr, #0
 
                 altsb   hdev_port, #hdev_type
