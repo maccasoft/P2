@@ -1047,9 +1047,12 @@ do_int_in
 .post_ret
                 mov     hpar3, pkt_cnt                  ' IN bytes actually received
 
-                bitl    _usb_h_ls_nco_, #14     wcz
+                testb   ep_addr_pid, #31        wc
+        if_nc   ret
+
+                bitl    _usb_h_ls_nco_, #14
                 bitl    hstatus, #DWNSTRM_HUBB
-        if_c    wxpin   _usb_h_fs_nco_, dm              ' Restore host mode and 12Mbs baud
+                wxpin   _usb_h_fs_nco_, dm              ' Restore host mode and 12Mbs baud
                 mov     max_pkt_size, #64               ' Set LS control read/write DATAx packet size
                 mov     tat_wait, _tat_wait_fs_         ' Bus turn-around time in low-speed bit periods
         _ret_   mov     ip_delay, _ip_delay_fs_         ' Inter-packet delay in low-speed bit periods
