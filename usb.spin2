@@ -1648,8 +1648,6 @@ hparse_con_desc
                 getbyte kb_interval, hr2, #3
                 getbyte kb_in_max_pkt, hr2, #0
                 mov     hkbd_ep_addr, hpar2             ' IN endpoint address
-                altd    hdev_port, #hdev_ep_addr
-                mov     hdev_ep_addr, #0
                 'debug(udec(kb_intf_num))
                 debug(uhex_long(hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(kb_in_max_pkt,kb_interval))
                 jmp     #.next_intf
@@ -1701,7 +1699,7 @@ hset_config
 '                mov     hkbd_ep_addr, #0                ' DEBUG
 '                mov     hmouse_ep_addr, #0              ' DEBUG
                 mov     htmp2, #DEV_UNKNOWN
-                alts    hdev_port, #hdev_ep_addr
+                altd    hdev_port, #hdev_ep_addr
                 cmp     hdev_ep_addr, #0        wz
         if_z    cmp     hhub_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No known device
@@ -2738,7 +2736,7 @@ hub_port_handler
                 wrword  #HUB_C_PORT_RESET, ptra[wValue]
                 wrword  hdev_port, ptra[wIndex]
                 call    #control_write
-                
+
                 mov     htmp, #36                 ' Allow reset recovery time (Section 9.2.6.2)
 .wait_recover
                 mov     hctwait, _1ms_
@@ -2822,8 +2820,9 @@ hub_port_handler
                 call    #control_write
                 jmp     #.done
 .disconnect
-                alts    hdev_port, #hdev_ep_addr
-                cmp     hkbd_ep_addr, hdev_ep_addr wz
+                altgb   hdev_port, #hdev_type
+                getbyte htmp, hdev_type, #0
+                cmp     htmp, #KB_READY         wz
         if_z    mov     hkbd_ep_addr, #0
 
                 altsb   hdev_port, #hdev_type
