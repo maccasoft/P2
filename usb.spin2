@@ -2026,12 +2026,18 @@ hkbd_compare
                 alts    hdev_port, #hid_report_p
                 mov     ptra, hid_report_p
 
-                mov     hpar1, #0
+                ' Handle modifiers
                 rdbyte  hpar2, urx_buff_p
-                rdbyte  htmp, ptra
-                cmp     hpar2, htmp     wz
-        if_nz   modc    _clr    wc
-        if_nz   call    #hkbd_translate
+                rdbyte  hr1, ptra
+                rolword hr1,hpar2,#0
+                mergew  hr1
+                mov     pa,#8
+.modloop
+                rczr    hr1     wcz ' New value in C, old value in Z
+                mov     hpar1,#$E8
+                sub     hpar1,pa
+      if_c_ne_z call    #hkbd_translate
+                djnz    pa,#.modloop
 
 .release        modc    _set    wc
                 'alts    hdev_port, #hid_report_p
