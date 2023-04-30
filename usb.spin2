@@ -528,19 +528,6 @@ host_error
                 drvl    host_error_led
                 jmp     #host_reset                     ' See if it works...
 
-'------------------------------------------------------------------------------
-' Post interrupt IN transactions at configured intervals.
-'------------------------------------------------------------------------------
-poll_kbd
-                getct   hct3
-                addct3  hct3, _8ms_                     ' Set the timer for next poll interval
-                jmp     #\hget_kbd_in_report
-
-poll_gamepad
-                getct   hct3
-                addct3  hct3, _8ms_
-                jmp     #\hget_gp_in_report
-
 ' USB commands and error codes
 cmd_data        long    0
 usb_err_code    long    ERR_NONE
@@ -1204,6 +1191,9 @@ connected
 
                 ' Fall through to idle/processing loop
 
+                cmp     hdev_port, #4           wcz
+        if_a    mov     hdev_port, #0
+
 hidle
                 rqpin   urx, dm
                 testb   urx, #SE0_RESETB        wc
@@ -1211,31 +1201,30 @@ hidle
                 pollct3                         wc
         if_nc   jmp     #.nopoll
                 getct   hct3
-                addct3  hct3, _8ms_                     ' Set the timer for next poll interval
-
-                mov     hdev_port, #0
-
-.loop
-                mov     pa, #0
-
-                cmp     hhub_ep_addr, #0        wz
-        if_nz   loc     pa, #@hget_hub_status - @usb_host_start
+                addct3  hct3, _2ms_                     ' Set the timer for next poll interval
 
                 altgb   hdev_port, #hdev_type
                 getbyte htmp, hdev_type, #0
-                cmp     htmp, #KB_READY     wz
+
+                cmp     htmp, #HUB_READY        wz
+        if_z    loc     pa, #@hget_hub_status - @usb_host_start
+        if_z    jmp     #.poll
+
+                cmp     htmp, #KB_READY         wz
         if_z    loc     pa, #@hget_kbd_in_report - @usb_host_start
-                cmp     htmp, #HID_READY    wz
-        if_nz   cmp     htmp, #PS3_READY    wz
-        if_nz   cmp     htmp, #XINPUT_READY wz
+        if_z    jmp     #.poll
+
+                cmp     htmp, #HID_READY        wz
+        if_nz   cmp     htmp, #PS3_READY        wz
+        if_nz   cmp     htmp, #XINPUT_READY     wz
         if_z    loc     pa, #@hget_gp_in_report - @usb_host_start
+        'if_z    jmp     #.poll
 
-                cmp     pa, #0              wz
-        if_nz   add     pa, hcog_base_addr
-        if_nz   call    pa
+.poll
+        if_z    add     pa, hcog_base_addr
+        if_z    call    pa
 
-                incmod  hdev_port, #4       wz,wc
-        if_nz   jmp     #.loop
+                incmod  hdev_port, #4
 
 .nopoll
                 cmp     cmd_data, #CMD_SUSPEND  wz
@@ -1890,7 +1879,10 @@ hset_config
 
                 mov     hctwait, _500ms_
                 add     hctwait, _100ms_
-                jmp     #poll_waitx                     ' Hub doesn't notify client
+                call    #poll_waitx
+
+                mov     htmp2, #HUB_READY               ' Hub ready
+                jmp     #.notify_client
 
 '------------------------------------------------------------------------------
 ' Initialize the keyboard/mouse data area to start-up values.
@@ -2996,7 +2988,7 @@ CON ' USB Host Shared constants
 ' loop and process the event IDs you're interested in.
 '------------------------------------------------------------------------------
     #0, NO_EVENT, USB_ERROR, DEV_UNKNOWN, KB_READY, M_READY, KBM_READY, HID_READY
-    XINPUT_READY, PS3_READY, DEV_DISCONNECT, DBG_DATA, M_DATA, GP_DATA
+    XINPUT_READY, PS3_READY, HUB_READY, DEV_DISCONNECT, DBG_DATA, M_DATA, GP_DATA
     CMD_SUSPEND, CMD_RESUME, CMD_RESET
 '------------------------------------------------------------------------------
 ' The CMD_* tokens are asynchronous USB commands available to the user, through
