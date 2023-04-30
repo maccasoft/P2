@@ -1640,7 +1640,7 @@ hparse_con_desc
                 getbyte kb_in_max_pkt, hr2, #0
                 mov     hkbd_ep_addr, hpar2             ' IN endpoint address
                 'debug(udec(kb_intf_num))
-                debug(uhex_long(hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(kb_in_max_pkt,kb_interval))
+                debug(uhex_long(hkbd_ep_addr,hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(kb_in_max_pkt,kb_interval))
                 jmp     #.next_intf
 .gamepad
                 mov     htmp, hkbd_ep_addr
@@ -1692,6 +1692,7 @@ hset_config
                 mov     htmp2, #DEV_UNKNOWN
                 altd    hdev_port, #hdev_ep_addr
                 cmp     0-0, #0                 wz
+        if_z    cmp     hkbd_ep_addr, #0        wz
         if_z    cmp     hhub_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No known device
 .set_config
