@@ -1,6 +1,6 @@
 {
     USB Keyboard and Gamepad Driver
-    Copyright (c) 2022 by Marco Maccaferri <macca@maccasoft.com>
+    Copyright (c) 2022-23 by Marco Maccaferri <macca@maccasoft.com>
     Based on 1CogKbM code by Garry Jordan ("garryj")
     with code portions by Ada Gottensträter
 
@@ -14,13 +14,15 @@ CON
     _CLKFREQ = 160_000_000
 
     USB_BASE_PIN  = 40
+    ACTIVITY_LED  = 57
+    ERROR_LED     = 56
 
 DAT             ' Startup
                 org     $000
 
                 asmclk
-                drvl    #56
-                drvl    #57
+                drvl    #ACTIVITY_LED
+                drvl    #ERROR_LED
 
                 coginit #0, ##@usb_host_start
 
@@ -536,8 +538,8 @@ usb_err_code    long    ERR_NONE
 dm              long    USB_BASE_PIN + 2    ' Client defines the basepin for four consecutive USB port pins
 dp              long    USB_BASE_PIN + 3
 usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
-host_active_led long    57                  ' Client defines the LED pin# for host bus activity
-host_error_led  long    56                  ' Client defines the LED pin# to light on error
+host_active_led long    ACTIVITY_LED        ' Client defines the LED pin# for host bus activity
+host_error_led  long    ERROR_LED           ' Client defines the LED pin# to light on error
 hid_descr_p     long    0, 0[4]
 hid_report_p    long    0, 0[4]
 hub_descr_p     long    0
@@ -1204,7 +1206,7 @@ hidle
                 addct3  hct3, _2ms_                     ' Set the timer for next poll interval
 
                 altgb   hdev_port, #hdev_type
-                getbyte htmp, hdev_type, #0
+                getbyte htmp
 
                 cmp     htmp, #HUB_READY        wz
         if_z    loc     pa, #@hget_hub_status - @usb_host_start
@@ -1650,7 +1652,7 @@ hparse_con_desc
                 getbyte gp_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
                 getbyte gp_interval, hr2, #3
                 altd    hdev_port, #hdev_ep_addr
-                mov     hdev_ep_addr, hpar2             ' IN endpoint address
+                mov     0-0, hpar2                      ' IN endpoint address
                 mov     hdev_out_addr, hpar3            ' OUT endpoint address
                 'debug(udec(gp_intf_num))
                 debug(uhex_long(hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(gp_interval),uhex_long(hdev_out_addr))
@@ -1689,7 +1691,7 @@ hset_config
 '                mov     hmouse_ep_addr, #0              ' DEBUG
                 mov     htmp2, #DEV_UNKNOWN
                 altd    hdev_port, #hdev_ep_addr
-                cmp     hdev_ep_addr, #0        wz
+                cmp     0-0, #0                 wz
         if_z    cmp     hhub_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No known device
 .set_config
@@ -1745,10 +1747,10 @@ hset_config
                 jmp     #.notify_client
 .gamepad_config
                 altd    hdev_port, #hdev_ep_addr
-                cmp     hdev_ep_addr, #0        wz
+                cmp     0-0, #0                 wz
         if_z    jmp     #.hub_config                    ' No gamepad
                 alts    hdev_port, #hdev_ep_addr
-                mov     htmp, hdev_ep_addr
+                mov     htmp, 0-0
                 and     htmp, ##ADDR_MASK
                 mov     htmp1, ep_addr_pid
                 and     htmp1, ##ADDR_MASK
@@ -1756,12 +1758,12 @@ hset_config
         if_nz   jmp     #.hub_config                    ' No gamepad
 
                 alts    hdev_port, #hdev_ep_addr
-                mov     ep_addr_pid, hdev_ep_addr
+                mov     ep_addr_pid, 0-0
                 call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
                 testb   hub_port_status, #HUB_PORT_LOWSPEED wc
                 bitc    ep_addr_pid, #31
                 altd    hdev_port, #hdev_ep_addr
-                mov     hdev_ep_addr, ep_addr_pid
+                mov     0-0, ep_addr_pid
                 mov     ep_addr_pid, hdev_out_addr  wz
         if_nz   setbyte ep_addr_pid, #PID_OUT, #0
         if_nz   call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
@@ -1778,16 +1780,16 @@ hset_config
                 loc     ptra, #get_desc                 ' Get HID descriptor
                 wrword  #$FF, ptra[wLength]
                 alts    hdev_port, #hid_descr_p
-                mov     pb, hid_descr_p
+                mov     pb, 0-0
                 call    #control_read
                 cmp     retval, #PID_ACK        wz
         if_nz   altd    hdev_port, #hdev_ep_addr
-        if_nz   mov     hdev_ep_addr, #0
+        if_nz   mov     0-0, #0
         if_nz   jmp     #.notify_client
                 altd    hdev_port, #gp_descr_len
-                mov     gp_descr_len, total_data
+                mov     0-0, total_data
                 alts    hdev_port, #hid_descr_p
-                mov     pb, hid_descr_p
+                mov     pb, 0-0
                 debug(uhex(pb),uhex_byte_array(pb,total_data))
 
                 mov     htmp2, #HID_READY               ' Standard gamepad
@@ -1832,7 +1834,7 @@ hset_config
                 call    #control_write
                 cmp     retval, #PID_ACK    wz
         if_nz   altd    hdev_port, #hdev_ep_addr
-        if_nz   mov     hdev_ep_addr, #0
+        if_nz   mov     0-0, #0
         if_nz   jmp     #.notify_client
 
                 mov     htmp2, #PS3_READY               ' PS3 gamepad ready
@@ -1840,7 +1842,7 @@ hset_config
 
 .notify_client
                 altsb   hdev_port, #hdev_type
-                setbyte hdev_type, htmp2, #0           ' Save device ready
+                setbyte htmp2                           ' Save device ready
                 debug(uhex_long(hdev_type,hdev_type+1))
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
 
@@ -1965,7 +1967,7 @@ hget_kbd_in_report
                 mov     ep_addr_pid, hkbd_ep_addr
                 mov     hpar2, urx_buff_p
                 altgb   hdev_port, #hdev_next_datax
-                getbyte hpar3, hdev_next_datax, #0
+                getbyte hpar3
                 setword hpar3, kb_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
@@ -1978,12 +1980,12 @@ hget_kbd_in_report
         if_z    ret                                     ' Ignore an empty DATAx packet
 
                 altgb   hdev_port, #hdev_next_datax     ' Txn success, so toggle DATAx
-                getbyte htmp, hdev_next_datax, #0       ' |
+                getbyte htmp                            ' |
                 cmp     htmp, #PID_DATA0        wz      ' |
         if_z    mov     htmp, #PID_DATA1                ' |
         if_nz   mov     htmp, #PID_DATA0                ' |
                 altsb   hdev_port, #hdev_next_datax     ' |
-                setbyte hdev_next_datax, htmp, #0       ' |
+                setbyte htmp                            ' |
 
                 mov     kb_max_index, hpar3             ' Save actual bytes read
                 call    #hkbd_compare
@@ -2004,7 +2006,7 @@ hget_kbd_in_report
 hkbd_compare
                 mov     ptra, urx_buff_p
                 alts    hdev_port, #hid_report_p
-                mov     ptrb, hid_report_p
+                mov     ptrb, 0-0
                 rdlong  htmp1, ptra++
                 rdlong  htmp2, ptrb++
                 cmp     htmp1, htmp2    wz
@@ -2014,7 +2016,7 @@ hkbd_compare
         if_z    ret
 
                 alts    hdev_port, #hid_report_p
-                mov     ptra, hid_report_p
+                mov     ptra, 0-0
 
                 mov     hpar1, #0
                 rdbyte  hpar2, urx_buff_p
@@ -2025,7 +2027,7 @@ hkbd_compare
 
 .release        modc    _set    wc
                 'alts    hdev_port, #hid_report_p
-                'mov     ptra, hid_report_p
+                'mov     ptra, 0-0
                 add     ptra, #2
                 mov     pa, #6
 .rl1            rdbyte  hpar1, ptra++   wz
@@ -2050,7 +2052,7 @@ hkbd_compare
 .pl1            rdbyte  hpar1, ptra++   wz
         if_z    jmp     #.pl3
                 alts    hdev_port, #hid_report_p
-                mov     ptrb, hid_report_p
+                mov     ptrb, 0-0
                 add     ptrb, #2
                 mov     pb, #6
 .pl2            rdbyte  htmp, ptrb++
@@ -2062,7 +2064,7 @@ hkbd_compare
 
 .copy           mov     ptra, urx_buff_p
                 alts    hdev_port, #hid_report_p
-                mov     ptrb, hid_report_p
+                mov     ptrb, 0-0
                 rdlong  htmp, ptra++
                 wrlong  htmp, ptrb++
                 rdlong  htmp, ptra++
@@ -2123,11 +2125,11 @@ kbd_table ' Index is the key scan code
 '------------------------------------------------------------------------------
 hget_gp_in_report
                 alts    hdev_port, #hdev_ep_addr
-                mov     ep_addr_pid, hdev_ep_addr
+                mov     ep_addr_pid, 0-0
 
                 mov     hpar2, urx_buff_p
                 altgb   hdev_port, #hdev_next_datax
-                getbyte hpar3, hdev_next_datax, #0
+                getbyte hpar3
                 setword hpar3, #255, #1                 ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
@@ -2140,12 +2142,12 @@ hget_gp_in_report
         if_z    ret                                     ' Ignore an empty DATAx packet
 
                 altgb   hdev_port, #hdev_next_datax     ' Txn success, so toggle DATAx
-                getbyte htmp, hdev_next_datax, #0       ' |
+                getbyte htmp                            ' |
                 cmp     htmp, #PID_DATA0        wz      ' |
         if_z    mov     htmp, #PID_DATA1                ' |
         if_nz   mov     htmp, #PID_DATA0                ' |
                 altsb   hdev_port, #hdev_next_datax     ' |
-                setbyte hdev_next_datax, htmp, #0       ' |
+                setbyte htmp                            ' |
 
 ' Note: the following code compares the current and previous reports
 ' and process the data if there are changes to ease the debug output.
@@ -2155,10 +2157,10 @@ hget_gp_in_report
                 ' ----- start of block to remove
                 mov     ptra, urx_buff_p                ' Attempt to notify changes
                 alts    hdev_port, #hid_report_p
-                mov     ptrb, hid_report_p              ' by comparing the report bytes
+                mov     ptrb, 0-0                       ' by comparing the report bytes
 
                 altgb   hdev_port, #hdev_type
-                getbyte htmp, hdev_type, #0
+                getbyte htmp
                 cmp     htmp, #PS3_READY  wz
         if_e    mov     hpar3, #10                      ' Only first 10 bytes are significant for PS3 report
 
@@ -2187,7 +2189,7 @@ hid_decode
                 mov     ptrb, urx_buff_p
 
                 altgb   hdev_port, #hdev_type
-                getbyte htmp, hdev_type, #0
+                getbyte htmp
                 cmp     htmp, #XINPUT_READY     wz
         if_z    jmp     #hpad_xinput
                 cmp     htmp, #PS3_READY        wz
@@ -2200,9 +2202,9 @@ hid_decode
 '------------------------------------------------------------------------------
 hpad_hid
                 alts    hdev_port, #hid_descr_p
-                mov     ptra, hid_descr_p
+                mov     ptra, 0-0
                 alts    hdev_port, #gp_descr_len
-                mov     pa, gp_descr_len
+                mov     pa, 0-0
                 debug(udec(hdev_port), " HID ", uhex_long(ep_addr_pid),uhex_long(ptra),udec(pa))
                 mov     hidr_usage, ##$76543210
 
@@ -2813,14 +2815,14 @@ hub_port_handler
                 jmp     #.done
 .disconnect
                 altgb   hdev_port, #hdev_type
-                getbyte htmp, hdev_type, #0
+                getbyte htmp
                 cmp     htmp, #KB_READY         wz
         if_z    mov     hkbd_ep_addr, #0
 
                 altsb   hdev_port, #hdev_type
-                setbyte hdev_type, #0, #0
+                setbyte #0
                 altd    hdev_port, #hdev_ep_addr
-                mov     hdev_ep_addr, #0
+                mov     0-0, #0
 
 .done
                 bitl    _usb_h_ls_nco_, #14     wcz
