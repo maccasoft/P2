@@ -2041,11 +2041,7 @@ hget_kbd_in_report
                 setword hpar3, kb_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
-        if_z    jmp     #.data
-                cmp     retval, #PID_NAK        wz
-        if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
-                ret                                     ' No auto-repeat action
-.data
+        if_nz   ret                                     ' No ACK, ignore
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
 
@@ -2211,11 +2207,7 @@ hget_mouse_in_report
                 setword hpar3, ms_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
-        if_z    jmp     #.data
-                cmp     retval, #PID_NAK        wz
-        if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
-                ret                                     ' No auto-repeat action
-.data
+        if_nz   ret                                     ' No ACK, ignore
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
 
@@ -2256,11 +2248,7 @@ hget_gp_in_report
                 setword hpar3, #255, #1                 ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
-        if_z    jmp     #.data
-                cmp     retval, #PID_NAK        wz
-        if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
-                ret
-.data
+        if_nz   ret                                     ' No ACK, ignore
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
 
