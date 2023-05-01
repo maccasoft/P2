@@ -556,6 +556,8 @@ hub_intf_num    long    0
 hub_next_datax  long    0
 hub_status_chg  long    0
 hub_port_status long    0
+ms_intf_num     long    0
+ms_in_max_pkt   long    0
 kb_intf_num     long    0
 kb_interval     long    0
 kb_in_max_pkt   long    0
@@ -631,6 +633,7 @@ hsearch_key     long    0         ' Descriptor type to search for in the config 
 hnext_desc      long    0         ' Offset from the config descriptor start address to the next descriptor in the chain
 hhub_ctrl_ep    long    0         ' Hub control endpoint address
 hhub_ep_addr    long    0         ' Hub interface endpoint address
+hmouse_ep_addr  long    0         ' Mouse interface endpoint address
 hkbd_ep_addr    long    0         ' Keyboard interface endpoint address
 hkbd_poll_cnt   long    0         ' Poll interval counter used for key auto-repeat
 hkbd_ledstates  long    0         ' Off/on state of keyboard LEDs
@@ -1216,6 +1219,10 @@ hidle
         if_z    loc     pa, #@hget_kbd_in_report - @usb_host_start
         if_z    jmp     #.poll
 
+                cmp     htmp, #M_READY          wz
+        if_z    loc     pa, #@hget_mouse_in_report - @usb_host_start
+        if_z    jmp     #.poll
+
                 cmp     htmp, #HID_READY        wz
         if_nz   cmp     htmp, #PS3_READY        wz
         if_nz   cmp     htmp, #XINPUT_READY     wz
@@ -1632,7 +1639,7 @@ hparse_con_desc
         if_nz   jmp     #.next_intf                     ' No BOOT subclass, ignore
 .keyboard
                 cmp     hdev_protocol, #INTF_PROTO_KBD      wz
-        if_nz   jmp     #.next_intf                     ' No Keyboard
+        if_nz   jmp     #.mouse                         ' No Keyboard
                 cmp     hkbd_ep_addr, #0    wz
         if_nz   jmp     #.next_intf
                 getbyte kb_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
@@ -1642,8 +1649,26 @@ hparse_con_desc
                 'debug(udec(kb_intf_num))
                 debug(uhex_long(hkbd_ep_addr,hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(kb_in_max_pkt,kb_interval))
                 jmp     #.next_intf
+.mouse
+                cmp     hdev_protocol, #INTF_PROTO_MOUSE    wz
+        if_nz   jmp     #.next_intf                     ' No Mouse
+                cmp     hmouse_ep_addr, #0      wz
+        if_nz   jmp     #.next_intf
+                getbyte ms_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
+                'getbyte ms_interval, hr2, #3
+                getbyte ms_in_max_pkt, hr2, #0
+                mov     hmouse_ep_addr, hpar2           ' IN endpoint address
+                'debug(udec(kb_intf_num))
+                debug(uhex_long(hmouse_ep_addr,hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(kb_in_max_pkt,kb_interval))
+                jmp     #.next_intf
 .gamepad
                 mov     htmp, hkbd_ep_addr
+                and     htmp, ##ADDR_MASK
+                mov     htmp1, hpar2
+                and     htmp1, ##ADDR_MASK
+                cmp     htmp, htmp1             wz
+        if_z    jmp     #.next_intf
+                mov     htmp, hmouse_ep_addr
                 and     htmp, ##ADDR_MASK
                 mov     htmp1, hpar2
                 and     htmp1, ##ADDR_MASK
@@ -1693,6 +1718,7 @@ hset_config
                 altd    hdev_port, #hdev_ep_addr
                 cmp     0-0, #0                 wz
         if_z    cmp     hkbd_ep_addr, #0        wz
+        if_z    cmp     hmouse_ep_addr, #0      wz
         if_z    cmp     hhub_ep_addr, #0        wz
         if_z    jmp     #.notify_client                 ' No known device
 .set_config
@@ -1708,13 +1734,13 @@ hset_config
         if_nz   ret
 .kbd_config
                 cmp     hkbd_ep_addr, #0        wz
-        if_z    jmp     #.gamepad_config                ' No keyboard
+        if_z    jmp     #.mouse_config                  ' No keyboard
                 mov     htmp, hkbd_ep_addr
                 and     htmp, ##ADDR_MASK
                 mov     htmp1, ep_addr_pid
                 and     htmp1, ##ADDR_MASK
                 cmp     htmp, htmp1             wz
-        if_nz   jmp     #.gamepad_config                ' No keyboard
+        if_nz   jmp     #.mouse_config                  ' No keyboard
 
                 getbyte htmp, kb_intf_num, #0
                 loc     ptra, #set_protocol
@@ -1745,6 +1771,39 @@ hset_config
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
                 mov     htmp2, #KB_READY                ' Keyboard interface configured
+                jmp     #.notify_client
+.mouse_config
+                cmp     hmouse_ep_addr, #0        wz
+        if_z    jmp     #.gamepad_config                ' No mouse, setup gamepad, if detected
+                mov     htmp, hmouse_ep_addr
+                and     htmp, ##ADDR_MASK
+                mov     htmp1, ep_addr_pid
+                and     htmp1, ##ADDR_MASK
+                cmp     htmp, htmp1             wz
+        if_nz   jmp     #.gamepad_config                ' No mouse, setup gamepad, if detected
+
+                getbyte htmp, ms_intf_num, #0
+                loc     ptra, #set_protocol
+                wrword  #BOOT_PROTOCOL, ptra[wValue]
+                wrword  htmp, ptra[wIndex]
+                mov     pb, #0                          ' SetProtocol() has no data stage
+                call    #control_write
+                cmp     retval, #PID_ACK        wz
+        if_nz   mov     hmouse_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                mov     hpar1, #0                       ' SetIdle() duration 0 = indefinite
+                getbyte hpar2, kb_intf_num, #0
+                call    #hset_idle
+                cmp     retval, #PID_ACK        wz
+        if_nz   mov     hmouse_ep_addr, #0
+        if_nz   jmp     #.notify_client
+                mov     ep_addr_pid, hmouse_ep_addr
+                call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
+                testb   hub_port_status, #HUB_PORT_LOWSPEED wc
+                bitc    ep_addr_pid, #31
+                mov     hmouse_ep_addr, ep_addr_pid
+                mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
+                mov     htmp2, #M_READY                 ' Mouse interface configured
                 jmp     #.notify_client
 .gamepad_config
                 altd    hdev_port, #hdev_ep_addr
@@ -2023,10 +2082,10 @@ hkbd_compare
                 rdbyte  hpar2, urx_buff_p
                 rdbyte  htmp, ptra
                 cmp     hpar2, htmp     wz
-        if_nz   modc    _clr    wc
+        if_nz   modc    _clr            wc
         if_nz   call    #hkbd_translate
 
-.release        modc    _set    wc
+.release        modc    _set            wc
                 'alts    hdev_port, #hid_report_p
                 'mov     ptra, 0-0
                 add     ptra, #2
@@ -2094,13 +2153,14 @@ hkbd_translate
                 loc     pb, #kbd_table
                 add     pb, htmp
                 rdbyte  htmp, pb
-
-                shl     hpar1, #8
+        if_c    jmp     #.l1
+                debug(udec(hdev_port)," KEYBOARD PRESS scancode=", uhex_byte_(hpar1), ", key: ",uhex_byte_(htmp), ", mod: ",ubin_byte_(hpar2))
+        if_nc   jmp     #.l2
+.l1             debug(udec(hdev_port)," KEYBOARD REL   scancode=", uhex_byte_(hpar1), ", key: ",uhex_byte_(htmp), ", mod: ",ubin_byte_(hpar2))
+.l2             shl     hpar1, #8
                 setbyte hpar1, htmp, #0
                 setbyte hpar1, hpar2, #2
-                bitc    hpar1, #31
-                debug(udec(hdev_port),uhex_long(hpar1))
-                ret
+        _ret_   bitc    hpar1, #31
 
 kbd_table ' Index is the key scan code
           {$00} word    $0000, $0000, $0000, $0000 ' $03
@@ -2117,6 +2177,49 @@ kbd_table ' Index is the key scan code
           {$50} word    $0000, $0000, $0000, $0000, $2F2F, $2A2A, $2D2D, $2B2B     ' $57: Left Down Up KpdNumLck Kp/ Kp* Kp- Kp+
           {$58} word    $0D0D, $3131, $3232, $3333, $5034, $3535, $3636, $3737     ' $5f: KpEnter Kp1_End Kp2_Down Kp3_PgDn Kp4_Left Kp5 Kp6_Right Kp7_Home
           {$60} word    $3838, $3939, $3030, $7F2E, $5C7C, $0000                   ' $65: Kp8_Up Kp9_PgUp Kp0_Ins Kp._Del Kp\_| App
+
+'------------------------------------------------------------------------------
+' Execute an IN interrupt transaction to poll for mouse activity.
+'------------------------------------------------------------------------------
+' On entry:
+' On exit:
+'------------------------------------------------------------------------------
+hget_mouse_in_report
+                mov     ep_addr_pid, hmouse_ep_addr
+                mov     hpar2, urx_buff_p
+                altgb   hdev_port, #hdev_next_datax
+                getbyte hpar3
+                setword hpar3, ms_in_max_pkt, #1        ' Always ask for max report size
+                call    #do_int_in
+                cmp     retval, #PID_ACK        wz
+        if_z    jmp     #.data
+                cmp     retval, #PID_NAK        wz
+        if_nz   jmp     #host_error                     ' Something other than ACK/NAK, so likely fatal
+                ret                                     ' No auto-repeat action
+.data
+                cmp     hpar3, #0               wz
+        if_z    ret                                     ' Ignore an empty DATAx packet
+
+                altgb   hdev_port, #hdev_next_datax     ' Txn success, so toggle DATAx
+                getbyte htmp                            ' |
+                cmp     htmp, #PID_DATA0        wz      ' |
+        if_z    mov     htmp, #PID_DATA1                ' |
+        if_nz   mov     htmp, #PID_DATA0                ' |
+                altsb   hdev_port, #hdev_next_datax     ' |
+                setbyte htmp                            ' |
+
+                mov     ptra, urx_buff_p
+                rdbyte  hr0, ptra++                     ' Button flags
+                rdbyte  hr1, ptra++                     ' X direction and velocity is 8-bit signed
+                signx   hr1, #7
+                rdbyte  hr2, ptra++                     ' Y direction and velocity is 8-bit signed
+                signx   hr2, #7
+                cmp     hpar3, #4               wz      ' Very few mice send +/- scroll wheel data in boot protocol
+        if_z    rdbyte  hr3, ptra
+        if_z    signx   hr3, #7                         ' If it's there, use it
+        if_nz   mov     hr3, #0
+                debug(udec(hdev_port)," MOUSE btn=", ubin_byte_(hr0), ", X: ",sdec_(hr1), ", Y: ",sdec_(hr2), ", W: ",sdec_(hr3))
+                ret
 
 '------------------------------------------------------------------------------
 ' Execute an IN interrupt transaction to poll for gamepad activity.
@@ -2818,7 +2921,11 @@ hub_port_handler
                 altgb   hdev_port, #hdev_type
                 getbyte htmp
                 cmp     htmp, #KB_READY         wz
+        if_nz   cmp     htmp, #KBM_READY        wz
         if_z    mov     hkbd_ep_addr, #0
+                cmp     htmp, #M_READY          wz
+        if_nz   cmp     htmp, #KBM_READY        wz
+        if_z    mov     hmouse_ep_addr, #0
 
                 altsb   hdev_port, #hdev_type
                 setbyte #0
