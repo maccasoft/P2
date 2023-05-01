@@ -634,6 +634,7 @@ hnext_desc      long    0         ' Offset from the config descriptor start addr
 hhub_ctrl_ep    long    0         ' Hub control endpoint address
 hhub_ep_addr    long    0         ' Hub interface endpoint address
 hmouse_ep_addr  long    0         ' Mouse interface endpoint address
+hkbd_ctrl_ep    long    0         ' Keyboard control endpoint address
 hkbd_ep_addr    long    0         ' Keyboard interface endpoint address
 hkbd_poll_cnt   long    0         ' Poll interval counter used for key auto-repeat
 hkbd_ledstates  long    0         ' Off/on state of keyboard LEDs
@@ -946,6 +947,10 @@ control_read
 '     more specific USB operation error code.
 '------------------------------------------------------------------------------
 control_write
+                testb   ep_addr_pid, #31        wc
+        if_c    bith    hstatus, #DWNSTRM_HUBB
+        if_c    bith    _usb_h_ls_nco_, #14
+
                 mov     hpar1, ep_addr_pid
                 mov     hpar2, ptra
                 mov     hpar3, pb
@@ -955,7 +960,7 @@ control_write
                 rdword  total_data, ptra[wLength]       ' Get the size of the data stage from the SETUP struct
                 call    #txn_setup                      ' SETUP logic is the same for both control reads and writes
                 cmp     retval, #PID_ACK        wz
-        if_nz   ret                                     ' Back to caller to handle error
+        if_nz   jmp     #dwnstream_reset                ' Back to caller to handle error
                 cmp     total_data, #0          wz
         if_z    jmp     #pre_status_in                  ' No data, so directly to status stage
                 mov     stage_data, #0                  ' Prepare for data stage
@@ -975,7 +980,7 @@ control_write
                 call    #retry_wait                     ' Wait a bit before retry
                 cmp     retval, #ERR_TXN_RETRY  wz      ' Out of !NAK retries?
         if_nz   jmp     #.out_retry
-                ret                                     ' Caller must handle transfer retirement
+                jmp     #dwnstream_reset                ' Caller must handle transfer retirement
 .commit
                 mov     pb, ptra                        ' Save the current buffer/struct location
                 add     stage_data, pkt_data
@@ -990,13 +995,13 @@ pre_status_in
                 call    #txn_in
                 cmp     retval, #PID_ACK        wz      ' ACK says a DATA1 packet was received
         if_z    cmp     pkt_data, #0            wz      ' DEBUG: should never fail if the function is USB compliant?
-        if_z    ret                                     ' Control Write finished
+        if_z    jmp     #dwnstream_reset                ' Control Write finished
                 cmp     retval, #PID_STALL      wz      ' STALL needs to go to the caller for resolution
-        if_z    ret
+        if_z    jmp     #dwnstream_reset
                 call    #retry_wait                     ' NAK or bus error, so delay a bit
                 cmp     retval, #ERR_TXN_RETRY  wz
         if_nz   jmp     #.status_retry
-                ret                                     ' Caller must handle transfer retirement
+'                ret                                     ' Caller must handle transfer retirement
 
 '------------------------------------------------------------------------------
 ' Execute an IN interrupt transaction.
@@ -1039,13 +1044,16 @@ do_int_in
 .post_ret
                 mov     hpar3, pkt_cnt                  ' IN bytes actually received
 
+'------------------------------------------------------------------------------
+' Resets the downstream hub port to FS
+'------------------------------------------------------------------------------
+dwnstream_reset
                 testb   ep_addr_pid, #31        wc
-        if_nc   ret
-
+        if_nc   ret                                     ' No LS device, reset not needed
                 bitl    _usb_h_ls_nco_, #14
                 bitl    hstatus, #DWNSTRM_HUBB
                 wxpin   _usb_h_fs_nco_, dm              ' Restore host mode and 12Mbs baud
-                mov     max_pkt_size, #64               ' Set LS control read/write DATAx packet size
+                mov     max_pkt_size, #64               ' Set FS control read/write DATAx packet size
                 mov     tat_wait, _tat_wait_fs_         ' Bus turn-around time in low-speed bit periods
         _ret_   mov     ip_delay, _ip_delay_fs_         ' Inter-packet delay in low-speed bit periods
 
@@ -1712,8 +1720,6 @@ hparse_con_desc
 ' On exit:
 '------------------------------------------------------------------------------
 hset_config
-'                mov     hkbd_ep_addr, #0                ' DEBUG
-'                mov     hmouse_ep_addr, #0              ' DEBUG
                 mov     htmp2, #DEV_UNKNOWN
                 altd    hdev_port, #hdev_ep_addr
                 cmp     0-0, #0                 wz
@@ -1759,6 +1765,8 @@ hset_config
         if_nz   jmp     #.notify_client
                 mov     hctwait, _2ms_
                 call    #poll_waitx
+                mov     kb_led_states, #LED_NUMLKF
+                mov     hkbd_ledstates, kb_led_states
                 call    #hset_kbdled_report
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hkbd_ep_addr, #0
@@ -1768,6 +1776,8 @@ hset_config
                 testb   hub_port_status, #HUB_PORT_LOWSPEED wc
                 bitc    ep_addr_pid, #31
                 mov     hkbd_ep_addr, ep_addr_pid
+                mov     hkbd_ctrl_ep, hctrl_ep_addr     ' CONTROL endpoint address
+                bitc    hkbd_ctrl_ep, #31
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
                 mov     htmp2, #KB_READY                ' Keyboard interface configured
@@ -2054,11 +2064,8 @@ hget_kbd_in_report
                 cmp     hkbd_ledstates, htmp    wz
         if_z    ret                                     ' No toggle key indicator changes, so we're done
                 mov     kb_led_states, hkbd_ledstates   ' Update toggle key indicator states
-                mov     ep_addr_pid, hctrl_ep_addr
-                call    #hset_kbdled_report
-                cmp     retval, #PID_ACK        wz
-        if_nz   jmp     #host_error                     ' FIXME: on !ACK try to recover instead of fatal error
-                ret
+                mov     ep_addr_pid, hkbd_ctrl_ep
+                jmp     #hset_kbdled_report             ' Set report and ignore errors
 
 '------------------------------------------------------------------------------
 ' Compare current and previous keyboard data buffers for keypress changes.
@@ -2141,17 +2148,28 @@ hkbd_compare
 '       c - pressed (0) or released (1) flag
 ' On exit:
 '   hpar1 - bit     31 = 0 pressed, 1 released
+'               27..24 = led state
 '               23..16 = key modifiers state
 '                15..8 = scancode
 '                 7..0 = ASCII key code (or 0 if none)
 '------------------------------------------------------------------------------
 hkbd_translate
+                cmp     hpar1, #$39         wz
+  if_z_and_nc   bitnot  hkbd_ledstates, #LED_CAPSLKB
+                cmp     hpar1, #$53         wz
+  if_z_and_nc   bitnot  hkbd_ledstates, #LED_NUMLKB
+                cmp     hpar1, #$47         wz
+  if_z_and_nc   bitnot  hkbd_ledstates, #LED_SCRLKB
+
                 mov     htmp, hpar1
                 shl     htmp, #1
-                test    hpar2, #KEYS_SHIFT  wz  ' SHIFT
-        if_nz   add     htmp, #1
                 loc     pb, #kbd_table
                 add     pb, htmp
+                testb   hpar2, #LEFT_SHIFTB          wz
+                testb   hpar2, #RIGHT_SHIFTB         orz
+                testb   hkbd_ledstates, #LED_CAPSLKB xorz
+        if_x1   add     pb, #1
+
                 rdbyte  htmp, pb
         if_c    jmp     #.l1
                 debug(udec(hdev_port)," KEYBOARD PRESS scancode=", uhex_byte_(hpar1), ", key: ",uhex_byte_(htmp), ", mod: ",ubin_byte_(hpar2))
@@ -2160,6 +2178,7 @@ hkbd_translate
 .l2             shl     hpar1, #8
                 setbyte hpar1, htmp, #0
                 setbyte hpar1, hpar2, #2
+                setnib  hpar1, hkbd_ledstates, #6
         _ret_   bitc    hpar1, #31
 
 kbd_table ' Index is the key scan code
@@ -2923,6 +2942,9 @@ hub_port_handler
                 cmp     htmp, #KB_READY         wz
         if_nz   cmp     htmp, #KBM_READY        wz
         if_z    mov     hkbd_ep_addr, #0
+        if_z    mov     hkbd_ctrl_ep, #0
+        if_z    mov     kb_led_states, #0
+        if_z    mov     hkbd_ledstates, kb_led_states
                 cmp     htmp, #M_READY          wz
         if_nz   cmp     htmp, #KBM_READY        wz
         if_z    mov     hmouse_ep_addr, #0
