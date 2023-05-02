@@ -2472,6 +2472,7 @@ hpad_ps3
                 mov     hpar2, #19
                 call    #hpad_getbits
 
+                setbyte hidr_flags,#13,#0
                 testb   retval, #12     wc  ' A
                 bitc    hidr_buttons, #0
                 testb   retval, #13     wc  ' B
