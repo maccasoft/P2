@@ -1667,7 +1667,7 @@ hparse_con_desc
                 getbyte ms_in_max_pkt, hr2, #0
                 mov     hmouse_ep_addr, hpar2           ' IN endpoint address
                 'debug(udec(kb_intf_num))
-                debug(uhex_long(hmouse_ep_addr,hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(kb_in_max_pkt,kb_interval))
+                debug(uhex_long(hmouse_ep_addr,hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(ms_in_max_pkt))
                 jmp     #.next_intf
 .gamepad
                 mov     htmp, hkbd_ep_addr
@@ -2081,12 +2081,19 @@ hkbd_compare
                 alts    hdev_port, #hid_report_p
                 mov     ptra, 0-0
 
-                mov     hpar1, #0
+                mov     hpar1, #0               ' Handle modifiers
                 rdbyte  hpar2, urx_buff_p
-                rdbyte  htmp, ptra
-                cmp     hpar2, htmp     wz
-        if_nz   modc    _clr            wc
-        if_nz   call    #hkbd_translate
+                rdbyte  htmp1, ptra
+                rolword htmp1, hpar2, #0
+                mergew  htmp1
+                mov     htmp, #0
+                mov     pa, #8
+.modloop
+                rczr    htmp1           wcz     ' New value in C, old value in Z
+                mov     hpar1, #$E8
+                sub     hpar1, pa
+   if_c_ne_z    call    #hkbd_translate
+                djnz    pa, #.modloop
 
 .release        modc    _set            wc
                 'alts    hdev_port, #hid_report_p
@@ -2143,19 +2150,25 @@ hkbd_compare
 '   hpar2 - key modifiers state
 '       c - pressed (0) or released (1) flag
 ' On exit:
-'   hpar1 - bit     31 = 0 pressed, 1 released
-'               27..24 = led state
-'               23..16 = key modifiers state
-'                15..8 = scancode
-'                 7..0 = ASCII key code (or 0 if none)
+'   hr0 - bit     31 = 0 pressed, 1 released
+'             27..24 = led state
+'             23..16 = key modifiers state
+'              15..8 = scancode
+'               7..0 = ASCII key code (or 0 if none)
 '------------------------------------------------------------------------------
 hkbd_translate
-                cmp     hpar1, #$39         wz
+                mov     hr0, #0
+                setbyte hr0, hpar1, #1
+                setbyte hr0, hpar2, #2
+                bitc    hr0, #31
+
+                cmp     hpar1, #KEY_CAPSLOCK    wz
   if_z_and_nc   bitnot  hkbd_ledstates, #LED_CAPSLKB
-                cmp     hpar1, #$53         wz
+                cmp     hpar1, #KEY_NUMLOCK     wz
   if_z_and_nc   bitnot  hkbd_ledstates, #LED_NUMLKB
-                cmp     hpar1, #$47         wz
+                cmp     hpar1, #KEY_SCROLLLOCK  wz
   if_z_and_nc   bitnot  hkbd_ledstates, #LED_SCRLKB
+                setnib  hr0, hkbd_ledstates, #6
 
                 mov     htmp, hpar1
                 shl     htmp, #1
@@ -2165,17 +2178,17 @@ hkbd_translate
                 testb   hpar2, #RIGHT_SHIFTB         orz
                 testb   hkbd_ledstates, #LED_CAPSLKB xorz
         if_x1   add     pb, #1
+                cmp     hpar1, #KEY_APP     wcz
+        if_be   rdbyte  hr1, pb
+        if_a    mov     hr1, #0
+                setbyte hr0, hr1, #0
 
-                rdbyte  htmp, pb
+                testb   hr0, #31            wc
         if_c    jmp     #.l1
-                debug(udec(hdev_port)," KEYBOARD PRESS scancode=", uhex_byte_(hpar1), ", key: ",uhex_byte_(htmp), ", mod: ",ubin_byte_(hpar2))
+                debug(udec(hdev_port)," KEYBOARD PRESS scancode=", uhex_byte_(hpar1), ", key: ",uhex_byte_(hr1), ", mod: ",ubin_byte_(hpar2))
         if_nc   jmp     #.l2
-.l1             debug(udec(hdev_port)," KEYBOARD REL   scancode=", uhex_byte_(hpar1), ", key: ",uhex_byte_(htmp), ", mod: ",ubin_byte_(hpar2))
-.l2             shl     hpar1, #8
-                setbyte hpar1, htmp, #0
-                setbyte hpar1, hpar2, #2
-                setnib  hpar1, hkbd_ledstates, #6
-        _ret_   bitc    hpar1, #31
+.l1             debug(udec(hdev_port)," KEYBOARD REL   scancode=", uhex_byte_(hpar1), ", key: ",uhex_byte_(hr1), ", mod: ",ubin_byte_(hpar2))
+.l2             ret
 
 kbd_table ' Index is the key scan code
           {$00} word    $0000, $0000, $0000, $0000 ' $03
@@ -2198,6 +2211,10 @@ kbd_table ' Index is the key scan code
 '------------------------------------------------------------------------------
 ' On entry:
 ' On exit:
+'   hr0 - bit   7..0 = button state
+'   hr1              = X direction and velocity (signed)
+'   hr2              = Y direction and velocity (signed)
+'   hr3              = Wheel direction and velocity (signed)
 '------------------------------------------------------------------------------
 hget_mouse_in_report
                 mov     ep_addr_pid, hmouse_ep_addr
@@ -2225,8 +2242,8 @@ hget_mouse_in_report
                 signx   hr1, #7
                 rdbyte  hr2, ptra++                     ' Y direction and velocity is 8-bit signed
                 signx   hr2, #7
-                cmp     hpar3, #4               wz      ' Very few mice send +/- scroll wheel data in boot protocol
-        if_z    rdbyte  hr3, ptra
+                cmp     hpar3, #4               wcz     ' Very few mice send +/- scroll wheel data in boot protocol
+        if_ae   rdbyte  hr3, ptra
         if_z    signx   hr3, #7                         ' If it's there, use it
         if_nz   mov     hr3, #0
                 debug(udec(hdev_port)," MOUSE btn=", ubin_byte_(hr0), ", X: ",sdec_(hr1), ", Y: ",sdec_(hr2), ", W: ",sdec_(hr3))
@@ -3158,6 +3175,123 @@ CON ' USB Host Shared constants
     KEYS_ALT   = LEFT_ALTF + RIGHT_ALTF
     KEYS_CTRL  = LEFT_CTRLF + RIGHT_CTRLF
     KEYS_SHIFT = LEFT_SHIFTF + RIGHT_SHIFTF
+'-------------
+' Keyboard keys
+' The first four scancodes are info/error indicators:
+    #$00, KEY_NO_KEY, KEY_ERR_ROLLOVER, KEY_POST_FAIL, KEY_ERR_UNDEF
+' Letters:
+    KEY_A         = $04
+    KEY_B         = $05
+    KEY_C         = $06
+    KEY_D         = $07
+    KEY_E         = $08
+    KEY_F         = $09
+    KEY_G         = $0a
+    KEY_H         = $0b
+    KEY_I         = $0c
+    KEY_J         = $0d
+    KEY_K         = $0e
+    KEY_L         = $0f
+    KEY_M         = $10
+    KEY_N         = $11
+    KEY_O         = $12
+    KEY_P         = $13
+    KEY_Q         = $14
+    KEY_R         = $15
+    KEY_S         = $16
+    KEY_T         = $17
+    KEY_U         = $18
+    KEY_V         = $19
+    KEY_W         = $1a
+    KEY_X         = $1b
+    KEY_Y         = $1c
+    KEY_Z         = $1d
+' Number Row:
+    KEY_1         = $1e
+    KEY_2         = $1f
+    KEY_3         = $20
+    KEY_4         = $21
+    KEY_5         = $22
+    KEY_6         = $23
+    KEY_7         = $24
+    KEY_8         = $25
+    KEY_9         = $26
+    KEY_0         = $27
+' Keyboard return (ENTER), tab, space, etc.:
+    KEY_ENTER     = $28
+    KEY_ESC       = $29
+    KEY_BACKSPACE = $2a   ' Delete (backspace)
+    KEY_TAB       = $2b
+    KEY_SPACE     = $2c
+    KEY_MINUS     = $2d   ' - and _
+    KEY_EQUAL     = $2e   ' = and +
+    KEY_LBRACE    = $2f   ' [ and {
+    KEY_RBRACE    = $30   ' ] and }
+    KEY_BACKSLASH = $31   ' \ and |
+    KEY_HASHTILDE = $32   ' None-US # and ~
+    KEY_SEMICOLON = $33   ' ; and :
+    KEY_APOST     = $34   ' ' and "
+    KEY_GRAVE     = $35   ' ` and ~
+    KEY_COMMA     = $36   ' , and <
+    KEY_DOT       = $37   ' . and >
+    KEY_SLASH     = $38   ' / and ?
+    KEY_CAPSLOCK  = $39
+' Function key scancodes:
+    KEY_F1        = $3a
+    KEY_F2        = $3b
+    KEY_F3        = $3c
+    KEY_F4        = $3d
+    KEY_F5        = $3e
+    KEY_F6        = $3f
+    KEY_F7        = $40
+    KEY_F8        = $41
+    KEY_F9        = $42
+    KEY_F10       = $43
+    KEY_F11       = $44
+    KEY_F12       = $45
+' Special, toggle and movement keys:
+    KEY_PRINTSCREEN = $46
+    KEY_SCROLLLOCK  = $47
+    KEY_PAUSE       = $48
+    KEY_INSERT      = $49
+    KEY_HOME        = $4a
+    KEY_PAGEUP      = $4b
+    KEY_DELETE      = $4c
+    KEY_END         = $4d
+    KEY_PAGEDOWN    = $4e
+    KEY_RIGHT       = $4f
+    KEY_LEFT        = $50
+    KEY_DOWN        = $51
+    KEY_UP          = $52
+' Keypad keys:
+    KEY_NUMLOCK   = $53
+    KEY_NUMSLASH  = $54
+    KEY_NUMASTER  = $55
+    KEY_NUMMINUS  = $56
+    KEY_NUMPLUS   = $57
+    KEY_NUMENTER  = $58
+    KEY_NUM1      = $59
+    KEY_NUM2      = $5a
+    KEY_NUM3      = $5b
+    KEY_NUM4      = $5c
+    KEY_NUM5      = $5d
+    KEY_NUM6      = $5e
+    KEY_NUM7      = $5f
+    KEY_NUM8      = $60
+    KEY_NUM9      = $61
+    KEY_NUM0      = $62
+    KEY_DOT_DEL   = $63
+    KEY_NOUS_SP   = $64   ' Non-US \ and |
+    KEY_APP       = $65   ' Application key
+' Modifier keys:
+    KEY_LCTRL     = $E0
+    KEY_LSHIFT    = $E1
+    KEY_LALT      = $E2
+    KEY_LMETA     = $E3 ' The left "Windows" key
+    KEY_RCTRL     = $E4
+    KEY_RSHIFT    = $E5
+    KEY_RALT      = $E6
+    KEY_RMETA     = $E7 ' The right "Windows" key
 
 CON ' USB Host constants
 '------------------------------------------------------------------------------
