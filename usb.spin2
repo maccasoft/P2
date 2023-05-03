@@ -2498,6 +2498,7 @@ hpad_xinput
                 debug(udec(hdev_port), " XINPUT ", uhex_long(ep_addr_pid),uhex_long(ptrb))
 
                 bith    hidr_flags, #HID_AXIS_X addbits 5 ' Have all axes
+                setnib  hidr_flags, #6, #2                
 
                 rdword  hidr_axis, ptrb[3]  ' X = left stick X
                 rdword  retval, ptrb[4]     ' Y = left stick Y (inverted)
@@ -2520,6 +2521,7 @@ hpad_xinput
                 call    #hpad_normalize
                 setword hidr_axis+2, retval, #0
 
+                setbyte hidr_flags,#13,#0
                 rdword  retval, ptrb[1]
                 testb   retval, #15     wc  ' Y
                 bitc    hidr_buttons, #0
@@ -2587,11 +2589,13 @@ hpad_ps3
                 call    #hpad_normalize
                 setword hidr_axis+2, retval, #1
                 bith    hidr_flags, #HID_AXIS_RZ
+                setnib  hidr_flags, #4, #2
 
                 mov     hpar1, #8
                 mov     hpar2, #19
                 call    #hpad_getbits
 
+                setbyte hidr_flags,#13,#0
                 testb   retval, #12     wc  ' A
                 bitc    hidr_buttons, #0
                 testb   retval, #13     wc  ' B
