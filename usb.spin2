@@ -563,6 +563,7 @@ kb_interval     long    0
 kb_in_max_pkt   long    0
 kb_max_index    long    0
 kb_led_states   long    0
+kbm_next_datax  long    0
 gp_intf_num     long    0
 gp_interval     long    0
 gp_max_index    long    0
@@ -1219,28 +1220,33 @@ hidle
                 altgb   hdev_port, #hdev_type
                 getbyte htmp
 
-                cmp     htmp, #HUB_READY        wz
-        if_z    loc     pa, #@hget_hub_status - @usb_host_start
-        if_z    jmp     #.poll
-
-                cmp     htmp, #KB_READY         wz
-        if_z    loc     pa, #@hget_kbd_in_report - @usb_host_start
-        if_z    jmp     #.poll
-
-                cmp     htmp, #M_READY          wz
-        if_z    loc     pa, #@hget_mouse_in_report - @usb_host_start
-        if_z    jmp     #.poll
-
                 cmp     htmp, #HID_READY        wz
         if_nz   cmp     htmp, #PS3_READY        wz
         if_nz   cmp     htmp, #XINPUT_READY     wz
-        if_z    loc     pa, #@hget_gp_in_report - @usb_host_start
-        'if_z    jmp     #.poll
+                loc     pa, #@hget_gp_in_report - @usb_host_start
+        if_z    jmp     #.poll
 
+                cmp     htmp, #HUB_READY        wz
+                loc     pa, #@hget_hub_status - @usb_host_start
+        if_z    jmp     #.poll
+
+                cmp     htmp, #KB_READY         wz
+                loc     pa, #@hget_kbd_in_report - @usb_host_start
+        if_z    jmp     #.poll
+
+                cmp     htmp, #M_READY          wz
+                loc     pa, #@hget_mouse_in_report - @usb_host_start
+        if_z    jmp     #.poll
+
+                cmp     htmp, #KBM_READY        wz
+        if_nz   jmp     #.next
+                bitnot  hstatus, #KBM_TOGGLEB   wcz
+        if_nc   loc     pa, #@hget_kbd_in_report - @usb_host_start
+        if_c    loc     pa, #@hget_mouse_in_report - @usb_host_start
 .poll
-        if_z    add     pa, hcog_base_addr
-        if_z    call    pa
-
+                add     pa, hcog_base_addr
+                call    pa
+.next
                 incmod  hdev_port, #4
 
 .nopoll
@@ -1655,7 +1661,8 @@ hparse_con_desc
                 getbyte kb_in_max_pkt, hr2, #0
                 mov     hkbd_ep_addr, hpar2             ' IN endpoint address
                 'debug(udec(kb_intf_num))
-                debug(uhex_long(hkbd_ep_addr,hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(kb_in_max_pkt,kb_interval))
+                debug(uhex_long(hkbd_ep_addr),uhex_long(hdev_out_addr),udec(kb_in_max_pkt,kb_interval))
+                debug(uhex_long(hdev_ep_addr),uhex_long_(hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4))
                 jmp     #.next_intf
 .mouse
                 cmp     hdev_protocol, #INTF_PROTO_MOUSE    wz
@@ -1667,19 +1674,18 @@ hparse_con_desc
                 getbyte ms_in_max_pkt, hr2, #0
                 mov     hmouse_ep_addr, hpar2           ' IN endpoint address
                 'debug(udec(kb_intf_num))
-                debug(uhex_long(hmouse_ep_addr,hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(ms_in_max_pkt))
+                debug(uhex_long(hmouse_ep_addr),udec(ms_in_max_pkt))
+                debug(uhex_long(hdev_ep_addr),uhex_long_(hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4))
                 jmp     #.next_intf
 .gamepad
-                mov     htmp, hkbd_ep_addr
-                and     htmp, ##ADDR_MASK
                 mov     htmp1, hpar2
                 and     htmp1, ##ADDR_MASK
+                mov     htmp, hkbd_ep_addr
+                and     htmp, ##ADDR_MASK
                 cmp     htmp, htmp1             wz
         if_z    jmp     #.next_intf
                 mov     htmp, hmouse_ep_addr
                 and     htmp, ##ADDR_MASK
-                mov     htmp1, hpar2
-                and     htmp1, ##ADDR_MASK
                 cmp     htmp, htmp1             wz
         if_z    jmp     #.next_intf
                 getbyte gp_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
@@ -1688,7 +1694,7 @@ hparse_con_desc
                 mov     0-0, hpar2                      ' IN endpoint address
                 mov     hdev_out_addr, hpar3            ' OUT endpoint address
                 'debug(udec(gp_intf_num))
-                debug(uhex_long(hdev_ep_addr,hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(gp_interval),uhex_long(hdev_out_addr))
+                debug(uhex_long(hdev_ep_addr),uhex_long_(hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4),udec(gp_interval),uhex_long(hdev_out_addr))
                 jmp     #.next_intf
 .hub
                 cmp     hdev_subclass, #SUBCLASS_INTF_NONE  wz
@@ -1705,6 +1711,7 @@ hparse_con_desc
                 mov     hhub_ep_addr, ep_addr_pid
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr
                 debug(uhex_long(hhub_ctrl_ep,hhub_ep_addr))
+                debug(uhex_long(hdev_ep_addr),uhex_long_(hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4))
                 jmp     #.next_intf
 
 '------------------------------------------------------------------------------
@@ -1780,10 +1787,11 @@ hset_config
                 bitc    hkbd_ctrl_ep, #31
                 mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
                 mov     hkbd_poll_cnt, #0               ' Initialize key auto-repeat counters
+                setbyte kbm_next_datax, #PID_DATA0, #0  ' Reset interrupt IN datax sequence PIDs
                 mov     htmp2, #KB_READY                ' Keyboard interface configured
-                jmp     #.notify_client
+                'jmp     #.notify_client
 .mouse_config
-                cmp     hmouse_ep_addr, #0        wz
+                cmp     hmouse_ep_addr, #0      wz
         if_z    jmp     #.gamepad_config                ' No mouse, setup gamepad, if detected
                 mov     htmp, hmouse_ep_addr
                 and     htmp, ##ADDR_MASK
@@ -1801,19 +1809,25 @@ hset_config
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hmouse_ep_addr, #0
         if_nz   jmp     #.notify_client
+                cmp     hkbd_ep_addr, #0        wz      ' A SetIdle() duration of indefinite covers both keyboard and mouse
+        if_nz   jmp     #.skip                          ' So skip if it has already been done
                 mov     hpar1, #0                       ' SetIdle() duration 0 = indefinite
                 getbyte hpar2, kb_intf_num, #0
                 call    #hset_idle
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hmouse_ep_addr, #0
         if_nz   jmp     #.notify_client
+.skip
                 mov     ep_addr_pid, hmouse_ep_addr
                 call    #calc_crc5                      ' One-time calculation of the ep/addr/pid crc
                 testb   hub_port_status, #HUB_PORT_LOWSPEED wc
                 bitc    ep_addr_pid, #31
                 mov     hmouse_ep_addr, ep_addr_pid
-                mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr for mouse configuration
-                mov     htmp2, #M_READY                 ' Mouse interface configured
+                'mov     ep_addr_pid, hctrl_ep_addr      ' Restore the control ep addr
+                setbyte kbm_next_datax, #PID_DATA0, #1  ' Reset interrupt IN datax sequence PIDs
+                cmp     hkbd_ep_addr, #0        wz
+        if_nz   mov     htmp2, #KBM_READY               ' Both keyboard and mouse interfaces were configured
+        if_z    mov     htmp2, #M_READY                 ' Only the mouse interface configured
                 jmp     #.notify_client
 .gamepad_config
                 altd    hdev_port, #hdev_ep_addr
@@ -1913,18 +1927,18 @@ hset_config
 .notify_client
                 altsb   hdev_port, #hdev_type
                 setbyte htmp2                           ' Save device ready
-                debug(uhex_long(hdev_type,hdev_type+1))
+                debug("hdev_type = ", uhex_long_(hdev_type+1,hdev_type))
         _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
 
 .hub_config
                 cmp     hhub_ep_addr, #0    wz
-        if_z    ret                                     ' No HUB
+        if_z    jmp     #.notify_client                 ' No HUB
                 mov     htmp, hhub_ep_addr
                 and     htmp, ##ADDR_MASK
                 mov     htmp1, ep_addr_pid
                 and     htmp1, ##ADDR_MASK
                 cmp     htmp, htmp1             wz
-        if_nz   ret                                     ' No HUB
+        if_nz   jmp     #.notify_client                 ' No HUB
 
                 loc     ptra, #get_hub_desc             ' Get HUB descriptor
                 wrword  #$FF, ptra[wLength]
@@ -1989,6 +2003,8 @@ init_kbdm_data
                 setbyte hdev_next_datax + 1, #PID_DATA0, #1
                 setbyte hdev_next_datax + 1, #PID_DATA0, #2
                 setbyte hdev_next_datax + 1, #PID_DATA0, #3
+                setbyte kbm_next_datax, #PID_DATA0, #0
+                setbyte kbm_next_datax, #PID_DATA0, #1
         _ret_   mov     hub_next_datax, #PID_DATA0
 
 '------------------------------------------------------------------------------
@@ -2036,8 +2052,7 @@ hset_kbdled_report
 hget_kbd_in_report
                 mov     ep_addr_pid, hkbd_ep_addr
                 mov     hpar2, urx_buff_p
-                altgb   hdev_port, #hdev_next_datax
-                getbyte hpar3
+                getbyte hpar3, kbm_next_datax, #0
                 setword hpar3, kb_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
@@ -2045,14 +2060,12 @@ hget_kbd_in_report
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
 
-                altgb   hdev_port, #hdev_next_datax     ' Txn success, so toggle DATAx
-                getbyte htmp                            ' |
+                getbyte htmp, kbm_next_datax, #0        ' Txn success, so toggle DATAx
                 cmp     htmp, #PID_DATA0        wz      ' |
-        if_z    mov     htmp, #PID_DATA1                ' |
-        if_nz   mov     htmp, #PID_DATA0                ' |
-                altsb   hdev_port, #hdev_next_datax     ' |
-                setbyte htmp                            ' |
+        if_z    setbyte kbm_next_datax, #PID_DATA1, #0  ' |
+        if_nz   setbyte kbm_next_datax, #PID_DATA0, #0  ' |
 
+                'debug("KBD: ", uhex_byte_array(urx_buff_p, hpar3))
                 mov     kb_max_index, hpar3             ' Save actual bytes read
                 call    #hkbd_compare
 .led_check
@@ -2219,8 +2232,7 @@ kbd_table ' Index is the key scan code
 hget_mouse_in_report
                 mov     ep_addr_pid, hmouse_ep_addr
                 mov     hpar2, urx_buff_p
-                altgb   hdev_port, #hdev_next_datax
-                getbyte hpar3
+                getbyte hpar3, kbm_next_datax, #1
                 setword hpar3, ms_in_max_pkt, #1        ' Always ask for max report size
                 call    #do_int_in
                 cmp     retval, #PID_ACK        wz
@@ -2228,15 +2240,15 @@ hget_mouse_in_report
                 cmp     hpar3, #0               wz
         if_z    ret                                     ' Ignore an empty DATAx packet
 
-                altgb   hdev_port, #hdev_next_datax     ' Txn success, so toggle DATAx
-                getbyte htmp                            ' |
+                getbyte htmp, kbm_next_datax, #1        ' Txn success, so toggle DATAx
                 cmp     htmp, #PID_DATA0        wz      ' |
-        if_z    mov     htmp, #PID_DATA1                ' |
-        if_nz   mov     htmp, #PID_DATA0                ' |
-                altsb   hdev_port, #hdev_next_datax     ' |
-                setbyte htmp                            ' |
+        if_z    setbyte kbm_next_datax, #PID_DATA1, #1  ' |
+        if_nz   setbyte kbm_next_datax, #PID_DATA0, #1  ' |
 
+                'debug("MS:  ", uhex_byte_array(urx_buff_p, hpar3))
                 mov     ptra, urx_buff_p
+                cmp     hpar3, #5               wcz     ' Combo PS/2-USB adapters adds report-id
+        if_ae   add     ptra, #1                        ' | skip
                 rdbyte  hr0, ptra++                     ' Button flags
                 rdbyte  hr1, ptra++                     ' X direction and velocity is 8-bit signed
                 signx   hr1, #7
@@ -2498,7 +2510,7 @@ hpad_xinput
                 debug(udec(hdev_port), " XINPUT ", uhex_long(ep_addr_pid),uhex_long(ptrb))
 
                 bith    hidr_flags, #HID_AXIS_X addbits 5 ' Have all axes
-                setnib  hidr_flags, #6, #2                
+                setnib  hidr_flags, #6, #2
 
                 rdword  hidr_axis, ptrb[3]  ' X = left stick X
                 rdword  retval, ptrb[4]     ' Y = left stick Y (inverted)
@@ -3403,7 +3415,7 @@ CON ' USB Host constants
 ' Host->class driver USB connect speed:
     #0, USB_SPEED_UNKNOWN, USB_SPEED_LOW, USB_SPEED_FULL
 ' Host status bit positions. Bit4 and bit5 use the receiver status constants for SOP and EOP:
-    #0, IDLEB, CONNECTEDB, LOW_SPEEDB, DATAx_TGLB[4], DWNSTRM_HUBB, SUSPENDB
+    #0, IDLEB, CONNECTEDB, LOW_SPEEDB, DATAx_TGLB[4], DWNSTRM_HUBB, SUSPENDB, KBM_TOGGLEB
 ' Host status bitflags. Unless otherwise noted, bit states are active high:
     IDLEF        = decod(IDLEB)             ' Set when USB in idle state
     CONNECTEDF   = decod(CONNECTEDB)        ' USB device connected
