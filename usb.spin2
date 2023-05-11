@@ -1574,12 +1574,9 @@ hinit_usb_timings
 '------------------------------------------------------------------------------
 hparse_con_desc
                 mov     ptrb, dev_desc_buff_p
-                'rdword htmp, ptrb[4]       ' idVendor
-                'rdword hdev_id, ptrb[5]    ' idProduct
-                'setword hdev_id, htmp, #1
-                rdlong hdev_id, ptrb[2]
-                movbyts hdev_id,#%%1032
-                rdword  hdev_bcd, ptrb[6]   ' bcdDevice
+                rdlong  hdev_id, ptrb[2]                ' idVendor + idProduct
+                movbyts hdev_id, #%%1032                ' |
+                rdword  hdev_bcd, ptrb[6]               ' bcdDevice
                 debug(uhex_long(hdev_id), uhex_word(hdev_bcd))
 
                 mov     pa, #CON_wTotalLen
@@ -1694,14 +1691,17 @@ hparse_con_desc
         if_a    jmp     #.next_intf                     ' |
                 mov     htmp1, hpar2
                 and     htmp1, ##ADDR_MASK
-                mov     htmp, hkbd_ep_addr
-                and     htmp, ##ADDR_MASK
-                cmp     htmp, htmp1             wz
+                mov     htmp, hkbd_ep_addr              ' Skip if keyboard hid interface
+                and     htmp, ##ADDR_MASK               ' |
+                cmp     htmp, htmp1             wz      ' |
         if_z    jmp     #.next_intf
-                mov     htmp, hmouse_ep_addr
-                and     htmp, ##ADDR_MASK
-                cmp     htmp, htmp1             wz
+                mov     htmp, hmouse_ep_addr            ' Skip if mouse hid interface
+                and     htmp, ##ADDR_MASK               ' |
+                cmp     htmp, htmp1             wz      ' |
         if_z    jmp     #.next_intf
+                altd    hdev_port, #hdev_ep_addr        ' Skip if already set
+                cmp     0-0, #0                 wz      ' |
+        if_nz   jmp     #.next_intf
                 getbyte gp_intf_num, hdev_intf_idx, #0  ' Save interface index and poll interval values
                 getbyte gp_interval, hr2, #3
                 altd    hdev_port, #hdev_ep_addr
@@ -1894,9 +1894,9 @@ hset_config
                 jmp     #.notify_client
 .xinput
                 loc     ptra, #xinp_led_cmd             ' Turn on LED
-                mov     pb,hdev_port
-                cmpsub  pb,#1 ' root device is also player 1
-                add     pb,#$06 ' LED patterns 06..09 for players 1..4
+                mov     pb, hdev_port
+                cmpsub  pb, #1                          ' Root device is also player 1
+                add     pb, #$06                        ' LED patterns 06..09 for players 1..4
                 wrbyte  pb, ptra[2]
 
                 mov     pkt_data, #3
@@ -1909,9 +1909,9 @@ hset_config
                 jmp     #.notify_client
 .ps3
                 loc     ptra, #ps3_command_buff         ' Turn on LED
-                mov     pb,hdev_port
-                fge     pb,#1 ' root device is also player 1
-                'fle    pb,#4
+                mov     pb, hdev_port
+                fge     pb, #1                          ' Root device is also player 1
+                'fle    pb, #4
                 decod   pb
                 wrbyte  pb, ptra[9]
 
@@ -1937,12 +1937,6 @@ hset_config
 
                 mov     htmp2, #PS3_READY               ' PS3 gamepad ready
                 jmp     #.notify_client
-
-.notify_client
-                altsb   hdev_port, #hdev_type
-                setbyte htmp2                           ' Save device ready
-                debug("hdev_type = ", uhex_long_(hdev_type+1,hdev_type))
-        _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
 
 .hub_config
                 cmp     hhub_ep_addr, #0    wz
@@ -1978,7 +1972,13 @@ hset_config
                 call    #poll_waitx
 
                 mov     htmp2, #HUB_READY               ' Hub ready
-                jmp     #.notify_client
+                'jmp     #.notify_client
+
+.notify_client
+                altsb   hdev_port, #hdev_type
+                setbyte htmp2                           ' Save device ready
+                debug("hdev_type = ", uhex_long_(hdev_type+1,hdev_type))
+        _ret_   wxpin   htmp2, usb_event_pin            ' Notify the client keyboard and/or mouse configured
 
 '------------------------------------------------------------------------------
 ' Initialize the keyboard/mouse data area to start-up values.
