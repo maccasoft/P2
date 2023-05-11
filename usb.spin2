@@ -540,8 +540,8 @@ dp              long    USB_BASE_PIN + 3
 usb_event_pin   long    USB_BASE_PIN        ' Host event reporting uses a long repository smart pin
 host_active_led long    ACTIVITY_LED        ' Client defines the LED pin# for host bus activity
 host_error_led  long    ERROR_LED           ' Client defines the LED pin# to light on error
-hid_descr_p     long    0, 0[4]
-hid_report_p    long    0, 0[4]
+hid_descr_p     long    0, 0[7]
+hid_report_p    long    0, 0[7]
 hub_descr_p     long    0
 urx_buff_p      long    0
 dev_desc_buff_p long    0
@@ -567,7 +567,7 @@ kbm_next_datax  long    0
 gp_intf_num     long    0
 gp_interval     long    0
 gp_max_index    long    0
-gp_descr_len    long    0, 0[4]
+gp_descr_len    long    0, 0[7]
 hdev_init_end
 
 hidr_start
@@ -639,7 +639,7 @@ hkbd_ctrl_ep    long    0         ' Keyboard control endpoint address
 hkbd_ep_addr    long    0         ' Keyboard interface endpoint address
 hkbd_poll_cnt   long    0         ' Poll interval counter used for key auto-repeat
 hkbd_ledstates  long    0         ' Off/on state of keyboard LEDs
-hdev_ep_addr    long    0, 0[4]
+hdev_ep_addr    long    0, 0[7]
 hdev_out_addr   long    0
 hreg_init_end
 ' Variables dependent on the system freqency
@@ -1205,7 +1205,7 @@ connected
 
                 ' Fall through to idle/processing loop
 
-                cmp     hdev_port, #4           wcz
+                cmp     hdev_port, #7           wcz
         if_a    mov     hdev_port, #0
 
 hidle
@@ -1215,7 +1215,7 @@ hidle
                 pollct3                         wc
         if_nc   jmp     #.nopoll
                 getct   hct3
-                addct3  hct3, _2ms_                     ' Set the timer for next poll interval
+                addct3  hct3, _1ms_                     ' Set the timer for next poll interval
 
                 altgb   hdev_port, #hdev_type
                 getbyte htmp
@@ -1247,7 +1247,7 @@ hidle
                 add     pa, hcog_base_addr
                 call    pa
 .next
-                incmod  hdev_port, #4
+                incmod  hdev_port, #7
 
 .nopoll
                 cmp     cmd_data, #CMD_SUSPEND  wz
@@ -1381,6 +1381,12 @@ usb_host_init
                 mov     hid_descr_p + 3, pb
                 add     pb, #HID_DESCR_LEN
                 mov     hid_descr_p + 4, pb
+                add     pb, #HID_DESCR_LEN
+                mov     hid_descr_p + 5, pb
+                add     pb, #HID_DESCR_LEN
+                mov     hid_descr_p + 6, pb
+                add     pb, #HID_DESCR_LEN
+                mov     hid_descr_p + 7, pb
 
                 loc     pb, #hid_report
                 mov     hid_report_p, pb
@@ -1392,6 +1398,12 @@ usb_host_init
                 mov     hid_report_p + 3, pb
                 add     pb, #HID_IN_RPT_LEN
                 mov     hid_report_p + 4, pb
+                add     pb, #HID_IN_RPT_LEN
+                mov     hid_report_p + 5, pb
+                add     pb, #HID_IN_RPT_LEN
+                mov     hid_report_p + 6, pb
+                add     pb, #HID_IN_RPT_LEN
+                mov     hid_report_p + 7, pb
 
                 loc     pb, #hub_descr
                 mov     hub_descr_p, pb
@@ -1678,6 +1690,8 @@ hparse_con_desc
                 debug(uhex_long(hdev_ep_addr),uhex_long_(hdev_ep_addr+1,hdev_ep_addr+2,hdev_ep_addr+3,hdev_ep_addr+4))
                 jmp     #.next_intf
 .gamepad
+                cmp     hdev_port, #4           wcz     ' Limit to ports (0)1-4
+        if_a    jmp     #.next_intf                     ' |
                 mov     htmp1, hpar2
                 and     htmp1, ##ADDR_MASK
                 mov     htmp, hkbd_ep_addr
@@ -1947,21 +1961,17 @@ hset_config
                 cmp     retval, #PID_ACK        wz
         if_nz   mov     hhub_ep_addr, #0
         if_nz   jmp     #.notify_client
-                debug(uhex_byte_array(hub_descr_p,total_data))
 
+                mov     ptra, hub_descr_p
+                rdbyte  htmp3, ptra[2]                  ' bNbrPorts
+                fle     htmp3, #7                       ' Max. 7 ports supported
+                debug(uhex_byte_array(hub_descr_p,total_data),", bNbrPorts = ", udec_(htmp3))
+.loop
                 loc     ptra, #set_port_feat            ' Power on ports
                 wrword  #HUB_PORT_POWER, ptra[wValue]
-                wrword  #1, ptra[wIndex]
+                wrword  htmp3, ptra[wIndex]
                 call    #control_write
-                loc     ptra, #set_port_feat
-                wrword  #2, ptra[wIndex]
-                call    #control_write
-                loc     ptra, #set_port_feat
-                wrword  #3, ptra[wIndex]
-                call    #control_write
-                loc     ptra, #set_port_feat
-                wrword  #4, ptra[wIndex]
-                call    #control_write
+                djnz    htmp3, #.loop
 
                 mov     hctwait, _500ms_
                 add     hctwait, _100ms_
@@ -2811,26 +2821,12 @@ hget_hub_status
                 rdlong  hub_status_chg, urx_buff_p
                 debug(ubin_long(hub_status_chg))
 
-                testb   hub_status_chg, #1      wz
-        if_x0   jmp     #.port2
                 mov     hdev_port, #1
-                call    #hub_port_handler
-.port2
-                testb   hub_status_chg, #2      wz
-        if_x0   jmp     #.port3
-                mov     hdev_port, #2
-                call    #hub_port_handler
-.port3
-                testb   hub_status_chg, #3      wz
-        if_x0   jmp     #.port4
-                mov     hdev_port, #3
-                call    #hub_port_handler
-.port4
-                testb   hub_status_chg, #4      wz
-        if_x0   jmp     #.portN
-                mov     hdev_port, #4
-                call    #hub_port_handler
-.portN
+.loop
+                testb   hub_status_chg, hdev_port wz
+        if_x1   call    #hub_port_handler
+                incmod  hdev_port, #7           wcz
+        if_nc   jmp     #.loop
                 ret
 
 hub_port_handler
@@ -2848,7 +2844,7 @@ hub_port_handler
                 wrword  #HUB_C_PORT_CONNECTION, ptra[wValue]
                 wrword  hdev_port, ptra[wIndex]
                 call    #control_write
-                testb   hub_port_status, #HUB_PORT_CONNECTION wz ' Connection bit
+                testb   hub_port_status, #HUB_PORT_CONNECTION   wz ' Connection bit
         if_x0   jmp     #.disconnect
                 mov     hctwait, _100ms_
                 call    #poll_waitx
@@ -2875,7 +2871,7 @@ hub_port_handler
                 wrword  hdev_port, ptra[wIndex]
                 call    #control_write
 
-                mov     htmp, #36                 ' Allow reset recovery time (Section 9.2.6.2)
+                mov     htmp, #36                       ' Allow reset recovery time (Section 9.2.6.2)
 .wait_recover
                 mov     hctwait, _1ms_
                 call    #poll_waitx
@@ -2897,7 +2893,7 @@ hub_port_handler
                 add     pa, #DEV_bMaxPktSize0           ' appropriate Device Descriptor struct member offset
                 rdbyte  max_pkt_size, pa
                 loc     ptra, #set_address              ' Hub start address of SetAddress SETUP struct
-                mov     htmp, hdev_port             ' Address is hub port number
+                mov     htmp, hdev_port                 ' Address is hub port number
                 wrword  htmp, ptra[wValue]
                 call    #control_write                  ' Execute SetAddress()
                 cmp     retval, #PID_ACK        wz
@@ -2939,24 +2935,31 @@ hub_port_handler
                 jmp     #.done
 
 .other
-                testb   hub_port_status, #HUB_C_PORT_RESET wz
-        if_x1   wrword  #HUB_C_PORT_RESET, ptra[wValue]
-        if_x1   jmp     #.reset_feature
-                testb   hub_port_status, #HUB_C_PORT_ENABLE wz
-        if_x1   wrword  #HUB_C_PORT_ENABLE, ptra[wValue]
-        if_x1   jmp     #.reset_feature
-                testb   hub_port_status, #HUB_C_PORT_SUSPEND wz
-        if_x1   wrword  #HUB_C_PORT_SUSPEND, ptra[wValue]
-        if_x1   jmp     #.reset_feature
-                testb   hub_port_status, #HUB_C_PORT_OVERCURRENT wz
-        if_x1   wrword  #HUB_C_PORT_OVERCURRENT, ptra[wValue]
-        if_x1   jmp     #.reset_feature
-                jmp     #.done
-.reset_feature
                 loc     ptra, #clr_port_feat
                 wrword  hdev_port, ptra[wIndex]
-                call    #control_write
+
+                testb   hub_port_status, #HUB_C_PORT_RESET wz
+        if_x1   wrword  #HUB_C_PORT_RESET, ptra[wValue]
+        if_x1   loc     ptra, #clr_port_feat
+        if_x1   call    #control_write
+
+                testb   hub_port_status, #HUB_C_PORT_ENABLE wz
+        if_x1   wrword  #HUB_C_PORT_ENABLE, ptra[wValue]
+        if_x1   loc     ptra, #clr_port_feat
+        if_x1   call    #control_write
+
+                testb   hub_port_status, #HUB_C_PORT_SUSPEND wz
+        if_x1   wrword  #HUB_C_PORT_SUSPEND, ptra[wValue]
+        if_x1   loc     ptra, #clr_port_feat
+        if_x1   call    #control_write
+
+                testb   hub_port_status, #HUB_C_PORT_OVERCURRENT wz
+        if_x1   wrword  #HUB_C_PORT_OVERCURRENT, ptra[wValue]
+        if_x1   loc     ptra, #clr_port_feat
+        if_x1   call    #control_write
+
                 jmp     #.done
+
 .disconnect
                 altgb   hdev_port, #hdev_type
                 getbyte htmp
@@ -3108,8 +3111,8 @@ xinp_rumble_cmd byte    $00, $08, $00
 usb_cache_start
 
 ' HID descriptor and report buffers
-hid_descr       byte    0[HID_DESCR_LEN * 5]
-hid_report      byte    0[HID_IN_RPT_LEN * 5]
+hid_descr       byte    0[HID_DESCR_LEN * 8]
+hid_report      byte    0[HID_IN_RPT_LEN * 8]
 
 ' HUB descriptor
 hub_descr       byte    0   ' bDescLength
