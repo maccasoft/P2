@@ -7,6 +7,7 @@ Projects based on the **Parallax Propeller 2** multicore microcontroller.
 
 **Emulators**
 
+ * **[Atari2600](Atari2600)** - Atari 2600 VCS
  * **[Coleco](Coleco)** - ColecoVision
  * **[I8086](I8086)** - Intel 8086 Processor
  * **[M6502](M6502)** - MOS6502 Processor
