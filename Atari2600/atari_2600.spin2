@@ -4795,6 +4795,8 @@ hpad_translate
                 testb   hidr_buttons, #9   wz   ' START
                 bitnz   hr0, #16
 
+                bith    hr0, #4 addbits 3
+
                 getnib  htmp, hidr_flags, #3    ' hats
                 cmp     htmp, #0        wz
         if_z    jmp     #.nohat
@@ -4803,19 +4805,19 @@ hpad_translate
                 cmp     htmp, #$00      wz
         if_ne   cmp     htmp, #$01      wz
         if_ne   cmp     htmp, #$07      wz
-                bitnz   hr0, #4                 ' P0 UP
+        if_e    bitl    hr0, #4                 ' P0 UP
                 cmp     htmp, #$01      wz
         if_ne   cmp     htmp, #$02      wz
         if_ne   cmp     htmp, #$03      wz
-                bitnz   hr0, #7                 ' P0 RIGHT
+        if_e    bitl    hr0, #7                 ' P0 RIGHT
                 cmp     htmp, #$03      wz
         if_ne   cmp     htmp, #$04      wz
         if_ne   cmp     htmp, #$05      wz
-                bitnz   hr0, #5                 ' P0 DOWN
+        if_e    bitl    hr0, #5                 ' P0 DOWN
                 cmp     htmp, #$05      wz
         if_ne   cmp     htmp, #$06      wz
         if_ne   cmp     htmp, #$07      wz
-                bitnz   hr0, #6                 ' P0 LEFT
+        if_e    bitl    hr0, #6                 ' P0 LEFT
 .nohat
 
                 testb   hidr_flags, #HID_AXIS_X wz
@@ -4825,16 +4827,16 @@ hpad_translate
                 getword htmp, hidr_axis, #0     ' X axis
                 signx   htmp, #15
                 cmps    htmp, ##-16384  wcz     ' left threshold
-                bitnc   hr0, #6                 ' LEFT
+        if_c    bitl    hr0, #6                 ' LEFT
                 cmps    htmp, ##16384   wcz     ' right threshold
-                bitc    hr0, #7                 ' RIGHT
+        if_nc   bitl    hr0, #7                 ' RIGHT
 
                 getword htmp, hidr_axis, #1     ' Y axis
                 signx   htmp, #15
                 cmps    htmp, ##-16384  wcz     ' up threshold
-                bitnc   hr0, #4                 ' UP
+        if_c    bitl    hr0, #4                 ' UP
                 cmps    htmp, ##16384   wcz     ' down threshold
-                bitc    hr0, #5                 ' DOWN
+        if_nc   bitl    hr0, #5                 ' DOWN
 .noaxis
 
                 wrlong  hr0, #@m6532_io
