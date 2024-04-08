@@ -3960,6 +3960,12 @@ hset_config
                 call    #txn_out
                 mov     ep_addr_pid, hctrl_ep_addr
 
+                loc     ptra, #xinp_fix_8bitdo
+                mov     pb, urx_buff_p                  ' We don't actually care where it goes
+                call    #control_read                   ' Execute GetDeviceDescriptor()
+                debug("8bitdo weird fix... ",uhex(retval))
+                mov     retval, #PID_ACK                ' If we don't do this something else becomes sad (TODO fix?)
+
                 mov     htmp2, #XINPUT_READY
                 jmp     #.notify_client
 .ps3
@@ -5153,6 +5159,14 @@ xinp_rumble_cmd byte    $00, $08, $00
                 byte    $00             ' Left rumble
                 byte    $00             ' Right rumble
                 byte    $00, $00, $00
+
+xinp_fix_8bitdo '' This inexplicable String request (that WILL fail) somehow un-bugs the terrible firmware
+                '' of certain wired 8bitdo gamepads.
+                byte    (DIR_DEV_TO_HOST | TYPE_STANDARD | RECIP_DEVICE)
+                byte    REQ_GET_DESC
+                word    TYPE_STRING << 8 + 4
+                word    $0409   ' Zero or Language ID (Section 9.6.7)
+                word    2       ' Number of bytes to transfer if there is a data stage
 
 '------------------------------------------------------------------------------
 ' The USB data cache area gets zero-filled at every device disconnect
