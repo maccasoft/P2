@@ -1,0 +1,333 @@
+{
+    Atari 2600 Emulator - Audio Driver
+    Copyright (c) 2024 by Marco Maccaferri <macca@maccasoft.com>
+}
+
+PUB null()
+
+'' This is not an application
+
+PUB start(_pn, _aud)
+
+    sampleRate := CLKFREQ / SAMPLE_RATE
+    basePin := _pn addpins 1
+    coginit(COGEXEC_NEW, @audio_driver, _aud)
+
+DAT
+                org     $000
+
+audio_driver
+                fltl    basePin
+                wrpin   arg1, basePin
+                wxpin   sampleRate, basePin
+                wypin   dac_center, basePin
+                drvh    basePin
+
+                mov     currentSample, #0
+                mov     dividerCnt0, #1
+                mov     dividerCnt1, #1
+
+mainLoop
+                rdlong  _AUD0, ptra[0]
+                rdlong  _AUD1, ptra[1]
+
+                mov     mixOut, dac_center
+
+                ' Channel 0
+
+                sub     dividerCnt0, #1     wcz
+        if_a    jmp     #.mix
+
+                getbyte arg1, _AUD0, #1         ' AUDF0
+                and     arg1, #$1F
+                add     arg1, #1
+                add     dividerCnt0, arg1
+
+                getnib  arg1, _AUD0, #0         ' AUDC0
+                cmp     arg1, #$01          wz
+        if_e    jmp     #.poly4
+                cmp     arg1, #$02          wz
+        if_e    jmp     #.div15poly4
+                cmp     arg1, #$03          wz
+        if_e    jmp     #.div5poly4
+                cmp     arg1, #$04          wz
+        if_ne   cmp     arg1, #$05          wz
+        if_e    jmp     #.tone2
+                cmp     arg1, #$06          wz
+        if_ne   cmp     arg1, #$0A          wz
+        if_e    jmp     #.tone31
+                cmp     arg1, #$07          wz
+        if_ne   cmp     arg1, #$09          wz
+        if_e    jmp     #.poly5
+                cmp     arg1, #$08          wz
+        if_e    jmp     #.poly9
+                cmp     arg1, #$0C          wz
+        if_ne   cmp     arg1, #$0D          wz
+        if_e    jmp     #.tone6
+                cmp     arg1, #$0E          wz
+        if_e    jmp     #.div93
+                cmp     arg1, #$0F          wz
+        if_e    jmp     #.poly5div6
+                ' default
+.silence        bith    currentSample, #0
+                jmp     #.mix
+
+.poly4          incmod  .poly4cnt, #15
+.poly4cur       testb   .poly4str, .poly4cnt    wz
+                bitz    currentSample, #0
+                jmp     #.mix
+
+.poly4cnt       long    14
+.poly4str       long    %111100010011010
+
+.div15poly4     testb   .tone31stream, .tone31cnt   wc
+                incmod  .tone31cnt, #30
+                testb   .tone31stream, .tone31cnt   wz
+    if_c_ne_z   jmp     #.poly4
+                jmp     #.poly4cur
+
+.div5poly4      incmod  .poly5cnt, #31
+                testb   .poly5str, .poly5cnt    wc
+        if_1x   jmp     #.poly4
+                jmp     #.poly4cur
+
+.tone2          bitnot  currentSample, #0
+                jmp     #.mix
+
+.tone31         incmod  .tone31cnt, #30
+                testb   .tone31stream, .tone31cnt   wz
+                bitz    currentSample, #0
+                jmp     #.mix
+
+.tone31cnt      long    30
+.tone31stream   long    %1111111111111111110000000000000
+
+.poly5          incmod  .poly5cnt, #31
+                testb   .poly5str, .poly5cnt    wz
+                bitz    currentSample, #0
+                jmp     #.mix
+
+.poly5cnt       long    30
+.poly5str       long    %1111100011011101010000100101100
+
+.poly9          testb   .p9, #0         wz
+                testb   .p9, #0         wc
+                testb   .p9, #4         xorc
+                shr     .p9, #1
+        if_0x   and     .p9, #$0FF
+        if_1x   or      .p9, #$100
+                bitz    currentSample, #0
+                jmp     #.mix
+.p9             long    $1FF
+
+
+.poly5div6      incmod  .poly5cnt, #31
+                testb   .poly5str, .poly5cnt    wc
+        if_nc   jmp     #.tone6cur
+                ' fall-through
+.tone6          decmod  .tone6cnt, #3-1     wc
+        if_c    bitnot  .tonecur, #6
+.tone6cur       testb   .tonecur, #6        wz
+                bitz    currentSample, #0
+                jmp     #.mix
+
+.tone6cnt       long    0
+
+.div93          testb   .tone31stream, .tone31cnt   wc
+                incmod  .tone31cnt, #30
+                testb   .tone31stream, .tone31cnt   wz
+    if_c_ne_z   jmp     #.tone6
+                jmp     #.tone6cur
+
+.tonecur        long    0
+
+.mix            testb   currentSample, #0   wz
+                getbyte arg1, _AUD0, #2         ' AUDV0
+                alts    arg1, #amplitudeTable
+                sumz    mixOut, 0-0
+
+                ' Channel 1
+_ch1
+                sub     dividerCnt1, #1     wcz
+        if_a    jmp     #.mix
+
+                getbyte arg1, _AUD1, #1         ' AUDF1
+                and     arg1, #$1F
+                add     arg1, #1
+                add     dividerCnt1, arg1
+
+                getnib  arg1, _AUD1, #0         ' AUDC1
+                cmp     arg1, #$01          wz
+        if_e    jmp     #.poly4
+                cmp     arg1, #$02          wz
+        if_e    jmp     #.div15poly4
+                cmp     arg1, #$03          wz
+        if_e    jmp     #.div5poly4
+                cmp     arg1, #$04          wz
+        if_ne   cmp     arg1, #$05          wz
+        if_e    jmp     #.tone2
+                cmp     arg1, #$06          wz
+        if_ne   cmp     arg1, #$0A          wz
+        if_e    jmp     #.tone31
+                cmp     arg1, #$07          wz
+        if_ne   cmp     arg1, #$09          wz
+        if_e    jmp     #.poly5
+                cmp     arg1, #$08          wz
+        if_e    jmp     #.poly9
+                cmp     arg1, #$0C          wz
+        if_ne   cmp     arg1, #$0D          wz
+        if_e    jmp     #.tone6
+                cmp     arg1, #$0E          wz
+        if_e    jmp     #.div93
+                cmp     arg1, #$0F          wz
+        if_e    jmp     #.poly5div6
+                ' default
+.silence        bith    currentSample, #1
+                jmp     #.mix
+
+.poly4          incmod  .poly4cnt, #15
+.poly4cur       testb   .poly4str, .poly4cnt    wz
+                bitz    currentSample, #1
+                jmp     #.mix
+
+.poly4cnt       long    14
+.poly4str       long    %111100010011010
+
+.div15poly4     testb   .tone31stream, .tone31cnt   wc
+                incmod  .tone31cnt, #30
+                testb   .tone31stream, .tone31cnt   wz
+    if_c_ne_z   jmp     #.poly4
+                jmp     #.poly4cur
+
+.div5poly4      incmod  .poly5cnt, #31
+                testb   .poly5str, .poly5cnt    wc
+        if_1x   jmp     #.poly4
+                jmp     #.poly4cur
+
+.tone2          bitnot  currentSample, #1
+                jmp     #.mix
+
+.tone31         incmod  .tone31cnt, #30
+                testb   .tone31stream, .tone31cnt   wz
+                bitz    currentSample, #1
+                jmp     #.mix
+
+.tone31cnt      long    30
+.tone31stream   long    %1111111111111111110000000000000
+
+.poly5          incmod  .poly5cnt, #31
+                testb   .poly5str, .poly5cnt    wz
+                bitz    currentSample, #1
+                jmp     #.mix
+
+.poly5cnt       long    30
+.poly5str       long    %1111100011011101010000100101100
+
+.poly9          testb   .p9, #0         wz
+                testb   .p9, #0         wc
+                testb   .p9, #4         xorc
+                shr     .p9, #1
+        if_0x   and     .p9, #$0FF
+        if_1x   or      .p9, #$100
+                bitz    currentSample, #1
+                jmp     #.mix
+.p9             long    $1FF
+
+
+.poly5div6      incmod  .poly5cnt, #31
+                testb   .poly5str, .poly5cnt    wc
+        if_nc   jmp     #.tone6cur
+                ' fall-through
+.tone6          decmod  .tone6cnt, #3-1     wc
+        if_c    bitnot  .tonecur, #6
+.tone6cur       testb   .tonecur, #6        wz
+                bitz    currentSample, #1
+                jmp     #.mix
+
+.tone6cnt       long    0
+
+.div93          testb   .tone31stream, .tone31cnt   wc
+                incmod  .tone31cnt, #30
+                testb   .tone31stream, .tone31cnt   wz
+    if_c_ne_z   jmp     #.tone6
+                jmp     #.tone6cur
+
+.tonecur        long    0
+
+.mix            testb   currentSample, #1   wz
+                getbyte arg1, _AUD1, #2         ' AUDV1
+                alts    arg1, #amplitudeTable
+                sumz    mixOut, 0-0
+
+                cmp     mixOut, prevMixOut  wz
+        if_ne   mul     mixOut, #7
+        if_ne   add     mixOut, prevMixOut
+        if_ne   shr     mixOut, #3
+                mov     prevMixOut, mixOut
+
+                testp   basePin             wc
+        if_nc   jmp     #$ - 1
+                wypin   mixOut, basePin
+                jmp     #mainLoop
+
+amplitudeTable  long    trunc(AMPLITUDE_LEVEL_0)
+                long    trunc(AMPLITUDE_LEVEL_1)
+                long    trunc(AMPLITUDE_LEVEL_2)
+                long    trunc(AMPLITUDE_LEVEL_3)
+                long    trunc(AMPLITUDE_LEVEL_4)
+                long    trunc(AMPLITUDE_LEVEL_5)
+                long    trunc(AMPLITUDE_LEVEL_6)
+                long    trunc(AMPLITUDE_LEVEL_7)
+                long    trunc(AMPLITUDE_LEVEL_8)
+                long    trunc(AMPLITUDE_LEVEL_9)
+                long    trunc(AMPLITUDE_LEVEL_A)
+                long    trunc(AMPLITUDE_LEVEL_B)
+                long    trunc(AMPLITUDE_LEVEL_C)
+                long    trunc(AMPLITUDE_LEVEL_D)
+                long    trunc(AMPLITUDE_LEVEL_E)
+                long    trunc(AMPLITUDE_LEVEL_F)
+
+basePin         long    0
+sampleRate      long    0
+dac_center      long    $7F80
+
+arg1            long    P_DAC_75R_2V | P_OE | P_DAC_DITHER_PWM
+
+_AUD0           long    $00_00_00_00
+_AUD1           long    $00_00_00_00
+                '           || || ++ (B0) AUDCx
+                '           || ++--- (B1) AUDFx
+                '           ++------ (B2) AUDVx
+
+dividerCnt0     res     1
+dividerCnt1     res     1
+
+currentSample   res     1
+mixOut          res     1
+prevMixOut      res     1
+
+CON
+
+    PSG_FREQ    = 3_579_545.0               ' Clock frequency input on the emulated chip
+    SAMPLE_RATE = round(PSG_FREQ / 114.0)   ' Sample rate (PSG_FREQ / 114.0)
+
+    VOLUME_CORRECTION = 0.7                 ' Volume correction value
+    MAX_AMPLITUDE     = float($7F7F / 2)    ' maxDACvalue / numberOfChannels (this makes room for maximum "swing" on all channels)
+    AMPLITUDE_DAMP_FACTOR = MAX_AMPLITUDE / 15 ' The damp factor between each volume step
+
+    AMPLITUDE_LEVEL_F = MAX_AMPLITUDE'     * VOLUME_CORRECTION
+    AMPLITUDE_LEVEL_E = AMPLITUDE_LEVEL_F - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_D = AMPLITUDE_LEVEL_E - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_C = AMPLITUDE_LEVEL_D - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_B = AMPLITUDE_LEVEL_C - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_A = AMPLITUDE_LEVEL_B - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_9 = AMPLITUDE_LEVEL_A - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_8 = AMPLITUDE_LEVEL_9 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_7 = AMPLITUDE_LEVEL_8 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_6 = AMPLITUDE_LEVEL_7 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_5 = AMPLITUDE_LEVEL_6 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_4 = AMPLITUDE_LEVEL_5 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_3 = AMPLITUDE_LEVEL_4 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_2 = AMPLITUDE_LEVEL_3 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_1 = AMPLITUDE_LEVEL_2 - AMPLITUDE_DAMP_FACTOR
+    AMPLITUDE_LEVEL_0 = 0.0

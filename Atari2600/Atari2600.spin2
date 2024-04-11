@@ -1,0 +1,2399 @@
+{
+    Atari 2600 Emulator
+    Copyright (c) 2024 by Marco Maccaferri <macca@maccasoft.com>
+
+    TERMS OF USE: MIT License
+}
+CON
+
+    _CLKFREQ = 320_000_000
+    _NTSC
+    '_DEBUGGER
+
+    VGA_BASE_PIN = 48
+    AUDIO_BASE_PIN = 38
+
+    USB_BASE_PIN  = 40
+    ACTIVITY_LED  = 57
+    ERROR_LED     = 56
+
+    VSYNC_LINES   = 3 + 32
+    VISIBLE_LINES = 210
+
+    REGP_N = 7
+    REGP_V = 6
+    REGP_B = 4
+    REGP_D = 3
+    REGP_I = 2
+    REGP_Z = 1
+    REGP_C = 0
+
+    CTL_CLK   = 24
+    CTL_INT   = 25
+    CTL_NMI   = 26
+    CTL_RESET = 27
+    CTL_STEP  = 28
+
+    UART_RX     = 63 '8  { I }
+    UART_TX     = 62 '9  { O }
+    UART_BAUD   = 2_000_000
+
+VAR
+
+    long fb_ptr
+    byte fb0[160 * VISIBLE_LINES]
+    byte fb1[160 * VISIBLE_LINES]
+
+    long m6532_io
+    byte m6532_ram[128]
+
+    long tia_aud0
+    long tia_aud1
+    long tia_inpt
+
+    long usb_emupad[2]
+
+OBJ
+
+    usb   : "USB"   | USB_BASE_PIN  = 40, EMUPAD_MAX_PLAYER = 2, EMUPAD_BUILTIN_RULES = true, ...
+                      EMUPAD_KB_BT0 = $E0, EMUPAD_KB_BT1 = $2C, EMUPAD_KB_BT2 = $5D, ...
+                      EMUPAD_KB_BT3 = $00, EMUPAD_KB_BT4 = $00, EMUPAD_KB_BT5 = $00, EMUPAD_KB_BT6 = $00, ...
+                      EMUPAD_KB_BT7 = $00, EMUPAD_KB_BT8 = $3B, EMUPAD_KB_BT9 = $3A, EMUPAD_KB_BT6 = $00
+    video : "VGA"   | VISIBLE_LINES = VISIBLE_LINES
+    audio : "Audio"
+
+    dbg   : "Debugger"
+
+PUB main() | pad0, pad1, io, inpt
+
+    bytefill(@fb0, $80 >> 1, 160 * VISIBLE_LINES)
+    bytefill(@fb1, $80 >> 1, 160 * VISIBLE_LINES)
+
+    m6532_io := %00000000_00111111_00000000_1111_1111
+        '        |||||||| |||||||| |||||||| ++++-++++-- (B0) SWCHA
+        '        |||||||| |||||||| |||||||| |||| |||+--      (#0) P1 UP
+        '        |||||||| |||||||| |||||||| |||| ||+---      (#1) P1 DOWN
+        '        |||||||| |||||||| |||||||| |||| |+----      (#2) P1 LEFT
+        '        |||||||| |||||||| |||||||| |||| +-----      (#3) P1 RIGHT
+        '        |||||||| |||||||| |||||||| |||+-------      (#4) P0 UP
+        '        |||||||| |||||||| |||||||| ||+--------      (#5) P0 DOWN
+        '        |||||||| |||||||| |||||||| |+---------      (#6) P0 LEFT
+        '        |||||||| |||||||| |||||||| +----------      (#7) P0 RIGHT
+        '        |||||||| |||||||| ++++++++------------ (B1) SWACNT
+        '        |||||||| ++++++++--------------------- (B2) SWCHB
+        '        ||||||||       |+---------------------      (#16) RESET
+        '        ||||||||       +----------------------      (#17) SELECT
+        '        ++++++++------------------------------ (B3) SWBCNT
+    tia_inpt := %00000000_00000000_00000000_00110000
+        '                                     |||||+--- (#0) INPT0
+        '                                     ||||+---- (#1) INPT1
+        '                                     |||+----- (#2) INPT2
+        '                                     ||+------ (#3) INPT3
+        '                                     |+------- (#4) INPT4 P0 BUTTON
+        '                                     +-------- (#5) INPT5 P1 BUTTON
+
+    usb.set_emupad_ptr(@usb_emupad)
+    usb.start()
+
+    fb_ptr := @fb0
+    video.start(VGA_BASE_PIN, @fb_ptr)
+
+    tia_fbp := @fb_ptr
+    tia_fb0 := @fb0
+    tia_fb1 := @fb1
+    tia_inptp := @tia_inpt
+
+    aud_addr := @tia_aud0
+    ppa_addr := @m6532_io
+    ram_addr := @m6532_ram
+    rom_addr := @cartridge_rom
+    rom_addr |= (((@cartridge_rom_end - @cartridge_rom) / $1000) - 1) << 12
+#ifndef _DEBUGGER
+    audio.start(AUDIO_BASE_PIN, aud_addr)
+    coginit(COGEXEC_NEW, @m6507, 0)
+#else
+    dbg.start(@m6507, ram_addr, rom_addr, tia_fb0)
+#endif
+
+    repeat
+        pad0 := usb_emupad[0]
+        pad1 := usb_emupad[1]
+
+        io := m6532_io
+        inpt := tia_inpt
+        org
+                getnib  temp, pad0, #0     ' P0 DIRECTION
+                xor     temp, #%1111       ' |
+                setnib  io, temp, #1       ' |
+                test    pad0, all       wz ' P0 BUTTON
+                bitz    inpt, #4           ' |
+
+                getnib  temp, pad1, #0     ' P1 DIRECTION
+                xor     temp, #%1111       ' |
+                setnib  io, temp, #0       ' |
+                test    pad1, all       wz ' P1 BUTTON
+                bitz    inpt, #5           ' |
+
+                testb   pad0, #usb.EMUPAD_BT8_BIT  wz   ' SELECT
+                testb   pad1, #usb.EMUPAD_BT8_BIT  orz  ' |
+                bitnz   io, #17                         ' |
+
+                testb   pad0, #usb.EMUPAD_BT9_BIT  wz   ' RESET
+                testb   pad1, #usb.EMUPAD_BT9_BIT  orz  ' |
+                bitnz   io, #16                         ' |
+
+        all     long    %0000_000000000000000000001111_0000
+        temp    long    0
+        end
+
+        m6532_io := io
+        tia_inpt := inpt
+
+DAT             ' M6507
+                org     $000
+
+m6507
+                add     ptrb, ##@m6507_lut - @m6507
+                setq2   #(m6507_lut_end - m6507_lut) -1
+                rdlong  0, ptrb
+
+                mov     ea, ##$0FFC         ' read reset vector (atari rom)
+                add     ea, rom_addr        ' |
+                rdword  _PC, ea             ' |
+
+                wrfast  #0, tia_fb0
+
+#ifdef _DEBUGGER
+                jmp     #.resume1
+#endif
+.loop
+                'getct   ct                  ' start counter (debug)
+                'mov     _I, #0              ' reset instruction timing (debug)
+                call    #\_fetch            ' fetch instruction
+
+                shl     t1, #2              ' decode instruction
+                add     t1, i_table         ' |
+                rdlong  t1, t1              ' |
+
+                getnib  t2, t1, #7          ' process cycles
+.l2             callpa  #3, #_inc_cycles    ' |
+                djnz    t2, #.l2            ' |
+
+                setnib  t1, #0, #7
+
+                push    #.resume
+                execf   t1                  ' execute instruction
+
+.resume
+                bitl    _SYSF, #2       wcz
+        if_1x   call    #\i_wsync
+
+#ifdef _DEBUGGER
+.resume1        rdlong  t1, ptra
+                testb   t1, #CTL_STEP   wz
+        if_x1   getptr  ptrb
+        if_x1   call    #\@@m6507_debug
+#endif
+                jmp     #.loop
+
+'
+'
+' System Tasks
+'
+
+_inc_cycles
+'                add     _I, #1              ' update instruction and total cycles count
+
+                ' M6532
+m6532_timer     skipf   m6532_normal    ' ------------+-+
+
+                getbyte r0, _TIMER, #0              ' a b
+                decmod  r0, #$FF                    ' | b
+                setbyte _TIMER, r0, #0              ' | b
+
+                getword r1, _TIMER, #1              ' a |
+                cmpsub  _TC, r1             wc      ' a |
+        if_nc   jmp     #_no_timint                 ' a |
+                decmod  r0, #$FF            wc      ' a |
+                setbyte _TIMER, r0, #0              ' a |
+        if_c    bith    _TIMER, #14 addbits 1       ' a | TIMINT
+        if_c    setd    m6532_timer, #m6532_timint  ' a |
+_no_timint
+
+                ' TIA
+tia_clock       skipf   #%0         ' ----------------+
+                add     _TC, #1                     ' a
+
+                add     _HC, #3                     ' |
+                cmpsub  _HC, #228       wc          ' |
+        if_c    add     _VC, #1                     ' |
+
+                cmp     _VC, #VSYNC_LINES    wcz    ' |
+        if_ae   cmpr    _VC, #(VSYNC_LINES + VISIBLE_LINES) -1 wcz ' |
+        if_ae   setd    tia_clock, #%1111111_0      ' | scanline
+                ret     wcz                         ' |
+
+                ' loop counter set to pa
+_loop           cmp     _HC, #68        wc      ' horizontal blank
+                testb   _SYSF, #1       wz      ' VBLANK
+  if_nc_and_z   wfbyte  #$00                    ' |
+    if_c_or_z   jmp     #_skip                  ' |
+
+                ' Playfield
+
+tia_pfbl        skipf   tia_pfbl_0  ' ------------+-+-+-+
+_colubk         mov     t_pixel, #0-0           ' a b c d   COLUBK (S/B0)
+
+_pfs            testb   t_pf, t_cnt20       wc  ' a b c |
+        if_1x   setbyte t_pixel, t_pf_colu, #0  ' a b c |
+        if_1x   bith    t_pixel, #29            ' a b c |   signal playfield active
+
+                ' Ball
+
+_bl_res         cmp     _HC, #0-0       wz      ' a | | d   RESBL (S/B0)
+        if_nz   jmp     #_no_ball               ' a | | d
+                getbyte t_cntb, _SYSF, #1       ' a | | d   BALL SIZE
+                setd    tia_pfbl, #tia_bl_draw  ' a | | d
+
+_colubl         setbyte t_pixel, #0-0, #0       ' a b | d
+                bith    t_pixel, #24            ' a b | d   signal ball active
+                decmod  t_cntb, #0      wc      ' a b | d
+        if_c    setd    tia_pfbl, #tia_pfbl_0   ' a b | d
+_no_ball
+
+                ' Player 1
+
+tia_p1          skipf   tia_px_a    ' --------------+-+---+
+
+_p1_res_alt     cmp     _HC, #0-0           wz    ' a |   |
+        if_e    skipf   #%01_1111_0 ' c ----------- a |-+ |
+_p1_size_alt    mov     t_cnt1, #0-0              ' a | c |
+
+_p1_res         cmp     _HC, #0-0           wz    ' a | | e
+        if_ne   cmp     _HC, #0-0           wz    ' | | | e
+        if_ne   cmp     _HC, #0-0           wz    ' | | | e
+        if_ne   jmp     #\_no_p1                  ' a | | e
+
+                mov     t_cnt1, #0                ' a | | e
+                mov     t_mask1, t_mask1+1        ' a | c e
+                setd    tia_p1, #tia_px_b         ' a | c e
+
+                testb   t_mask1, t_cnt1     wc    ' a b c e
+_colup1 if_1x   setbyte t_pixel, #0-0, #0         ' a b c e  COLUP1 (S/B0)
+        if_1x   bith    t_pixel, #27              ' a b c e  signal player1 active
+                incmod  t_cnt1, t_size1     wc    ' a b c e
+        if_c    setd    tia_p1, #tia_px_e         ' a b c e
+_no_p1
+
+                ' Missile 1
+
+tia_m1          skipf   #%0         ' ------------+
+
+_m1_res         cmp     _HC, #0-0       wz      ' | RESM1 (S/B0)
+                testb   _SYSF, #7       andz    ' | M1 ENABLED
+        if_nz   jmp     #_no_m1                 ' |
+_m1_size        mov     t_cntm1, #0             ' | MISSILE SIZE (S/B0)
+                setd    tia_m1, #%11111         ' |
+
+                setbyte t_pixel, _colup1, #0    ' COLUP1 (S/B0)
+                bith    t_pixel, #25            ' signal m1 active
+                decmod  t_cntm1, #0     wc      '
+        if_c    setd    tia_m1, #0              '
+_no_m1
+
+                ' Player 0
+
+tia_p0          skipf   tia_px_a    ' --------------+-+---+
+
+_p0_res_alt     cmp     _HC, #0-0           wz    ' a |   |
+        if_e    skipf   #%01_1111_0 ' c ----------- a |-+ |
+_p0_size_alt    mov     t_cnt0, #0-0              ' a | c |
+
+_p0_res         cmp     _HC, #0-0           wz    ' a | | e
+        if_ne   cmp     _HC, #0-0           wz    ' | | | e
+        if_ne   cmp     _HC, #0-0           wz    ' | | | e
+        if_ne   jmp     #\_no_p0                  ' a | | e
+
+                mov     t_cnt0, #0                ' a | | e
+                mov     t_mask0, t_mask0+1        ' a | c e
+                setd    tia_p0, #tia_px_b         ' a | c e
+
+                testb   t_mask0, t_cnt0     wc    ' a b c e
+_colup0 if_1x   setbyte t_pixel, #0-0, #0         ' a b c e  COLUP0 (S/B0)
+        if_1x   bith    t_pixel, #28              ' a b c e  signal player0 active
+                incmod  t_cnt0, t_size0     wc    ' a b c e
+        if_c    setd    tia_p0, #tia_px_e         ' a b c e
+_no_p0
+
+                ' Missile 0
+
+tia_m0          skipf   #%0         ' ------------+
+
+_m0_res         cmp     _HC, #0-0       wz      ' | RESM0 (S/B0)
+                testb   _SYSF, #6       andz    ' | M0 ENABLED
+        if_nz   jmp     #_no_m0                 ' |
+_m0_size        mov     t_cntm0, #0             ' | MISSILE SIZE (S/B0)
+                setd    tia_m0, #%11111         ' |
+
+                setbyte t_pixel, _colup0, #0    ' COLUP0 (S/B0)
+                bith    t_pixel, #26            ' signal m0 active
+                decmod  t_cntm0, #0     wc      '
+        if_c    setd    tia_m0, #0              '
+_no_m0
+
+                ' Collisions
+
+                getbyte r0, t_pixel, #3         ' update collision latches
+                altgw   r0, #_COLL_TBL          ' |
+                getword r0                      ' |
+                or      _COLL, r0               ' |
+
+                ' Output
+
+                testb   _PF, #26        wc      ' PFP
+                testb   t_pixel, #29    andc    ' playfield active
+        if_c    alts    _pfs+1                  ' |
+        if_c    setbyte t_pixel, 0-0, #0        ' |
+
+                cmp     _HC, #68 + 8    wc
+                testb   _SYSF, #16      andc    ' HMOVE hit blank
+        if_c    wfbyte  #$00
+        if_nc   wfbyte  t_pixel
+
+                incmod  t_cnt4, #4-1        wc
+        if_c    incmod  t_cnt20, #20-1      wc
+        if_c    bitnot  _pfs, #9                ' toggle left(0)/right(1) playfields
+        if_c    bitnot  _pfs+1, #0              ' toggle left(0)/right(1) colors
+
+_skip           incmod  _HC, #228-1     wc
+                djnz    pa, #_loop
+        if_nc   ret     wcz
+
+                bitl    _SYSF, #17      wcz
+                bitc    _SYSF, #16
+
+                mov     t_cnt4, #0
+                mov     t_cnt20, #0
+                bitl    _pfs, #9                ' toggle left(0)/right(1) playfields
+                bitl    _pfs+1, #0              ' toggle left(0)/right(1) colors
+                setd    tia_p0, #tia_px_a
+                setd    tia_m0, #0
+                setd    tia_p1, #tia_px_a
+                setd    tia_m1, #0
+                setd    tia_pfbl, #tia_pfbl_0
+
+                add     _VC, #1
+                cmp     _VC, #(VSYNC_LINES + VISIBLE_LINES)  wcz
+        if_ae   setd    tia_clock, #0
+
+                ret     wcz
+
+                orgf    ($ + 1) & !1   ' must be aligned on even address
+t_pf            long    %00000000000000000000, %00000000000000000000 ' |
+t_pf_colu       long    $00, $00                                     ' |
+t_cnt4          long    0
+t_cnt20         long    0
+
+t_cntb          long    0
+t_cntm1         long    0
+t_cntm0         long    0
+
+tia_pfbl_0      long    %1111_1111_000_0 ' a/c (default ball disabled)
+tia_bl_draw     long    %0000_1111_000_0 ' b
+tia_bl_disable  long    %1111_1111_000_0 ' c (will be muxed to tia_pfbl_0)
+tia_pf_disable  long    %0000_0000_111_0 ' d (will be muxed to tia_pfbl_0 and tia_bl_draw)
+
+tia_px_a        long    %00000_000_0110_000
+tia_px_b        long    %00000_111_1111_111
+tia_px_e        long    %00000_000_0000_111
+
+t_pixel         long    %00000000_0000000000000000_00000000
+                '          ||||||                  ++++++++-- COLU
+                '          |||||+---------------------------- BL (#24)
+                '          ||||+----------------------------- M1 (#25)
+                '          |||+------------------------------ M0 (#26)
+                '          ||+------------------------------- P1 (#27)
+                '          |+-------------------------------- P0 (#28)
+                '          +--------------------------------- PF (#29)
+
+t_mask0         long    0[2]
+t_mask1         long    0[2]
+t_size0         long    0
+t_size1         long    0
+t_cnt0          long    0
+t_cnt1          long    0
+
+m6532_normal    long    %0000000_110 ' a -> 14 clk (no timint) 20 clk (timint)
+m6532_timint    long    %1111111_000 ' b -> 10 clk
+
+'
+'
+' Instructions
+'
+
+i_wsync         callpa  #3, #_inc_cycles
+                cmp     _HC, #0         wz
+        if_nz   jmp     #i_wsync
+                ret
+                                            '       C NVZC
+i_branch        call    #\_fetch            ' BCC: %0_1110_0
+                                            ' BCS: %1_1110_0
+                                            ' BNE: %0_1101_0
+                                            ' BEQ: %1_1101_0
+                testb   _P, #REGP_C     wc  ' BPL: %0_0111_0
+                testb   _P, #REGP_Z     wc  ' BMI: %1_0111_0
+                testb   _P, #REGP_V     wc  ' BVC: %0_1011_0
+                testb   _P, #REGP_N     wc  ' BVS: %1_1011_0
+
+                modc    _nc             wc  ' Negate condition
+
+        if_1x   signx   t1, #7
+        if_1x   add     _PC, t1
+        if_1x   callpa  #3, #_inc_cycles
+        _ret_   and     _PC, i_ffff
+
+t_update_p0     testb   _P0, #25        wc  ' VDEL
+        if_1x   getbyte t_mask0+1, _P0, #0  ' GRP
+        if_0x   getbyte t_mask0+1, _P0, #1  ' GRPd
+
+                testb   _P0, #24        wz  ' REFP
+        if_x0   rev     t_mask0+1
+        if_x0   shr     t_mask0+1, #24
+
+                getnib  r0, _P0, #4         ' NUSIZ (D2-D0)
+                and     r0, #%111
+
+                sets    _p0_res+1, #$FF
+                sets    _p0_res+2, #$FF
+                sets    _p0_res_alt, #$FF
+
+                setd    .dst, #_p0_res
+                altgn   r0, #i_tia_copies
+                getnib  r1
+                sets    .cnt, r1
+                altgb   r0, #i_tia_width
+                getbyte r1
+                sets    .step, r1
+
+                mov     t_size0, #8
+
+                mov     r1, #5
+                cmp     r0, #%101       wz  ' double size player
+        if_ne   cmp     r0, #%111       wz  ' quad sized player
+        if_e    setword t_mask0+1, t_mask0+1, #1
+        if_e    mergew  t_mask0+1
+        if_e    mov     t_size0, #16
+        if_e    mov     r1, #5+1            ' delayed one extra pixel
+                cmp     r0, #%111       wz  ' quad sized player
+        if_e    setword t_mask0+1, t_mask0+1, #1
+        if_e    mergew  t_mask0+1
+        if_e    mov     t_size0, #32
+
+                getbyte r2, t_res_p0o, #0   ' adjust position based on player size
+                cmp     r1, r2          wcz ' |
+        if_a    add     tia_resp0, #1       ' |
+        if_b    sub     tia_resp0, #1       ' |
+                setbyte t_res_p0o, r1, #0   ' |
+
+                mov     pa, tia_resp0
+
+.cnt            rep     @.l1, #0-0
+.dst            sets    0-0, pa
+                add     .dst, i_d1s0
+                add     pa, t_size0
+                cmpsub  pa, #228        wcz
+ if_c_and_nz    sets    _p0_res_alt, #68    ' alt trigger always first pixel
+ if_c_and_nz    sets    _p0_size_alt, t_size0
+ if_c_and_nz    sub     _p0_size_alt, pa
+        if_c    add     pa, #68
+.step           add     pa, #0-0
+                cmpsub  pa, #228        wc
+        if_c    add     pa, #68
+.l1
+
+                getbyte r1, _p0_res+1, #0
+                getbyte r2, _p0_res+2, #0
+                cmp     r2, r1          wcz
+        if_b    setbyte _p0_res+1, r2, #0
+        if_b    setbyte _p0_res+2, r1, #0
+
+                getbyte r0, _p0_res+0, #0
+                getbyte r1, _p0_res+1, #0
+                cmp     r1, r0          wcz
+        if_b    setbyte _p0_res+0, r1, #0
+        if_b    setbyte _p0_res+1, r0, #0
+
+        _ret_   sub     t_size0, #1
+
+t_update_p1     testb   _P1, #25        wc  ' VDEL
+        if_1x   getbyte t_mask1+1, _P1, #0  ' GRP
+        if_0x   getbyte t_mask1+1, _P1, #1  ' GRPd
+
+                testb   _P1, #24        wz  ' REFP
+        if_x0   rev     t_mask1+1
+        if_x0   shr     t_mask1+1, #24
+
+                getnib  r0, _P1, #4         ' NUSIZ (D2-D0)
+                and     r0, #%111
+
+                sets    _p1_res+1, #$FF
+                sets    _p1_res+2, #$FF
+                sets    _p1_res_alt, #$FF
+
+                setd    .dst, #_p1_res
+                altgn   r0, #i_tia_copies
+                getnib  r1
+                sets    .cnt, r1
+                altgb   r0, #i_tia_width
+                getbyte r1
+                sets    .step, r1
+
+                mov     t_size1, #8
+
+                mov     r1, #5
+                cmp     r0, #%101       wz  ' double size player
+        if_ne   cmp     r0, #%111       wz  ' quad sized player
+        if_e    setword t_mask1+1, t_mask1+1, #1
+        if_e    mergew  t_mask1+1
+        if_e    mov     t_size1, #16
+        if_e    mov     r1, #5+1            ' delayed one extra pixel
+                cmp     r0, #%111       wz  ' quad sized player
+        if_e    setword t_mask1+1, t_mask1+1, #1
+        if_e    mergew  t_mask1+1
+        if_e    mov     t_size1, #32
+
+                getbyte r2, t_res_p1o, #0   ' adjust position based on player size
+                cmp     r1, r2          wcz ' |
+        if_a    add     tia_resp1, #1       ' |
+        if_b    sub     tia_resp1, #1       ' |
+                setbyte t_res_p1o, r1, #0   ' |
+
+                mov     pa, tia_resp1
+
+.cnt            rep     @.l1, #0-0
+.dst            sets    0-0, pa
+                add     .dst, i_d1s0
+                add     pa, t_size1
+                cmpsub  pa, #228        wcz
+ if_c_and_nz    sets    _p1_res_alt, #68    ' alt trigger always first pixel
+ if_c_and_nz    sets    _p1_size_alt, t_size1
+ if_c_and_nz    sub     _p1_size_alt, pa
+        if_c    add     pa, #68
+.step           add     pa, #0-0
+                cmpsub  pa, #228        wc
+        if_c    add     pa, #68
+.l1
+
+                getbyte r1, _p1_res+1, #0
+                getbyte r2, _p1_res+2, #0
+                cmp     r2, r1          wcz
+        if_b    setbyte _p1_res+1, r2, #0
+        if_b    setbyte _p1_res+2, r1, #0
+
+                getbyte r0, _p1_res+0, #0
+                getbyte r1, _p1_res+1, #0
+                cmp     r1, r0          wcz
+        if_b    setbyte _p1_res+0, r1, #0
+        if_b    setbyte _p1_res+1, r0, #0
+
+        _ret_   sub     t_size1, #1
+
+tia_resp0       long    0
+tia_resp1       long    0
+
+t_res           getbyte r0, _HC, #0         ' a b c d e
+                cmp     r0, #68         wcz ' a b c d e
+        if_b    mov     r0, #68 - 2         ' a b c d e
+t_res_p0o       add     r0, #5              ' a | | | |
+t_res_p1o       add     r0, #5              ' | b | | |
+                add     r0, #4              ' | | c d e
+                                            '
+        _ret_   mov     tia_resp0, r0       ' a | | | |  RESP0:     %0_1100
+        _ret_   mov     tia_resp1, r0       '   b | | |  RESP1:    %01_1010
+        _ret_   setbyte _m0_res, r0, #0     '     c | |  RESM0:   %011_0110
+        _ret_   setbyte _m1_res, r0, #0     '       d |  RESM1:  %0111_0110
+        _ret_   setbyte _bl_res, r0, #0     '         e  RESBL: %01111_0110
+
+i_brk           incmod  _PC, i_ffff
+                getbyte t1, _PC, #1         ' PCH -> (S)
+                call    #_push_t1
+                getbyte t1, _PC, #0         ' PCL -> (S)
+                call    #_push_t1
+                getbyte t1, _P, #0          ' P -> (S)
+                bith    t1, #REGP_B         ' B=1
+                call    #_push_t1
+
+                bith    _P, #REGP_I         ' I=1
+
+                mov     _PC, ##$FFFE        ' read interrupt vector
+                call    #\_fetch2           ' |
+        _ret_   getword _PC, t4, #0         ' |
+
+i_cmp_abs       call    #\_fetch_abs        ' %xxx_0_1_1111110
+i_cmp_abs_x     call    #\_fetch_abs_x      ' %xxx_0_1_111110
+i_cmp_abs_y     call    #\_fetch_abs_y      ' %xxx_0_1_11110
+i_cmp_ind_x     call    #\_fetch_ind_x      ' %xxx_0_1_1110
+i_cmp_ind_y     call    #\_fetch_ind_y      ' %xxx_0_1_110
+i_cmp_zpg       call    #\_fetch_zpg        ' %xxx_0_1_10
+i_cmp_zpg_x     call    #\_fetch_zpg_x      ' %xxx_0_1_0
+i_cmp_imm       call    #\_fetch            ' %xxx_00
+                mov     t2, t1
+                getbyte t1, _A, #0          '  110 CMP
+                getbyte t1, _X, #0          '  101 CPX
+                getbyte t1, _Y, #0          '  011 CPY
+                sub     t1, t2
+                testb   t1, #8          wz
+                bitnz   _P, #REGP_C
+                jmp     #_flags
+
+i_dec_zpg       call    #\_fetch_zpg        ' %xx_1110
+i_dec_abs_x     call    #\_fetch_abs_x      ' %xx_110
+i_dec_zpg_x     call    #\_fetch_zpg_x      ' %xx_10
+i_dec_abs       call    #\_fetch_abs        ' %xx_0
+                sub     t1, #1              '  10 DEC
+                add     t1, #1              '  01 INC
+                call    #\_write
+                jmp     #_flags
+
+                                            ' INX INY DEX DEY
+i_inde_xy       getbyte t1, _X, #0          '  0   1   0   1
+                getbyte t1, _Y, #0          '  1   0   1   0
+                add     t1, #1              '  0   0   1   1
+                sub     t1, #1              '  1   1   0   0
+                getbyte _X, t1, #0          '  0   1   0   1
+                getbyte _Y, t1, #0          '  1   0   1   0
+                jmp     #_flags
+
+i_jmp_imm       call    #\_fetch2
+        _ret_   getword _PC, t4, #0
+
+i_jmp_ind       call    #\_fetch2
+                getword ea, t4, #0
+                call    #\_read
+                getbyte _PC, t1, #0
+                incmod  ea, i_ffff
+                call    #\_read
+        _ret_   setbyte _PC, t1, #1
+
+i_jsr           call    #\_fetch2           ' t4 = new PC
+
+                decmod  _PC, i_ffff
+                getbyte t1, _PC, #1         ' PCH -> (S)
+                call    #_push_t1
+                getbyte t1, _PC, #0         ' PCL -> (S)
+                call    #_push_t1
+
+        _ret_   getword _PC, t4, #0
+
+i_ld_abs        call    #\_fetch_abs        ' %xxx_1_11111110
+i_ld_abs_x      call    #\_fetch_abs_x      ' %xxx_1_1111110
+i_ld_abs_y      call    #\_fetch_abs_y      ' %xxx_1_111110
+i_ld_zpg        call    #\_fetch_zpg        ' %xxx_1_11110
+i_ld_zpg_x      call    #\_fetch_zpg_x      ' %xxx_1_1110
+i_ld_zpg_y      call    #\_fetch_zpg_y      ' %xxx_1_110
+i_ld_ind_x      call    #\_fetch_ind_x      ' %xxx_1_10
+i_ld_ind_y      call    #\_fetch_ind_y      ' %xxx_1_0
+i_ld_imm        call    #\_fetch            ' %xxx_0
+                mov     _A, t1              '  110 LDA
+                mov     _X, t1              '  101 LDX
+                mov     _Y, t1              '  011 LDY
+                jmp     #_flags
+
+i_lsr_abs       call    #\_fetch_abs        ' %01_00_1_1110
+i_lsr_zpg       call    #\_fetch_zpg        ' %01_00_1_110
+i_lsr_abs_x     call    #\_fetch_abs_x      ' %01_00_1_10
+i_lsr_zpg_x     call    #\_fetch_zpg_x      ' %01_00_1_0
+i_lsr           getbyte t1, _A, #0          ' %10_00_0
+
+                shr     t1, #1      wc
+                bitc    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+                jmp     #_flags
+
+i_pha           getbyte t1, _A, #0          ' a         PHA: %010
+i_php           getbyte t1, _P, #0          ' - b       PHP:  %00
+                jmp     #_push_t1           ' a b
+
+i_pop           call    #\_pop_t1           ' a b       PLA: %001100
+                getbyte _A, t1, #0          ' a -       PLP: %100010
+                getbyte _P, t1, #0          ' - b
+                or      _P, #%00110000      ' - b
+                nop                         ' a b
+                jmp     #_flags             ' a -
+                ret
+
+i_jam
+i_halt          jmp     #\@@i_trap
+
+'
+'
+' Parameters
+'
+
+ram_addr        long    0
+rom_addr        long    0
+ppa_addr        long    0
+aud_addr        long    0
+
+tia_fbp         long    0
+tia_fb0         long    0
+tia_fb1         long    0
+tia_inptp       long    0
+
+'
+'
+' CPU Registers
+'
+_A              long    $00         ' 8-bit working registers
+_X              long    $00
+_Y              long    $00
+
+_S              long    $FF         ' 8-bit stack pointer
+
+_P              long    %00110000   ' 8-bit flag register
+                        '|||||||+---- 0 = C - carry
+                        '||||||+----- 1 = Z - zero
+                        '|||||+------ 2 = I - interrupt
+                        '||||+------- 3 = D - decimal
+                        '|||+-------- 4 = B - break
+                        '||+--------- 5 = 1
+                        '|+---------- 6 = V - overflow
+                        '+----------- 7 = N - negative
+
+_PC             long    $FFFC       ' 16-bit program counter
+
+_I              long    %000000000000000000000000_00000000
+                '        |||||||||||||||||||||||| ++++++++-- instruction cycles
+                '        ++++++++++++++++++++++++----------- instruction time
+
+_PF             long    %00000000_00000000_00000000_00000000
+                '          || ||| |||||||| |||||||| ++++------ (N1) PF0
+                '          || ||| |||||||| ++++++++----------- (B1) PF1
+                '          || ||| ++++++++-------------------- (B2) PF2
+                '          || ||+----------------------------- (#24) CTRLPF REF (D0)
+                '          || |+------------------------------ (#25) CTRLPF SCORE (D1)
+                '          || +------------------------------- (#26) CTRLPF PFP (D2)
+                '          ++--------------------------------- (N7)  CTRLPF BALL SIZE (D5-4) 00=1 01=2 10=4 11=8 (#29,#28)
+_P0             long    %00000000_00000000_00000000_00000000
+_P1             long    %00000000_00000000_00000000_00000000
+                '              ||   || ||| |||||||| ++++++++-- (B0)  GRP: graphics player (D7-0)
+                '              ||   || ||| ++++++++----------- (B1)  GRPd
+                '              ||   ++-+++-------------------- (B2)  NUSIZ: number-size player-missle (D5-0)
+                '              |+----------------------------- (#24) REFP: reflect player (D3)
+                '              +------------------------------ (#25) VDELP: vertical delay player (D0)
+_HM             long    %00000000_0000_0000_0000_0000_0000_0000
+                '                      |||| |||| |||| |||| ++++-- (N0)  HMP0
+                '                      |||| |||| |||| ++++------- (N1)  HMP1
+                '                      |||| |||| ++++------------ (N2)  HMM0
+                '                      |||| ++++----------------- (N3)  HMM1
+                '                      ++++---------------------- (N4)  HMBL
+_MB             long    %00000000_00000000_00000000_00000000
+                '         ||||||| |||||||| |||||||| ++++++++-- (B0)  RESM0
+                '         ||||||| |||||||| ++++++++----------- (B1)  RESM1
+                '         ||||||| ++++++++-------------------- (B2)  RESBL
+                '         ||||||+----------------------------- (#24) ENAM0 (D1)
+                '         |||||+------------------------------ (#25) ENAM1 (D1)
+                '         ||||+------------------------------- (#26) ENABL (D1)
+                '         |||+-------------------------------- (#27) RESMP0 (D1)
+                '         ||+--------------------------------- (#28) RESMP1 (D1)
+                '         |+---------------------------------- (#29) VDELBL (D0)
+                '         +----------------------------------- (#30) ENABLd
+
+_HC             long    0           ' horizontal counter
+_VC             long    0           ' vertical (scanline) counter
+
+_COLL           long    %00_00_00_00_00_00_00_00
+                '        || || || || || || || ++ D7=(P0,P1); D6=(M0,M1)
+                '        || || || || || || ++--- D7=(BL,PF); D6=(unused)
+                '        || || || || || ++------ D7=(M1,PF); D6=(M1,BL)
+                '        || || || || ++--------- D7=(M0,PF); D6=(M0,BL)
+                '        || || || ++------------ D7=(P1,PF); D6=(P1,BL)
+                '        || || ++--------------- D7=(P0,PF); D6=(P0,BL)
+                '        || ++------------------ D7=(M1,P0); D6=(M1,P1)
+                '        ++--------------------- D7=(M0,P1); D6=(M0,P0)
+
+_COLL_TBL
+                '        ++--------------------- D7=(M0,P1); D6=(M0,P0)
+                '        || ++------------------ D7=(M1,P0); D6=(M1,P1)
+                '        || || ++--------------- D7=(P0,PF); D6=(P0,BL)
+                '        || || || ++------------ D7=(P1,PF); D6=(P1,BL)
+                '        || || || || ++--------- D7=(M0,PF); D6=(M0,BL)
+                '        || || || || || ++------ D7=(M1,PF); D6=(M1,BL)
+                '        || || || || || || ++--- D7=(BL,PF); D6=(unused)
+                '        || || || || || || || ++ D7=(P0,P1); D6=(M0,M1)
+                '        || || || || || || || ||        ' PF P0 P1 M0 M1 BL
+                word    %00_00_00_00_00_00_00_00        '  0  0  0  0  0  0
+                word    %00_00_00_00_00_00_00_00        '  0  0  0  0  0  1
+                word    %00_00_00_00_00_00_00_00        '  0  0  0  0  1  0
+                word    %00_00_00_00_00_01_00_00        '  0  0  0  0  1  1
+                word    %00_00_00_00_00_00_00_00        '  0  0  0  1  0  0
+                word    %00_00_00_00_01_00_00_00        '  0  0  0  1  0  1
+                word    %00_00_00_00_00_00_00_01        '  0  0  0  1  1  0
+                word    %00_00_00_00_01_01_00_01        '  0  0  0  1  1  1
+                word    %00_00_00_00_00_00_00_00        '  0  0  1  0  0  0
+                word    %00_00_00_01_00_00_00_00        '  0  0  1  0  0  1
+                word    %00_01_00_00_00_00_00_00        '  0  0  1  0  1  0
+                word    %00_01_00_01_00_01_00_00        '  0  0  1  0  1  1
+                word    %10_00_00_00_00_00_00_00        '  0  0  1  1  0  0
+                word    %10_00_00_01_01_00_00_00        '  0  0  1  1  0  1
+                word    %10_01_00_00_00_00_00_01        '  0  0  1  1  1  0
+                word    %10_01_00_01_01_01_00_01        '  0  0  1  1  1  1
+                word    %00_00_00_00_00_00_00_00        '  0  1  0  0  0  0
+                word    %00_00_01_00_00_00_00_00        '  0  1  0  0  0  1
+                word    %00_10_00_00_00_00_00_00        '  0  1  0  0  1  0
+                word    %00_10_01_00_00_01_00_00        '  0  1  0  0  1  1
+                word    %01_00_00_00_00_00_00_00        '  0  1  0  1  0  0
+                word    %01_00_01_00_01_00_00_00        '  0  1  0  1  0  1
+                word    %01_10_00_00_00_00_00_01        '  0  1  0  1  1  0
+                word    %01_10_01_00_01_01_00_01        '  0  1  0  1  1  1
+                word    %00_00_00_00_00_00_00_10        '  0  1  1  0  0  0
+                word    %00_00_01_01_00_00_00_10        '  0  1  1  0  0  1
+                word    %00_11_00_00_00_00_00_10        '  0  1  1  0  1  0
+                word    %00_11_01_01_00_01_00_10        '  0  1  1  0  1  1
+                word    %11_00_00_00_00_00_00_10        '  0  1  1  1  0  0
+                word    %11_00_01_01_01_00_00_10        '  0  1  1  1  0  1
+                word    %11_11_00_00_00_00_00_11        '  0  1  1  1  1  0
+                word    %11_11_01_01_01_01_00_11        '  0  1  1  1  1  1
+                word    %00_00_00_00_00_00_00_00        '  1  0  0  0  0  0
+                word    %00_00_00_00_00_00_10_00        '  1  0  0  0  0  1
+                word    %00_00_00_00_00_10_00_00        '  1  0  0  0  1  0
+                word    %00_00_00_00_00_11_10_00        '  1  0  0  0  1  1
+                word    %00_00_00_00_10_00_00_00        '  1  0  0  1  0  0
+                word    %00_00_00_00_11_00_10_00        '  1  0  0  1  0  1
+                word    %00_00_00_00_10_10_00_01        '  1  0  0  1  1  0
+                word    %00_00_00_00_11_11_10_01        '  1  0  0  1  1  1
+                word    %00_00_00_10_00_00_00_00        '  1  0  1  0  0  0
+                word    %00_00_00_11_00_00_10_00        '  1  0  1  0  0  1
+                word    %00_01_00_10_00_10_00_00        '  1  0  1  0  1  0
+                word    %00_01_00_11_00_11_10_00        '  1  0  1  0  1  1
+                word    %10_00_00_10_10_00_00_00        '  1  0  1  1  0  0
+                word    %10_00_00_11_11_00_10_00        '  1  0  1  1  0  1
+                word    %10_01_00_10_10_10_00_01        '  1  0  1  1  1  0
+                word    %10_01_00_11_11_11_10_01        '  1  0  1  1  1  1
+                word    %00_00_10_00_00_00_00_00        '  1  1  0  0  0  0
+                word    %00_00_11_00_00_00_10_00        '  1  1  0  0  0  1
+                word    %00_10_10_00_00_10_00_00        '  1  1  0  0  1  0
+                word    %00_10_11_00_00_11_10_00        '  1  1  0  0  1  1
+                word    %01_00_10_00_10_00_00_00        '  1  1  0  1  0  0
+                word    %01_00_11_00_11_00_10_00        '  1  1  0  1  0  1
+                word    %01_10_10_00_10_10_00_01        '  1  1  0  1  1  0
+                word    %01_10_11_00_11_11_10_01        '  1  1  0  1  1  1
+                word    %00_00_10_10_00_00_00_10        '  1  1  1  0  0  0
+                word    %00_00_11_11_00_00_10_10        '  1  1  1  0  0  1
+                word    %00_11_10_10_00_10_00_10        '  1  1  1  0  1  0
+                word    %00_11_11_11_00_11_10_10        '  1  1  1  0  1  1
+                word    %11_00_10_10_10_00_00_10        '  1  1  1  1  0  0
+                word    %11_00_11_11_11_00_10_10        '  1  1  1  1  0  1
+                word    %11_11_10_10_10_10_00_11        '  1  1  1  1  1  0
+                word    %11_11_11_11_11_11_10_11        '  1  1  1  1  1  1
+
+_AUD0           long    $00_00_00_00
+_AUD1           long    $00_00_00_00
+                '           || || ++ (B0) AUDCx
+                '           || ++--- (B1) AUDFx
+                '           ++------ (B2) AUDVx
+
+'
+'
+' M6532 Registers
+'
+_SW             long    %00000000_00111111_00000000_11111111
+                '        |||||||| |||||||| |||||||| ++++++++-- (B0) SWCHA
+                '        |||||||| |||||||| ++++++++----------- (B1) SWACNT
+                '        |||||||| ++++++++-------------------- (B2) SWCHB
+                '        ++++++++----------------------------- (B3) SWBCNT
+_INPT           long    %00000000_00000000_00000000_00111111
+_TIMER          long    %0000000000000000_00000000_00000000 | $0400_00_40
+                '        |||||||||||||||| ||       ++++++++--- (B0) INTIM
+                '        |||||||||||||||| |+------------------ (#14) INSTAT (TIMINT)
+                '        |||||||||||||||| +------------------- (#15) INSTAT (???)
+                '        ++++++++++++++++--------------------- (W1)  DIVIDER
+_TC             long    0
+
+'
+'
+' System flags
+'
+_SYSF           long    %00000000_00000000_00000000_00000000
+                '        |                 |||||||| ||   ||+-- (#0)  VSYNC
+                '        |                 |||||||| ||   |+--- (#1)  VBLANK
+                '        |                 |||||||| ||   +---- (#2)  WSYNC
+                '        |                 |||||||| |+-------- (#6)  M0 ENABLED
+                '        |                 |||||||| +--------- (#7)  M1 ENABLED
+                '        |                 ++++++++----------- (B1)  MISSILE/BALL SIZE
+                '        +------------------------------------ (#31) frambuffer toggle
+
+'
+'
+' Initialized
+'
+i_table         long    @@m6507_ins_table     ' instructions table pointer
+i_ffff          long    $FFFF
+i_d1s0          long    1 << 9
+i_tia_wr        long    @@tia_write_table
+i_tia_width     byte    0, 16-8, 32-8, 16-8, 64-8, 0, 32-8, 0
+i_tia_copies    long    %%01_03_01_02_03_02_02_01 ' getnib
+
+i_rom_mask      long    $0FFF
+i_rom_bs_base   long    $0FF8
+i_rom_bs_top    long    $0FF9
+
+'
+'
+' Temporaries
+'
+t1              res     1       ' used for flags processing
+t2              res     1
+t3              res     1
+t4              res     1
+t5              res     1
+ea              res     1       ' external address
+
+r0              res     1
+r1              res     1
+r2              res     1
+
+                                ' 13 longs unused
+                fit     $1F6    ' ($1F0) ijmp/iret registers not used
+
+DAT             ' M6507 LUT
+                org     $200
+
+m6507_lut
+
+'
+'
+' Instructions
+'
+
+i_bit_abs       call    #\_fetch_abs
+i_bit_zpg       call    #\_fetch_zpg
+_bit            test    _A, t1          wz
+                bitz    _P, #REGP_Z
+                and     t1, #%11000000
+                and     _P, #%00111111
+        _ret_   or      _P, t1
+
+i_log_abs       call    #\_fetch_abs        ' %xxx_1_1111110
+i_log_zpg       call    #\_fetch_zpg        ' %xxx_1_111110
+i_log_abs_x     call    #\_fetch_abs_x      ' %xxx_1_11110
+i_log_abs_y     call    #\_fetch_abs_y      ' %xxx_1_1110
+i_log_ind_x     call    #\_fetch_ind_x      ' %xxx_1_110
+i_log_ind_y     call    #\_fetch_ind_y      ' %xxx_1_10
+i_log_zpg_x     call    #\_fetch_zpg_x      ' %xxx_1_0
+i_log_imm       call    #\_fetch            ' %xxx_0
+                and     t1, _A              '  110 AND
+                xor     t1, _A              '  101 EOR
+                or      t1, _A              '  011 ORA
+                getbyte _A, t1, #0
+                jmp     #_flags
+
+i_asl_abs       call    #\_fetch_abs        ' %01_000_1_1110
+i_asl_zpg       call    #\_fetch_zpg        ' %01_000_1_110
+i_asl_abs_x     call    #\_fetch_abs_x      ' %01_000_1_10
+i_asl_zpg_x     call    #\_fetch_zpg_x      ' %01_000_1_0
+i_asl           getbyte t1, _A, #0          ' %10_000_0
+
+                testb   t1, #7          wz
+                shl     t1, #1
+                bitz    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+                jmp     #_flags
+
+i_adc_abs       call    #\_fetch_abs        ' %1_1111110
+i_adc_abs_x     call    #\_fetch_abs_x      ' %1_111110
+i_adc_abs_y     call    #\_fetch_abs_y      ' %1_11110
+i_adc_ind_x     call    #\_fetch_ind_x      ' %1_1110
+i_adc_ind_y     call    #\_fetch_ind_y      ' %1_110
+i_adc_zpg       call    #\_fetch_zpg        ' %1_10
+i_adc_zpg_x     call    #\_fetch_zpg_x      ' %1_0
+i_adc_imm       call    #\_fetch            ' %0
+
+_adc            testb   _P, #REGP_C     wc
+
+                testb   _P, #REGP_D     wz
+        if_z    jmp     #_adc_dec
+
+                getbyte t3, _A, #0          ' t3 = sum
+                addx    t3, t1              ' |
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t2, _A, #0          ' t2 = ~(A ^ operand)
+                xor     t2, t1              ' |
+                xor     t2, #$FF            ' |
+                getbyte t4, _A, #0          ' t4 = A ^ sum
+                xor     t4, t3
+                and     t2, t4              ' t2 = ~(A ^ operand) & (A ^ sum)
+                testb   t2, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                testb   t3, #8          wz  ' affects C
+                bitz    _P, #REGP_C         ' |
+
+                getbyte _A, t3, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+_adc_dec        mov     t2, _A              ' t2 = lo
+                and     t2, #$0F
+                mov     t4, t1
+                and     t4, #$0F
+                addx    t2, t4
+
+                mov     t3, _A              ' t3 = hi
+                and     t3, #$F0
+                mov     t4, t1
+                and     t4, #$F0
+                add     t3, t4
+
+                cmp     t2, #$09        wcz
+        if_a    add     t2, #$06
+        if_a    add     t3, #$10
+
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t5, _A, #0          ' t5 = ~(A ^ operand)
+                xor     t5, t1              ' |
+                xor     t5, #$FF            ' |
+                getbyte t4, _A, #0          ' t4 = A ^ hi
+                xor     t4, t3
+                and     t5, t4              ' t5 = ~(A ^ operand) & (A ^ hi)
+                testb   t5, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                cmp     t3, #$90        wcz
+        if_a    add     t3, #$60
+
+                testb   t3, #8          wz  ' affects C
+                bitz    _P, #REGP_C         ' |
+
+                getnib  _A, t2, #0
+                add     _A, t3
+
+                and     _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+i_sbc_abs       call    #\_fetch_abs        ' %1_1111110
+i_sbc_abs_x     call    #\_fetch_abs_x      ' %1_111110
+i_sbc_abs_y     call    #\_fetch_abs_y      ' %1_11110
+i_sbc_ind_x     call    #\_fetch_ind_x      ' %1_1110
+i_sbc_ind_y     call    #\_fetch_ind_y      ' %1_110
+i_sbc_zpg       call    #\_fetch_zpg        ' %1_10
+i_sbc_zpg_x     call    #\_fetch_zpg_x      ' %1_0
+i_sbc_imm       call    #\_fetch            ' %0
+
+_sbc            testbn  _P, #REGP_C     wc
+
+                getbyte t3, _A, #0          ' t3 = sum
+                subx    t3, t1              ' |
+                testb   t3, #7          wz  ' affects N
+                bitz    _P, #REGP_N         ' |
+
+                getbyte t2, _A, #0          ' t2 = (A ^ operand)
+                xor     t2, t1              ' |
+                getbyte t4, _A, #0          ' t4 = A ^ sum
+                xor     t4, t3
+                and     t2, t4              ' t2 = (A ^ operand) & (A ^ sum)
+                testb   t2, #7          wz  ' affects V
+                bitz    _P, #REGP_V         ' |
+
+                testb   t3, #8          wz  ' affects C
+                bitnz   _P, #REGP_C         ' |
+
+                test    t3, #$FF        wz  ' affects Z
+                bitz    _P, #REGP_Z         ' |
+
+                testb   _P, #REGP_D     wz
+        if_z    jmp     #_sbc_dec
+
+                getbyte _A, t3, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+_sbc_dec        mov     t2, _A              ' t2 = lo
+                and     t2, #$0F
+                mov     t4, t1
+                and     t4, #$0F
+                subx    t2, t4
+
+                mov     t3, _A              ' t3 = hi
+                and     t3, #$F0
+                mov     t4, t1
+                and     t4, #$F0
+                sub     t3, t4
+
+                test    t2, #$10        wz
+        if_nz   sub     t2, #$06
+        if_nz   sub     t3, #$01
+
+                test    t3, #$100       wz
+        if_nz   sub     t3, #$60
+
+                getbyte _A, t3, #0
+                setnib  _A, t2, #0
+
+                test    _A, #$FF        wz  ' affects Z
+        _ret_   bitz    _P, #REGP_Z         ' |
+
+i_sec   _ret_   bith    _P, #REGP_C
+i_sed   _ret_   bith    _P, #REGP_D
+i_sei   _ret_   bith    _P, #REGP_I
+i_clc   _ret_   bitl    _P, #REGP_C
+i_cld   _ret_   bitl    _P, #REGP_D
+i_cli   _ret_   bitl    _P, #REGP_I
+i_clv   _ret_   bitl    _P, #REGP_V
+i_nop           ret
+
+i_st_abs        call    #\_setup_abs        ' %xxx_11111110
+i_st_abs_x      call    #\_setup_abs_x      ' %xxx_1111110
+i_st_abs_y      call    #\_setup_abs_y      ' %xxx_111110
+i_st_zpg        call    #\_setup_zpg        ' %xxx_11110
+i_st_zpg_x      call    #\_setup_zpg_x      ' %xxx_1110
+i_st_zpg_y      call    #\_setup_zpg_y      ' %xxx_110
+i_st_ind_x      call    #\_setup_ind_x      ' %xxx_10
+i_st_ind_y      call    #\_setup_ind_y      ' %xxx_0
+_st             mov     t1, _A              '  110 A
+                mov     t1, _X              '  101 X
+                mov     t1, _Y              '  011 Y
+                jmp     #\_write
+                                            ' TAX TAY TSX TXA TXS TYA
+i_taxya         getbyte t1, _A, #0          '  0   0   1   1   1   1
+                getbyte t1, _X, #0          '  1   1   1   0   0   1
+                getbyte t1, _Y, #0          '  1   1   1   1   1   0
+                getbyte t1, _S, #0          '  1   1   0   1   1   1
+                getbyte _A, t1, #0          '  1   1   1   0   1   0
+                getbyte _X, t1, #0          '  0   1   0   1   1   1
+                getbyte _Y, t1, #0          '  1   0   1   1   1   1
+                getbyte _S, t1, #0          '  1   1   1   1   0   1
+                call    #\_flags            '                  1
+                ret
+
+i_rti           call    #\_pop_t1           ' (S) -> P
+                mov     _P, t1
+                ' fall-through
+i_rts           call    #\_pop_t1           ' (S) -> PCL
+                getbyte _PC, t1, #0         ' |
+                call    #\_pop_t1           ' (S) -> PCH
+                setbyte _PC, t1, #1         ' |
+                incmod  _PC, i_ffff         ' PC = PC + 1 (skip if RTI)
+                ret
+
+i_rol_abs       call    #\_fetch_abs        ' %01_00000_1_1110
+i_rol_zpg       call    #\_fetch_zpg        ' %01_00000_1_110
+i_rol_abs_x     call    #\_fetch_abs_x      ' %01_00000_1_10
+i_rol_zpg_x     call    #\_fetch_zpg_x      ' %01_00000_1_0
+i_rol           getbyte t1, _A, #0          ' %10_00000_0
+
+                testb   _P, #REGP_C     wc
+                testb   t1, #7          wz
+                shl     t1, #1
+                bitc    t1, #0
+                bitz    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+
+                jmp     #_flags
+
+
+i_ror_abs       call    #\_fetch_abs        ' %01_00000_1_1110
+i_ror_zpg       call    #\_fetch_zpg        ' %01_00000_1_110
+i_ror_abs_x     call    #\_fetch_abs_x      ' %01_00000_1_10
+i_ror_zpg_x     call    #\_fetch_zpg_x      ' %01_00000_1_0
+i_ror           getbyte t1, _A, #0          ' %10_00000_0
+
+                testb   _P, #REGP_C     wc
+                testb   t1, #0          wz
+                shr     t1, #1
+                bitc    t1, #7
+                bitz    _P, #REGP_C
+
+                getbyte _A, t1, #0
+                call    #\_write
+
+                jmp     #_flags
+
+'
+'
+' Common subroutines
+'
+_fetch          getword ea, _PC, #0
+                incmod  _PC, i_ffff
+                jmp     #\_read             ' return byte in t1
+
+_fetch2         call     #\_fetch
+                getbyte t4, t1, #0
+                call     #\_fetch
+        _ret_   setbyte t4, t1, #1          ' return word in t4
+
+_fetch_abs      call    #\_fetch2
+                getword ea, t4, #0
+                jmp     #\_read
+
+_setup_abs      call    #\_fetch2
+        _ret_   getword ea, t4, #0
+
+_fetch_abs_x    call    #\_setup_abs_x
+                jmp     #\_read
+
+_setup_abs_x    call    #\_fetch2
+                getword ea, t4, #0
+'                testb   ea, #8          wz
+        _ret_   add     ea, _X
+'                testb   ea, #8          wc
+'    if_z_ne_c   jmp     #\_inc_cycles       ' page boundary, add 1 cycle
+'                ret
+
+_fetch_abs_y    call    #\_setup_abs_y
+                jmp     #\_read
+
+_setup_abs_y    call    #\_fetch2
+                getword ea, t4, #0
+'                testb   ea, #8          wz
+        _ret_   add     ea, _Y
+'                testb   ea, #8          wc
+'    if_z_ne_c   jmp     #\_inc_cycles       ' page boundary, add 1 cycle
+'                ret
+
+_fetch_zpg      call    #\_setup_zpg
+                getbyte ea, t1, #0
+                jmp     #\_read
+
+_setup_zpg      call    #\_fetch
+        _ret_   getbyte ea, t1, #0
+
+_fetch_zpg_x    call    #\_setup_zpg_x
+                jmp     #\_read
+
+_setup_zpg_x    call    #\_fetch
+                getbyte ea, t1, #0
+                add     ea, _X
+        _ret_   and     ea, #$FF
+
+_fetch_zpg_y    call    #\_setup_zpg_y
+                jmp     #\_read
+
+_setup_zpg_y    call    #\_fetch
+                getbyte ea, t1, #0
+                add     ea, _Y
+        _ret_   and     ea, #$FF
+
+_fetch_ind_x    call    #\_setup_ind_x
+                jmp     #\_read
+
+_setup_ind_x    call    #\_fetch
+                add     t1, _X              ' add index
+
+                getbyte ea, t1, #0          ' | low byte
+                call    #\_read             ' |
+                getbyte t4, t1, #0          ' |
+
+                incmod  ea, #$FF
+                call    #\_read             ' high byte
+                setbyte t4, t1, #1          ' |
+
+        _ret_   getword ea, t4, #0
+
+_fetch_ind_y    call    #\_setup_ind_y
+                jmp     #\_read
+
+_setup_ind_y    call    #\_fetch
+
+                getbyte ea, t1, #0
+                call    #\_read
+                getbyte t4, t1, #0          ' t4 = low
+
+                incmod  ea, #$FF
+                call    #\_read             ' t1 = high
+
+                add     t4, _Y
+'                cmp     t4, #$100       wc  ' page boundary
+'        if_nc   call    #\_inc_cycles       ' add 1 cycle
+
+                shl     t1, #8
+                add     t4, t1
+        _ret_   getword ea, t4, #0
+
+_push_t1        getbyte ea, _S, #0
+                add     ea, #$100
+                decmod  _S, #$FF
+                jmp     #\_write
+
+_pop_t1         incmod  _S, #$FF
+                getbyte ea, _S, #0
+                add     ea, #$100
+                jmp     #\_read
+
+_flags          test    t1, #$FF        wz  ' affects Z
+                bitz    _P, #REGP_Z         ' |
+                testb   t1, #7          wz  ' affects N
+        _ret_   bitz    _P, #REGP_N         ' |
+
+'
+'
+' I/O Routines
+'
+
+_read           ' ea = address
+                ' t1 = data
+                getword t5, ea, #0
+                testb   t5, #12     wz
+        if_x1   jmp     #.rom               ' A12 = 1 is read from ROM
+                testb   t5, #8      wz
+        if_x1   jmp     #.ram               ' A8 = 1 is read from stack RAM
+                testb   t5, #7      wc
+        if_0x   jmp     #.tia               ' A7 = 0 is read from TIA
+                testb   t5, #9      wz
+        if_10   jmp     #.ram               ' A9 = 0 is read from RAM
+        if_11   jmp     #.m6532             ' A9 = 1 is read from RIOT
+
+                ret
+
+.ram            and     t5, #$7F
+                add     t5, ram_addr
+        _ret_   rdbyte  t1, t5
+
+.tia            and     t5, #$0F
+                getptr  ptrb
+                jmp     #\@@tia_read
+
+.m6532          and     t5, #$07
+
+                cmp     t5, #SWCHA      wz
+        if_e    getbyte t1, _SW, #0
+                cmp     t5, #SWCHB      wz
+        if_e    getbyte t1, _SW, #2
+
+                cmp     t5, #INTIM      wz
+        if_ne   cmp     t5, #INTIM+2    wz
+        if_e    getbyte t1, _TIMER, #0
+        if_e    bitl    _TIMER, #14
+        if_e    setd    m6532_timer, #m6532_normal
+
+                cmp     t5, #TIMINT     wz
+        if_ne   cmp     t5, #TIMINT+2   wz
+        if_e    getbyte t1, _TIMER, #1
+        if_e    bitl    _TIMER, #14
+        if_e    setd    m6532_timer, #m6532_normal
+
+                ret     wcz
+
+.rom            and     t5, i_rom_mask
+'                cmp     t5, i_rom_bs_base   wz
+'        if_ne   cmp     t5, i_rom_bs_top    wz
+'        if_e    testb   t5, #0              wc
+'        if_e    bitc    rom_addr, #12
+                add     t5, rom_addr
+        _ret_   rdbyte  t1, t5
+
+
+
+
+_write          ' ea = address
+                ' t1 = data
+                getword t5, ea, #0
+                testb   t5, #12     wz
+        if_x1   jmp     #.rom               ' A12 = 1 is write to ROM
+'                testb   t5, #8      wz
+'        if_x1   jmp     #.ram               ' A8 = 1 is write to stack RAM
+                testb   t5, #7      wc
+        if_0x   jmp     #.tia               ' A7 = 0 is write to TIA
+                testb   t5, #9      wz
+        if_10   jmp     #.ram               ' A9 = 0 is write to RAM
+        if_11   getptr  ptrb
+        if_11   jmp     #\@@m6532_write      ' A9 = 1 is write to M6532
+                ret     wcz
+
+.ram            and     t5, #$7F
+                add     t5, ram_addr
+                wrbyte  t1, t5
+                ret     wcz
+
+.tia            and     t5, #$3F
+
+                cmp     t5, #HMOVE      wz
+        if_e    getptr  ptrb
+        if_e    jmp     #\@@t_hmove
+
+                shl     t5, #2
+                add     t5, i_tia_wr
+                rdlong  t5, t5
+                execf   t5
+
+.rom            and     t5, i_rom_mask
+                cmp     t5, i_rom_bs_base   wz
+        if_ne   cmp     t5, i_rom_bs_top    wz
+        if_e    testb   t5, #0              wc
+        if_e    bitc    rom_addr, #12
+                ret
+
+'
+'
+' TIA Port Write
+'
+
+t_vsync         testb   t1, #1          wc
+                bitc    _SYSF, #0       wcz
+        if_nc   ret     wcz
+
+                rdlong  _SW, ppa_addr
+                rdlong  _INPT, tia_inptp
+                'testp   #RESET_PIN      wc
+                'bitc    _SW, #16+0
+                'testp   #SELECT_PIN     wc
+                'bitc    _SW, #16+1
+
+#ifdef _DEBUGGER
+                wrfast  #0, tia_fb0
+#else
+                bitnot  _SYSF, #31      wcz ' c=old display buffer
+        if_0x   wrlong  tia_fb0, tia_fbp    ' old is fb1, display fb0
+        if_0x   wrfast  #0, tia_fb1         ' write to fb1
+        if_1x   wrlong  tia_fb1, tia_fbp    ' old is fb0, display fb1
+        if_1x   wrfast  #0, tia_fb0         ' write to fb0
+#endif
+.w              rdlong  r0, tia_fbp     wz  ' wait buffer ack
+        if_nz   jmp     #.w                 ' |
+
+                mov     _VC, #0
+        _ret_   setd    tia_clock, #0
+
+t_vblank        testb   t1, #1          wc
+        _ret_   bitc    _SYSF, #1
+
+t_wsync         cmp     _HC, #0         wz
+        _ret_   bitnz   _SYSF, #2
+
+t_colu          getbyte r0, t1, #0          ' a b c d
+                shr     r0, #1              ' a b c d
+                testb   _PF, #24 + 1    wz  ' a b c |   SCORE
+
+        if_x1   setbyte t_pf_colu+0, r0, #0 ' a | | |
+        _ret_   setbyte _colup0, r0, #0     ' a | | |   a=COLUP0:
+
+        if_x1   setbyte t_pf_colu+1, r0, #0 '   b | |
+        _ret_   setbyte _colup1, r0, #0     '   b | |   b=COLUP1:
+
+        if_x0   setbyte t_pf_colu+0, r0, #0 '     c |
+        if_x0   setbyte t_pf_colu+1, r0, #0 '     c |
+        _ret_   setbyte _colubl, r0, #0     '     c |   c=COLUPF:
+
+        _ret_   setbyte _colubk, r0, #0     '       d   d=COLUBK:
+
+t_ctrlpf        testb   t1, #5          wc  '       d   d=CTRLPF
+                testb   t1, #4          wz  '       d
+        if_00   setbyte _SYSF, #1-1, #1     '       d   BALL SIZE
+        if_01   setbyte _SYSF, #2-1, #1     '       d   |
+        if_10   setbyte _SYSF, #4-1, #1     '       d   |
+        if_11   setbyte _SYSF, #8-1, #1     '       d   |
+                testb   t1, #1          wz  '       d   SCORE
+        if_x0   getbyte t_pf_colu+0, _colubl, #0 '  d   | COLUPF
+        if_x0   getbyte t_pf_colu+1, _colubl, #0 '  d   | COLUPF
+        if_x1   getbyte t_pf_colu+0, _colup0, #0 '  d   | COLUP0
+        if_x1   getbyte t_pf_colu+1, _colup1, #0 '  d   | COLUP1
+                setbyte _PF, t1, #3         '       d
+                ' fall-through
+t_pf0           setbyte _PF, t1, #0         ' a     |   a=PF0
+t_pf1           setbyte _PF, t1, #1         ' | b   |   b=PF1
+t_pf2           setbyte _PF, t1, #2         ' | | c |   c=PF2
+
+                getnib  r0, _PF, #1         ' PF0
+                getbyte r1, _PF, #1         ' PF1
+                rev     r1                  ' |
+                shr     r1, #20             ' |
+                or      r0, r1              ' PF1+PF0
+                getbyte r1, _PF, #2         ' PF2
+                shl     r1, #12             ' |
+                or      r0, r1              ' PF2+PF1+PF0
+                mov     t_pf+0, r0      wz
+
+                muxz    tia_pfbl_0, tia_pf_disable    ' disable pf (with skipf) if all zero
+                muxz    tia_bl_draw, tia_pf_disable ' |
+
+                testb   _PF, #24        wc  ' REF
+        if_1x   rev     r0                  ' |
+        if_1x   shr     r0, #12             ' |
+        _ret_   mov     t_pf+1, r0
+
+t_grp0          setbyte _P0, t1, #1         ' GRP0d
+                getbyte r0, _P1, #1         ' GRP1d
+                setbyte _P1, r0, #0         ' GRP1
+
+                testb   _P0, #25        wc  ' VDELP0
+        if_0x   call     #\t_update_p0
+                testb   _P1, #25        wc  ' VDELP1
+        if_1x   jmp      #\t_update_p1
+                ret
+
+t_grp1          setbyte _P1, t1, #1         ' GRP1d
+                getbyte r0, _P0, #1         ' GRP0d
+                setbyte _P0, r0, #0         ' GRP0
+
+                testb   _P1, #25        wc  ' VDELP1
+        if_0x   call     #\t_update_p1
+                testb   _P0, #25        wc  ' VDELP0
+        if_1x   jmp      #\t_update_p0
+                ret
+
+
+t_nusiz0        setbyte _P0, t1, #2         '     c     c=NUSIZ0:  %01110
+t_nusiz1        setbyte _P1, t1, #2         '     | d   d=NUSIZ1: %011110
+
+                testb   t1, #5          wc  '     c d   ' missile size
+                testb   t1, #4          wz  '     c d
+        if_00   mov     r0, #1-1            '     c d
+        if_01   mov     r0, #2-1            '     c d
+        if_10   mov     r0, #4-1            '     c d
+        if_11   mov     r0, #8-1            '     c d
+                setbyte _m0_size, r0, #0    '     c |
+                setbyte _m1_size, r0, #0    '     | d
+
+t_refp          testb   t1, #3          wz  ' a b | |
+                bitz    _P0, #24            ' a | | |
+                jmp     #\t_update_p0       ' a | c |   a=REFP0:     %000
+                bitz    _P1, #24            '   b   |
+                jmp     #\t_update_p1       '   b   d   b=REFP1:   %00110
+
+t_vdelp0        testb   t1, #0          wz
+        _ret_   bitz    _P0, #25
+
+t_vdelp1        testb   t1, #0          wz
+        _ret_   bitz    _P1, #25
+
+
+t_enam0         testb   t1, #1          wz
+                testb   _MB, #27        wc  ' RESMP0
+        if_0x   bitz    _SYSF, #6           ' M0 ENABLED
+        _ret_   bitz    _MB, #24            ' ENAM0
+
+t_enam1         testb   t1, #1          wz
+                testb   _MB, #28        wc  ' RESMP1
+        if_0x   bitz    _SYSF, #7           ' M1 ENABLED
+        _ret_   bitz    _MB, #25            ' ENAM1
+
+t_resmp0        testb   t1, #1          wz
+                testb   _MB, #24        wc  ' ENAM0
+        if_1x   bitnz   _SYSF, #6           ' M0 ENABLED
+        if_0x   bitz    _MB, #27            ' RESMP0
+        if_x0   getbyte r0, _p0_res, #0     ' RESP0
+        if_x0   setbyte _m0_res, r0, #0     ' RESM0
+                ret
+
+t_resmp1        testb   t1, #1          wz
+                testb   _MB, #25        wc  ' ENAM1
+        if_1x   bitnz   _SYSF, #7           ' M1 ENABLED
+        if_0x   bitz    _MB, #28            ' RESMP1
+        if_x0   getbyte r0, _p1_res, #0     ' RESP1
+        if_x0   setbyte _m1_res, r0, #0     ' RESM1
+                ret
+
+
+t_enabl         testb   t1, #1          wz
+                testb   _MB, #29        wc  ' VDELBL
+        if_0x   muxnz   tia_pfbl_0, tia_bl_disable ' BALL ENABLED
+        _ret_   bitz    _MB, #30            ' ENABLd
+
+t_vdelbl        testb   t1, #0          wz
+                bitz    _MB, #29
+        if_x1   testb   _MB, #26        wc  ' ENABL
+        if_x0   testb   _MB, #30        wc  ' ENABLd
+        _ret_   muxnc   tia_pfbl_0, tia_bl_disable ' BALL ENABLED
+
+t_cxclr
+        _ret_   mov     _COLL, #0
+
+t_hm            getnib  r0, t1, #1          ' a b c d e
+                                            '
+        _ret_   setnib  _HM, r0, #0         ' a | | | |   a=HMP0:     %0_0
+        _ret_   setnib  _HM, r0, #1         '   b | | |   b=HMP1:    %01_0
+        _ret_   setnib  _HM, r0, #2         '     c | |   c=HMM0:  %0111_0
+        _ret_   setnib  _HM, r0, #3         '       d |   d=HMM1: %01111_0
+        _ret_   setnib  _HM, r0, #4         '         e   e=HMBL:   %011_0
+
+t_hmclr _ret_   mov     _HM, #0
+
+t_aud0          mov     ptrb, aud_addr      ' a b c
+                setbyte _AUD0, t1, #0       ' a | |
+                setbyte _AUD0, t1, #1       ' | b |
+                setbyte _AUD0, t1, #2       ' | | c
+        _ret_   wrlong  _AUD0, ptrb[0]      ' a b c
+
+t_aud1          mov     ptrb, aud_addr      ' a b c
+                setbyte _AUD1, t1, #0       ' a | |
+                setbyte _AUD1, t1, #1       ' | b |
+                setbyte _AUD1, t1, #2       ' | | c
+        _ret_   wrlong  _AUD1, ptrb[1]      ' a b c
+
+                fit     $400                ' 41 longs unused
+
+m6507_lut_end
+
+DAT             ' M6507 HUB
+                orgh
+
+m6507_ins_table
+'
+' instruction         snippet                  skip pattern         +cycles   encoding
+'--------------------------------------------------------------------------------------------
+                long  i_brk       |                      %0 << 10 | 7 << 28 ' 00 BRK
+                long  i_log_ind_x |              %011_1_110 << 10 | 6 << 28 ' 01 ORA ($nn,X)
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 02 *JAM
+                long  i_halt      |                   %0_10 << 10 | 8 << 28 ' 03 *ASO ($nn,X)
+                long  i_halt      |                    %110 << 10 | 3 << 28 ' 04 *NOP
+                long  i_log_zpg   |           %011_1_111110 << 10 | 3 << 28 ' 05 ORA $nn
+                long  i_asl_zpg   |           %01_000_1_110 << 10 | 5 << 28 ' 06 ASL $nn
+                long  i_halt      |                 %0_1110 << 10 | 5 << 28 ' 07 *ASO $nn
+                long  i_php       |                     %00 << 10 | 3 << 28 ' 08 PHP
+                long  i_log_imm   |                  %011_0 << 10 | 2 << 28 ' 09 ORA #$nn
+                long  i_asl       |               %10_000_0 << 10 | 2 << 28 ' 0A ASL
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 0B *ANC #$nn
+                long  i_halt      |                  %11110 << 10 | 4 << 28 ' 0C *NOP
+                long  i_log_abs   |          %011_1_1111110 << 10 | 4 << 28 ' 0D ORA $nnnn
+                long  i_asl_abs   |          %01_000_1_1110 << 10 | 6 << 28 ' 0E ASL $nnnn
+                long  i_halt      |              %0_1111110 << 10 | 6 << 28 ' 0F *ASO $nnnn
+
+                long  i_branch    |               %0_0111_0 << 10 | 2 << 28 ' 10 BPL $nn
+                long  i_log_ind_y |               %011_1_10 << 10 | 5 << 28 ' 11 ORA ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 12 *JAM
+                long  i_halt      |                    %0_0 << 10 | 8 << 28 ' 13 *ASO ($nn),Y
+                long  i_halt      |                     %10 << 10 | 4 << 28 ' 14 *NOP
+                long  i_log_zpg_x |                %011_1_0 << 10 | 4 << 28 ' 15 ORA $nn,X
+                long  i_asl_zpg_x |             %01_000_1_0 << 10 | 6 << 28 ' 16 ASL $nn,X
+                long  i_halt      |                  %0_110 << 10 | 6 << 28 ' 17 *ASO $nn,X
+                long  i_clc       |                  %01110 << 10 | 2 << 28 ' 18 CLC
+                long  i_log_abs_y |             %011_1_1110 << 10 | 4 << 28 ' 19 ORA $nnnn,Y
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' 1A *NOP
+                long  i_halt      |                %0_11110 << 10 | 7 << 28 ' 1B *ASO $nnnn,Y
+                long  i_halt      |                   %1110 << 10 | 4 << 28 ' 1C *NOP
+                long  i_log_abs_x |            %011_1_11110 << 10 | 4 << 28 ' 1D ORA $nnnn,X
+                long  i_asl_abs_x |            %01_000_1_10 << 10 | 7 << 28 ' 1E ASL $nnnn,X
+                long  i_halt      |               %0_111110 << 10 | 7 << 28 ' 1F *ASO $nnnn,X
+
+                long  i_jsr       |                      %0 << 10 | 6 << 28 ' 20 JSR $nn
+                long  i_log_ind_x |              %110_1_110 << 10 | 6 << 28 ' 21 AND ($nn,X)
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 22 *JAM
+                long  i_halt      |                   %0_10 << 10 | 8 << 28 ' 23 *RLA ($nn,X)
+                long  i_bit_zpg   |                      %0 << 10 | 3 << 28 ' 24 BIT $nn
+                long  i_log_zpg   |           %110_1_111110 << 10 | 3 << 28 ' 25 AND $nn
+                long  i_rol_zpg   |         %01_00000_1_110 << 10 | 5 << 28 ' 26 ROL $nn
+                long  i_halt      |                 %0_1110 << 10 | 5 << 28 ' 27 *RLA $nn
+                long  i_pop       |                 %100010 << 10 | 4 << 28 ' 28 PLP
+                long  i_log_imm   |                  %110_0 << 10 | 2 << 28 ' 29 AND #$nn
+                long  i_rol       |             %10_00000_0 << 10 | 2 << 28 ' 2A ROL
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 2B *ANC #$nn
+                long  i_bit_abs   |                     %10 << 10 | 4 << 28 ' 2C BIT $nnnn
+                long  i_log_abs   |          %110_1_1111110 << 10 | 4 << 28 ' 2D AND $nnnn
+                long  i_rol_abs   |        %01_00000_1_1110 << 10 | 6 << 28 ' 2E ROL $nnnn
+                long  i_halt      |              %0_1111110 << 10 | 6 << 28 ' 2F *RLA $nnnn
+
+                long  i_branch    |               %1_0111_0 << 10 | 2 << 28 ' 30 BMI $nn
+                long  i_log_ind_y |               %110_1_10 << 10 | 5 << 28 ' 31 AND ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 32 *JAM
+                long  i_halt      |                    %0_0 << 10 | 8 << 28 ' 33 *RLA ($nn),Y
+                long  i_halt      |                     %10 << 10 | 4 << 28 ' 34 *NOP
+                long  i_log_zpg_x |                %110_1_0 << 10 | 4 << 28 ' 35 AND $nn,X
+                long  i_rol_zpg_x |           %01_00000_1_0 << 10 | 6 << 28 ' 36 ROL $nn,X
+                long  i_halt      |                  %0_110 << 10 | 6 << 28 ' 37 *RLA $nn,X
+                long  i_sec       |                     %00 << 10 | 2 << 28 ' 38 SEC
+                long  i_log_abs_y |             %110_1_1110 << 10 | 4 << 28 ' 39 AND $nnnn,Y
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' 3A *NOP
+                long  i_halt      |                %0_11110 << 10 | 7 << 28 ' 3B *RLA $nnnn,Y
+                long  i_halt      |                   %1110 << 10 | 4 << 28 ' 3C *NOP
+                long  i_log_abs_x |            %110_1_11110 << 10 | 4 << 28 ' 3D AND $nnnn,X
+                long  i_rol_abs_x |          %01_00000_1_10 << 10 | 7 << 28 ' 3E ROL $nnnn,X
+                long  i_halt      |               %0_111110 << 10 | 7 << 28 ' 3F *RLA $nnnn,X
+
+                long  i_rti       |              %010000_00 << 10 | 6 << 28 ' 40 RTI
+                long  i_log_ind_x |              %101_1_110 << 10 | 6 << 28 ' 41 EOR ($nn,X)
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 42 *JAM
+                long  i_halt      |                   %0_10 << 10 | 8 << 28 ' 43 *SRE ($nn,X)
+                long  i_halt      |                    %110 << 10 | 3 << 28 ' 44 *NOP
+                long  i_log_zpg   |           %101_1_111110 << 10 | 3 << 28 ' 45 EOR $nn
+                long  i_lsr_zpg   |            %01_00_1_110 << 10 | 5 << 28 ' 46 LSR $nn
+                long  i_halt      |                 %0_1110 << 10 | 5 << 28 ' 47 *SRE $nn
+                long  i_pha       |                    %010 << 10 | 3 << 28 ' 48 PHA
+                long  i_log_imm   |                  %101_0 << 10 | 2 << 28 ' 49 EOR #$nn
+                long  i_lsr       |                %10_00_0 << 10 | 2 << 28 ' 4A LSR
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 4B *ALR #$nn
+                long  i_jmp_imm   |                      %0 << 10 | 3 << 28 ' 4C JMP $nnnn
+                long  i_log_abs   |          %101_1_1111110 << 10 | 4 << 28 ' 4D EOR $nnnn
+                long  i_lsr_abs   |           %01_00_1_1110 << 10 | 6 << 28 ' 4E LSR $nnnn
+                long  i_halt      |              %0_1111110 << 10 | 6 << 28 ' 4F *SRE $nnnn
+
+                long  i_branch    |               %0_1011_0 << 10 | 2 << 28 ' 50 BVC $nn
+                long  i_log_ind_y |               %101_1_10 << 10 | 5 << 28 ' 51 EOR ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 52 *JAM
+                long  i_halt      |                    %0_0 << 10 | 8 << 28 ' 53 *SRE ($nn),Y
+                long  i_halt      |                     %10 << 10 | 4 << 28 ' 54 *NOP
+                long  i_log_zpg_x |                %101_1_0 << 10 | 4 << 28 ' 55 EOR $nn,X
+                long  i_lsr_zpg_x |              %01_00_1_0 << 10 | 6 << 28 ' 56 LSR $nn,X
+                long  i_halt      |                  %0_110 << 10 | 6 << 28 ' 57 *SRE $nn,X
+                long  i_cli       |                %0111110 << 10 | 2 << 28 ' 58 CLI
+                long  i_log_abs_y |             %101_1_1110 << 10 | 4 << 28 ' 59 EOR $nnnn,Y
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' 5A *NOP
+                long  i_halt      |                %0_11110 << 10 | 7 << 28 ' 5B *SRE $nnnn,Y
+                long  i_halt      |                   %1110 << 10 | 4 << 28 ' 5C *NOP
+                long  i_log_abs_x |            %101_1_11110 << 10 | 4 << 28 ' 5D EOR $nnnn,X
+                long  i_lsr_abs_x |             %01_00_1_10 << 10 | 7 << 28 ' 5E LSR $nnnn,X
+                long  i_halt      |               %0_111110 << 10 | 7 << 28 ' 5F *SRE $nnnn,X
+
+                long  i_rts       |                      %0 << 10 | 6 << 28 ' 60 RTS
+                long  i_adc_ind_x |                 %1_1110 << 10 | 6 << 28 ' 61 ADC ($nn,X)
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 62 *JAM
+                long  i_halt      |                   %0_10 << 10 | 8 << 28 ' 63 *RRA ($nn,X)
+                long  i_halt      |                    %110 << 10 | 3 << 28 ' 64 *NOP
+                long  i_adc_zpg   |                   %1_10 << 10 | 3 << 28 ' 65 ADC $nn
+                long  i_ror_zpg   |         %01_00000_1_110 << 10 | 5 << 28 ' 66 ROR $nn
+                long  i_halt      |                 %0_1110 << 10 | 5 << 28 ' 67 *RRA $nn
+                long  i_pop       |                 %001100 << 10 | 4 << 28 ' 68 PLA
+                long  i_adc_imm   |                      %0 << 10 | 2 << 28 ' 69 ADC #$nn
+                long  i_ror       |             %10_00000_0 << 10 | 2 << 28 ' 6A ROR
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 6B *ARR #$nn
+                long  i_jmp_ind   |                      %0 << 10 | 5 << 28 ' 6C JMP ($nnnn)
+                long  i_adc_abs   |              %1_1111110 << 10 | 4 << 28 ' 6D ADC $nnnn
+                long  i_ror_abs   |        %01_00000_1_1110 << 10 | 6 << 28 ' 6E ROR $nnnn
+                long  i_halt      |              %0_1111110 << 10 | 6 << 28 ' 6F *RRA $nnnn
+
+                long  i_branch    |               %1_1011_0 << 10 | 2 << 28 ' 70 BVS $nn
+                long  i_adc_ind_y |                  %1_110 << 10 | 5 << 28 ' 71 ADC ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 72 *JAM
+                long  i_halt      |                    %0_0 << 10 | 8 << 28 ' 73 *RRA ($nn),Y
+                long  i_halt      |                     %10 << 10 | 4 << 28 ' 74 *NOP
+                long  i_adc_zpg_x |                    %1_0 << 10 | 4 << 28 ' 75 ADC $nn,X
+                long  i_ror_zpg_x |           %01_00000_1_0 << 10 | 6 << 28 ' 76 ROR $nn,X
+                long  i_halt      |                  %0_110 << 10 | 6 << 28 ' 77 *RRA $nn,X
+                long  i_sei       |                   %0110 << 10 | 2 << 28 ' 78 SEI
+                long  i_adc_abs_y |                %1_11110 << 10 | 4 << 28 ' 79 AND $nnnn,Y
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' 7A *NOP
+                long  i_halt      |               %0_111110 << 10 | 7 << 28 ' 7B *RRA $nnnn,Y (7-2 ???)
+                long  i_halt      |                   %1110 << 10 | 4 << 28 ' 7C *NOP
+                long  i_adc_abs_x |               %1_111110 << 10 | 4 << 28 ' 7D ADC $nnnn,X
+                long  i_ror_abs_x |          %01_00000_1_10 << 10 | 7 << 28 ' 7E ROR $nnnn,X
+                long  i_halt      |               %0_111110 << 10 | 7 << 28 ' 7F *RRA $nnnn,X
+
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 80 *NOP
+                long  i_st_ind_x  |                 %110_10 << 10 | 6 << 28 ' 81 STA ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 82 *NOP
+                long  i_halt      |                      %0 << 10 | 6 << 28 ' 83
+                long  i_st_zpg    |              %011_11110 << 10 | 3 << 28 ' 84 STY $nn
+                long  i_st_zpg    |              %110_11110 << 10 | 3 << 28 ' 85 STA $nn
+                long  i_st_zpg    |              %101_11110 << 10 | 3 << 28 ' 86 STX $nn
+                long  i_halt      |                      %0 << 10 | 3 << 28 ' 87
+                long  i_inde_xy   |               %01_01_01 << 10 | 2 << 28 ' 88 DEY
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 89 *NOP
+                long  i_taxya     |              %1110_1101 << 10 | 2 << 28 ' 8A TXA
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' 8B *ANE #$nn
+                long  i_st_abs    |           %011_11111110 << 10 | 4 << 28 ' 8C STY $nnnn
+                long  i_st_abs    |           %110_11111110 << 10 | 4 << 28 ' 8D STA $nnnn
+                long  i_st_abs    |           %101_11111110 << 10 | 4 << 28 ' 8E STX $nnnn
+                long  i_halt      |                      %0 << 10 | 4 << 28 ' 8F
+
+                long  i_branch    |               %0_1110_0 << 10 | 2 << 28 ' 90 BCC $nn
+                long  i_st_ind_y  |                  %110_0 << 10 | 6 << 28 ' 91 STA ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' 92 *JAM
+                long  i_halt      |                      %0 << 10 | 6 << 28 ' 93
+                long  i_st_zpg_x  |               %011_1110 << 10 | 4 << 28 ' 94 STY $nn,X
+                long  i_st_zpg_x  |               %110_1110 << 10 | 4 << 28 ' 95 STA $nn,X
+                long  i_st_zpg_y  |                %101_110 << 10 | 4 << 28 ' 96 STX $nn,Y
+                long  i_halt      |                      %0 << 10 | 4 << 28 ' 97
+                long  i_taxya     |              %1110_1011 << 10 | 2 << 28 ' 98 TYA
+                long  i_st_abs_y  |             %110_111110 << 10 | 5 << 28 ' 99 STA $nnnn,Y
+                long  i_taxya     |            %1_0111_1101 << 10 | 2 << 28 ' 9A TXS
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' 9B
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' 9C
+                long  i_st_abs_x  |            %110_1111110 << 10 | 5 << 28 ' 9D STA $nnnn,X
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' 9E
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' 9F
+
+                long  i_ld_imm    |                  %011_0 << 10 | 2 << 28 ' A0 LDY #nn
+                long  i_ld_ind_x  |               %110_1_10 << 10 | 6 << 28 ' A1 LDA ($nn,X)
+                long  i_ld_imm    |                  %101_0 << 10 | 2 << 28 ' A2 LDX #nn
+                long  i_ld_ind_x  |               %100_1_10 << 10 | 6 << 28 ' A3 *LAX ($nn,X)
+                long  i_ld_zpg    |            %011_1_11110 << 10 | 3 << 28 ' A4 LDY zpg
+                long  i_ld_zpg    |            %110_1_11110 << 10 | 3 << 28 ' A5 LDA zpg
+                long  i_ld_zpg    |            %101_1_11110 << 10 | 3 << 28 ' A6 LDX zpg
+                long  i_ld_zpg    |            %100_1_11110 << 10 | 3 << 28 ' A7 *LAX zpg
+                long  i_taxya     |              %1011_1110 << 10 | 2 << 28 ' A8 TAY
+                long  i_ld_imm    |                  %110_0 << 10 | 2 << 28 ' A9 LDA #nn
+                long  i_taxya     |              %1101_1110 << 10 | 2 << 28 ' AA TAX
+                long  i_ld_imm    |                  %100_0 << 10 | 2 << 28 ' AB *LXA #nn
+                long  i_ld_abs    |         %011_1_11111110 << 10 | 4 << 28 ' AC LDY nnnn
+                long  i_ld_abs    |         %110_1_11111110 << 10 | 4 << 28 ' AD LDA nnnn
+                long  i_ld_abs    |         %101_1_11111110 << 10 | 4 << 28 ' AE LDX nnnn
+                long  i_ld_abs    |         %100_1_11111110 << 10 | 4 << 28 ' AF *LAX nnnn
+
+                long  i_branch    |               %1_1110_0 << 10 | 2 << 28 ' B0 BCS $nn
+                long  i_ld_ind_y  |                %110_1_0 << 10 | 5 << 28 ' B1 LDA ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' B2 *JAM
+                long  i_ld_ind_y  |                %100_1_0 << 10 | 5 << 28 ' B3 *LAX ($nn),Y
+                long  i_ld_zpg_x  |             %011_1_1110 << 10 | 4 << 28 ' B4 LDY $nn,Y
+                long  i_ld_zpg_x  |             %110_1_1110 << 10 | 4 << 28 ' B5 LDA $nn,X
+                long  i_ld_zpg_y  |              %101_1_110 << 10 | 4 << 28 ' B6 LDX $nn,Y
+                long  i_ld_zpg_x  |             %100_1_1110 << 10 | 4 << 28 ' B7 *LAX $nn,X
+                long  i_clv       |               %01111110 << 10 | 2 << 28 ' B8 CLV
+                long  i_ld_abs_y  |           %110_1_111110 << 10 | 4 << 28 ' B9 LDA $nnnn,Y
+                long  i_taxya     |              %1101_0111 << 10 | 2 << 28 ' BA TSX
+                long  i_halt      |                      %0 << 10 | 4 << 28 ' BB
+                long  i_ld_abs_x  |          %011_1_1111110 << 10 | 4 << 28 ' BC LDY $nnnn,X
+                long  i_ld_abs_x  |          %110_1_1111110 << 10 | 4 << 28 ' BD LDA $nnnn,X
+                long  i_ld_abs_y  |           %101_1_111110 << 10 | 4 << 28 ' BE LDX $nnnn,Y
+                long  i_ld_abs_x  |          %100_1_1111110 << 10 | 4 << 28 ' BF *LAX $nnnn,X
+
+                long  i_cmp_imm   |                 %011_00 << 10 | 2 << 28 ' C0 CPY #$nn
+                long  i_cmp_ind_x |           %110_0_1_1110 << 10 | 6 << 28 ' C1 CMP ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' C2 *NOP
+                long  i_halt      |                      %0 << 10 | 8 << 28 ' C3
+                long  i_cmp_zpg   |             %011_0_1_10 << 10 | 3 << 28 ' C4 CPY $nn
+                long  i_cmp_zpg   |             %110_0_1_10 << 10 | 3 << 28 ' C5 CMP $nn
+                long  i_dec_zpg   |                %10_1110 << 10 | 5 << 28 ' C6 DEC $nn
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' C7
+                long  i_inde_xy   |               %01_10_01 << 10 | 2 << 28 ' C8 INY
+                long  i_cmp_imm   |                 %110_00 << 10 | 2 << 28 ' C9 CMP #$nn
+                long  i_inde_xy   |               %10_01_10 << 10 | 2 << 28 ' CA DEX
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' CB *AXS #$nn
+                long  i_cmp_abs   |        %011_0_1_1111110 << 10 | 4 << 28 ' CC CPY $nnnn
+                long  i_cmp_abs   |        %110_0_1_1111110 << 10 | 4 << 28 ' CD CMP $nnnn
+                long  i_dec_abs   |                   %10_0 << 10 | 6 << 28 ' CE DEC $nnnn
+                long  i_halt      |                      %0 << 10 | 6 << 28 ' CF
+
+                long  i_branch    |               %0_1101_0 << 10 | 2 << 28 ' D0 BNE $mm
+                long  i_cmp_ind_y |            %110_0_1_110 << 10 | 5 << 28 ' D1 CMP ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' D2 *JAM
+                long  i_halt      |                      %0 << 10 | 8 << 28 ' D3
+                long  i_halt      |                     %10 << 10 | 4 << 28 ' D4 *NOP
+                long  i_cmp_zpg_x |              %110_0_1_0 << 10 | 4 << 28 ' D5 CMP $nn,X
+                long  i_dec_zpg_x |                  %10_10 << 10 | 6 << 28 ' D6 DEC $nn,X
+                long  i_halt      |                      %0 << 10 | 6 << 28 ' D7
+                long  i_cld       |                 %011110 << 10 | 2 << 28 ' D8 CLD
+                long  i_cmp_abs_y |          %110_0_1_11110 << 10 | 4 << 28 ' D9 CMP $nnnn,Y
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' DA *NOP
+                long  i_halt      |                      %0 << 10 | 7 << 28 ' DB
+                long  i_halt      |                   %1110 << 10 | 4 << 28 ' DC *NOP
+                long  i_cmp_abs_x |         %110_0_1_111110 << 10 | 4 << 28 ' DD CMP $nnnn,X
+                long  i_dec_abs_x |                 %10_110 << 10 | 7 << 28 ' DE DEC $nnnn,X
+                long  i_halt      |                      %0 << 10 | 7 << 28 ' DF
+
+                long  i_cmp_imm   |                 %101_00 << 10 | 2 << 28 ' E0 CPX #$nn
+                long  i_sbc_ind_x |                 %1_1110 << 10 | 6 << 28 ' E1 SBC ($nn,X)
+                long  i_halt      |                      %0 << 10 | 2 << 28 ' E2 *NOP
+                long  i_halt      |                      %0 << 10 | 8 << 28 ' E3
+                long  i_cmp_zpg   |             %101_0_1_10 << 10 | 3 << 28 ' E4 CPX $nn
+                long  i_sbc_zpg   |                   %1_10 << 10 | 3 << 28 ' E5 SBC #$nn
+                long  i_dec_zpg   |                %01_1110 << 10 | 5 << 28 ' E6 INC $nn
+                long  i_halt      |                      %0 << 10 | 5 << 28 ' E7
+                long  i_inde_xy   |               %10_10_10 << 10 | 2 << 28 ' E8 INX
+                long  i_sbc_imm   |                      %0 << 10 | 2 << 28 ' E9 SBC #$nn
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' EA NOP
+                long  i_sbc_imm   |                      %0 << 10 | 2 << 28 ' EB *SBC #$nn
+                long  i_cmp_abs   |        %101_0_1_1111110 << 10 | 4 << 28 ' EC CPX $nnnn
+                long  i_sbc_abs   |              %1_1111110 << 10 | 4 << 28 ' ED SBC $nnnn
+                long  i_dec_abs   |                   %01_0 << 10 | 6 << 28 ' EE INC $nnnn
+                long  i_halt      |                      %0 << 10 | 6 << 28 ' EF
+
+                long  i_branch    |               %1_1101_0 << 10 | 2 << 28 ' F0 BEQ $nn
+                long  i_sbc_ind_y |                  %1_110 << 10 | 5 << 28 ' F1 SBC ($nn),Y
+                long  i_jam       |                      %0 << 10 | 1 << 28 ' F2 *JAM
+                long  i_halt      |                      %0 << 10 | 8 << 28 ' F3
+                long  i_halt      |                     %10 << 10 | 4 << 28 ' F4 *NOP
+                long  i_sbc_zpg_x |                    %1_0 << 10 | 4 << 28 ' F5 SBC $nn,X
+                long  i_dec_zpg_x |                  %01_10 << 10 | 6 << 28 ' F6 INC $nn,X
+                long  i_halt      |                      %0 << 10 | 6 << 28 ' F7
+                long  i_sed       |                    %010 << 10 | 2 << 28 ' F8 SED
+                long  i_sbc_abs_y |                %1_11110 << 10 | 4 << 28 ' F9 SBC $nnnn,Y
+                long  i_nop       |                      %0 << 10 | 2 << 28 ' FA *NOP
+                long  i_halt      |                      %0 << 10 | 7 << 28 ' FB
+                long  i_halt      |                   %1110 << 10 | 4 << 28 ' FC *NOP
+                long  i_sbc_abs_x |               %1_111110 << 10 | 4 << 28 ' FD SBC $nnnn,X
+                long  i_dec_abs_x |                 %01_110 << 10 | 7 << 28 ' FE INC $nnnn
+                long  i_halt      |                      %0 << 10 | 7 << 28 ' FF
+
+i_trap
+                rdlong  r0, #$44
+                qmul    r0, ##$1_0000           ' calculate bit timing
+                getqx   r0                      ' |
+                getqy   r1                      ' |
+                setq    r1                      ' |
+                qdiv    r0, ##UART_BAUD         ' |
+                getqx   r0                      ' |
+                and     r0, ##$FFFFFC00         ' |
+                or      r0, #8 - 1              ' set bits
+
+                fltl    #UART_TX                ' configure tx smart pin
+                wrpin   ##(P_ASYNC_TX | P_OE), #UART_TX
+                wxpin   r0, #UART_TX
+                drvl    #UART_TX
+
+                waitx   ##(_CLKFREQ / 1_000) * 200
+                wypin   #$0D, #UART_TX
+
+                callpa  #"*", #tx
+                callpa  #"*", #tx
+                callpa  #"*", #tx
+                callpa  #" ", #tx
+                callpa  #"T", #tx
+                callpa  #"R", #tx
+                callpa  #"A", #tx
+                callpa  #"P", #tx
+                callpa  #" ", #tx
+                callpa  #"*", #tx
+                callpa  #"*", #tx
+                callpa  #"*", #tx
+                callpa  #" ", #tx
+                callpa  #"P", #tx
+                callpa  #"C", #tx
+                callpa  #":", #tx
+
+                mov     ea, _PC
+                sub     ea, #1
+                call    #\_read
+
+                getnib  r0, ea, #3
+                callpa  r0, #tx_hex
+                getnib  r0, ea, #2
+                callpa  r0, #tx_hex
+                getnib  r0, ea, #1
+                callpa  r0, #tx_hex
+                getnib  r0, ea, #0
+                callpa  r0, #tx_hex
+
+                callpa  #" ", #tx
+                callpa  #":", #tx
+                callpa  #" ", #tx
+
+                getnib  r0, t1, #1
+                callpa  r0, #tx_hex
+                getnib  r0, t1, #0
+                callpa  r0, #tx_hex
+
+                callpa  #" ", #tx
+                jmp     #$
+
+tx_hex          add     pa, #$30
+                cmp     pa, #$3A            wcz
+        if_ae   add     pa, #$07
+                ' fall-through
+tx              testp   #UART_TX            wc
+        if_nc   jmp     #tx
+                wypin   pa, #UART_TX
+                ret                         wcz
+
+m6507_debug
+{
+    Processor Instance
+
+    long CTL    '     [0] = VSYNC
+                '     [1] = VBLANK
+                '[23..16] = last instruction cycles
+                '    [24] = clock enable
+                '    [25] = int
+                '    [26] = nmi
+                '    [27] = single step
+
+    byte REG_A  '   [7:0] = A
+    byte REG_X  '  [15:8] = X
+    byte REG_Y  ' [23:16] = Y
+    byte REG_P  ' [31:24] = P
+
+    word REG_PC '  [15:0] = PC
+    word REG_S  ' [23:16] = S
+
+    long CYCLES '         = total cycles
+
+}
+                'mov     ptra, cog_par
+
+                getbyte t2, _A, #0          ' update cpu status
+                setbyte t2, _X, #1          ' |
+                setbyte t2, _Y, #2          ' |
+                setbyte t2, _P, #3          ' |
+                wrlong  t2, ptra[1]         ' |
+                getword t2, _PC, #0         ' |
+                setbyte t2, _S, #2          ' |
+                wrlong  t2, ptra[2]         ' |
+                wrlong  _I, ptra[3]         ' |
+                'wrlong  _T, ptra[4]         ' |
+                'wrlong  _T+1, ptra[5]       ' |
+
+                wrlong  _TIMER, ptra[6]     ' M6532
+                wrlong  _TC, ptra[7]        ' |
+
+                mov     t2, _VC             ' TIA
+                setbyte t2, _HC, #2         ' |
+                wrlong  t2, ptra[8]         ' |
+                getbyte t2, _colup0, #0     ' COLUP0
+                setbyte t2, _colup1, #1     ' COLUP1
+                setbyte t2, _colubl, #2     ' COLUPF
+                setbyte t2, _colubk, #3     ' COLUBK
+                wrlong  t2, ptra[9]         ' |
+                wrlong  t_pf, ptra[10]      ' |
+
+                wrlong  _P0, ptra[11]       ' |
+                wrlong  _P1, ptra[12]       ' |
+                wrlong  _HM, ptra[13]       ' |
+                wrlong  _MB, ptra[14]       ' |
+
+                getbyte t2, _p0_res, #0
+                setbyte t2, _p1_res, #1
+                setbyte t2, _m0_res, #2
+                setbyte t2, _m1_res, #3
+                wrlong  t2, ptra[15]         ' |
+                getbyte t2, _bl_res, #0
+                wrlong  t2, ptra[16]         ' |
+
+                wrlong  _AUD0, ptra[17]      ' |
+                wrlong  _AUD1, ptra[18]      ' |
+
+                'getbyte t2, i_rom_bank, #1
+                'setbyte t1, t2, #1
+                bitl    t1, #CTL_CLK        ' signal ready for next step
+                wrlong  t1, ptra            ' |
+
+.wait           rdlong  t1, ptra            ' wait clock enable
+                testbn  t1, #CTL_CLK    wz
+        if_z    jmp     #.wait
+
+                rdlong  t2, ptra[1]         ' update cpu status
+                getbyte _A, t2, #0          ' |
+                getbyte _X, t2, #1          ' |
+                getbyte _Y, t2, #2          ' |
+                getbyte _P, t2, #3          ' |
+                rdlong  t2, ptra[2]         ' |
+                getword _PC, t2, #0         ' |
+                getbyte _S, t2, #2          ' |
+
+        _ret_   wrfast  #0, ptrb
+
+DAT             ' TIA HUB
+                orgh
+
+tia_read
+                cmp     t5, #CXM0P      wz  ' D7=(M0,P1); D6=(M0,P0)
+        if_e    mov     t1, _COLL
+        if_e    shr     t1, #8
+                cmp     t5, #CXM1P      wz  ' D7=(M1,P0); D6=(M1,P1)
+        if_e    mov     t1, _COLL
+        if_e    shr     t1, #6
+                cmp     t5, #CXP0FB     wz  ' D7=(P0,PF); D6=(P0,BL)
+        if_e    mov     t1, _COLL
+        if_e    shr     t1, #4
+                cmp     t5, #CXP1FB     wz  ' D7=(P1,PF); D6=(P1,BL)
+        if_e    mov     t1, _COLL
+        if_e    shr     t1, #2
+                cmp     t5, #CXM0FB     wz  ' D7=(M0,PF); D6=(M0,BL)
+        if_e    mov     t1, _COLL
+                cmp     t5, #CXM1FB     wz  ' D7=(M1,PF); D6=(M1,BL)
+        if_e    mov     t1, _COLL
+        if_e    shl     t1, #2
+                cmp     t5, #CXBLPF     wz  ' D7=(BL,PF); D6=(unused)
+        if_e    mov     t1, _COLL
+        if_e    shl     t1, #4
+                cmp     t5, #CXPPMM     wz  ' D7=(P0,P1); D6=(M0,M1)
+        if_e    mov     t1, _COLL
+        if_e    shl     t1, #6
+
+                cmp     t5, #INPT0      wz  ' pot port: D7
+        if_ne   cmp     t5, #INPT1      wz  ' pot port: D7
+        if_ne   cmp     t5, #INPT2      wz  ' pot port: D7
+        if_ne   cmp     t5, #INPT3      wz  ' pot port: D7
+        if_e    mov     t1, #$00
+
+                cmp     t5, #INPT4      wz  ' P0 joystick trigger: D7
+        if_e    testb   _INPT, #4       wc
+        if_e    bitc    t1, #7
+                cmp     t5, #INPT5      wz  ' P1 joystick trigger: D7
+        if_e    testb   _INPT, #5       wc
+        if_e    bitc    t1, #7
+
+        _ret_   wrfast  #0, ptrb
+
+t_hmove         getnib  r1, _HM, #0         ' HMP0
+                signx   r1, #3          wz
+                sub     tia_resp0, r1
+                cmp     tia_resp0, #228 wc
+        if_ae   sub     tia_resp0, #160
+                cmp     tia_resp0, #68  wc
+        if_b    add     tia_resp0, #160
+        if_nz   call    #t_update_p0
+
+                getnib  r1, _HM, #1         ' HMP1
+                signx   r1, #3          wz
+                sub     tia_resp1, r1
+                cmp     tia_resp1, #228 wc
+        if_ae   sub     tia_resp1, #160
+                cmp     tia_resp1, #68  wc
+        if_b    add     tia_resp1, #160
+        if_nz   call    #t_update_p0
+
+                getbyte r0, _m0_res, #0     ' RESM0
+                getnib  r1, _HM, #2         ' HMM0
+                signx   r1, #3
+                sub     r0, r1
+'                cmp     r0, #228        wcz
+'        if_ae   sub     r0, #160
+'                cmp     r0, #68         wcz
+'        if_b    add     r0, #160
+                setbyte _m0_res, r0, #0
+
+                getbyte r0, _m1_res, #0     ' RESM1
+                getnib  r1, _HM, #3         ' HMM1
+                signx   r1, #3
+                sub     r0, r1
+'                cmp     r0, #228        wcz
+'        if_ae   sub     r0, #160
+'                cmp     r0, #68         wcz
+'        if_b    add     r0, #160
+                setbyte _m1_res, r0, #0
+
+                getbyte r0, _bl_res, #0     ' RESBL
+                getnib  r1, _HM, #4         ' HMBL
+                signx   r1, #3
+                sub     r0, r1
+'                cmp     r0, #228        wcz
+'        if_ae   sub     r0, #160
+'                cmp     r0, #68         wcz
+'        if_b    add     r0, #160
+                setbyte _bl_res, r0, #0
+
+                cmp     _HC, #68        wcz
+        if_b    bith    _SYSF, #16
+                cmp     _HC, #219       wcz
+        if_ae   bith    _SYSF, #17
+
+        _ret_   wrfast  #0, ptrb
+
+m6532_write     and     t5, #$1F
+                cmp     t5, #SWACNT     wz
+        if_e    setbyte _SW, t1, #1
+                cmp     t5, #SWBCNT     wz
+        if_e    setbyte _SW, t1, #3
+                cmp     t5, #TIM1T      wz
+        if_e    mov     r1, #1
+        if_e    jmp     #.timer
+                cmp     t5, #TIM8T      wz
+        if_e    mov     r1, #8
+        if_e    jmp     #.timer
+                cmp     t5, #TIM64T     wz
+        if_e    mov     r1, #64
+        if_e    skip    #%11111
+                cmp     t5, #TIM1024T   wz
+        if_e    mov     r1, ##1024
+        if_e    skip    #%1
+
+        _ret_   wrfast  #0, ptrb
+
+.timer          getbyte r0, t1, #0
+                sub     r0, #1
+                getbyte _TIMER, r0, #0      ' INTIM (clear TIMINT)
+                setword _TIMER, r1, #1
+                mov     _TC, #0
+                setd    m6532_timer, #m6532_normal
+        _ret_   wrfast  #0, ptrb
+
+tia_write_table
+{00}            long    t_vsync   |                 %0 << 10 ' VSYNC  : vertical sync set-clear (D1)
+{01}            long    t_vblank  |                 %0 << 10 ' VBLANK : vertical blank set-clear (D7-6,D1)
+{02}            long    t_wsync   |                 %0 << 10 ' WSYNC  : wait for leading edge of hrz. blank (strobe)
+{03}            long    i_nop                                ' RSYNC  : reset hrz. sync counter (strobe)
+{04}            long    t_nusiz0  |   %011_10000000_10 << 10 ' NUSIZ0 : number-size player-missle 0 (D5-0)
+{05}            long    t_nusiz1  |  %01111_01000000_0 << 10 ' NUSIZ1 : number-size player-missle 1 (D5-0)
+{06}            long    t_colu    |            %00_000 << 10 ' COLUP0 : color-lum player 0 (D7-1)
+{07}            long    t_colu    |         %00_11_000 << 10 ' COLUP1 : color-lum player 1 (D7-1)
+
+{08}            long    t_colu    |     %000_11_11_000 << 10 ' COLUPF : color-lum playfield (D7-1)
+{09}            long    t_colu    |   %0_111_11_11_100 << 10 ' COLUBK : color-lum background (D7-1)
+{0A}            long    t_ctrlpf  |  %111_000000000000 << 10 ' CTRLPF : cntrl playfield ballsize & coll. (D5-4,D2-0)
+{0B}            long    t_refp    |               %000 << 10 ' REFP0  : reflect player 0 (D3)
+{0C}            long    t_refp    |             %00110 << 10 ' REFP1  : reflect player 1 (D3)
+{0D}            long    t_pf0     |               %110 << 10 ' PF0    : playfield register byte 0 (D7-4)
+{0E}            long    t_pf1     |                %10 << 10 ' PF1    : playfield register byte 1 (D7-0)
+{0F}            long    t_pf2     |                 %0 << 10 ' PF2    : playfield register byte 2 (D7-0)
+
+{10}            long    t_res     |          %0_110000 << 10 ' RESP0  : reset player 0 (strobe)
+{11}            long    t_res     |         %01_101000 << 10 ' RESP1  : reset player 1 (strobe)
+{12}            long    t_res     |        %011_011000 << 10 ' RESM0  : reset missle 0 (strobe)
+{13}            long    t_res     |       %0111_011000 << 10 ' RESM1  : reset missle 1 (strobe)
+{14}            long    t_res     |      %01111_011000 << 10 ' RESBL  : reset ball (strobe)
+{15}            long    t_aud0    |           %0_110_0 << 10 ' AUDC0  : audio control 0 (D3-0)
+{16}            long    t_aud1    |           %0_110_0 << 10 ' AUDC1  : audio control 1 (D4-0)
+{17}            long    t_aud0    |           %0_101_0 << 10 ' AUDF0  : audio frequency 0 (D4-0)
+
+{18}            long    t_aud1    |           %0_101_0 << 10 ' AUDF1  : audio frequency 1 (D3-0)
+{19}            long    t_aud0    |           %0_011_0 << 10 ' AUDV0  : audio volume 0 (D3-0)
+{1A}            long    t_aud1    |           %0_011_0 << 10 ' AUDV1  : audio volume 1 (D3-0)
+{1B}            long    t_grp0    |                 %0 << 10 ' GRP0   : graphics player 0 (D7-0)
+{1C}            long    t_grp1    |                 %0 << 10 ' GRP1   : graphics player 1 (D7-0)
+{1D}            long    t_enam0   |                 %0 << 10 ' ENAM0  : graphics (enable) missle 0 (D1)
+{1E}            long    t_enam1   |                 %0 << 10 ' ENAM1  : graphics (enable) missle 1 (D1)
+{1F}            long    t_enabl   |                 %0 << 10 ' ENABL  : graphics (enable) ball (D1)
+
+{20}            long    t_hm      |               %0_0 << 10 ' HMP0   : horizontal motion player 0 (D7-4)
+{21}            long    t_hm      |              %01_0 << 10 ' HMP1   : horizontal motion player 1 (D7-4)
+{22}            long    t_hm      |             %011_0 << 10 ' HMM0   : horizontal motion missle 0 (D7-4)
+{23}            long    t_hm      |            %0111_0 << 10 ' HMM1   : horizontal motion missle 1 (D7-4)
+{24}            long    t_hm      |           %01111_0 << 10 ' HMBL   : horizontal motion ball (D7-4)
+{25}            long    t_vdelp0  |                 %0 << 10 ' VDELP0 : vertical delay player 0 (D0)
+{26}            long    t_vdelp1  |                 %0 << 10 ' VDELP1 : vertical delay player 1 (D0)
+{27}            long    t_vdelbl  |                 %0 << 10 ' VDELBL : vertical delay ball (D0)
+
+{28}            long    t_resmp0  |                 %0 << 10 ' RESMP0 : reset missle 0 to player 0 (D1)
+{29}            long    t_resmp1  |                 %0 << 10 ' RESMP1 : reset missle 1 to player 1 (D1)
+{2A}            long    t_hmove   |                 %0 << 10 ' HMOVE  : apply horizontal motion (strobe)
+{2B}            long    t_hmclr   |                 %0 << 10 ' HMCLR  : clear horizontal motion registers (strobe)
+{2C}            long    t_cxclr   |                 %0 << 10 ' CXCLR  : clear collision latches (strobe)
+{2D}            long    i_nop
+{2E}            long    i_nop
+{2F}            long    i_nop
+
+{30}            long    i_nop
+{31}            long    i_nop
+{32}            long    i_nop
+{33}            long    i_nop
+{34}            long    i_nop
+{35}            long    i_nop
+{36}            long    i_nop
+{37}            long    i_nop
+
+{38}            long    i_nop
+{39}            long    i_nop
+{3A}            long    i_nop
+{3B}            long    i_nop
+{3C}            long    i_nop
+{3D}            long    i_nop
+{3E}            long    i_nop
+{3F}            long    i_nop
+
+CON ' M6532 Register names
+
+    SWCHA    = $00
+    SWACNT   = $01
+    SWCHB    = $02
+    SWBCNT   = $03
+    INTIM    = $04
+    TIMINT   = $05
+    TIM1T    = $14
+    TIM8T    = $15
+    TIM64T   = $16
+    TIM1024T = $17
+
+CON ' TIA Register names
+
+    VSYNC    = $00    ' Write: vertical sync set-clear (D1)
+    VBLANK   = $01    ' Write: vertical blank set-clear (D7-6,D1)
+    WSYNC    = $02    ' Write: wait for leading edge of hrz. blank (strobe)
+    RSYNC    = $03    ' Write: reset hrz. sync counter (strobe)
+    NUSIZ0   = $04    ' Write: number-size player-missle 0 (D5-0)
+    NUSIZ1   = $05    ' Write: number-size player-missle 1 (D5-0)
+    COLUP0   = $06    ' Write: color-lum player 0 (D7-1)
+    COLUP1   = $07    ' Write: color-lum player 1 (D7-1)
+    COLUPF   = $08    ' Write: color-lum playfield (D7-1)
+    COLUBK   = $09    ' Write: color-lum background (D7-1)
+    CTRLPF   = $0A    ' Write: cntrl playfield ballsize & coll. (D5-4,D2-0)
+    REFP0    = $0B    ' Write: reflect player 0 (D3)
+    REFP1    = $0C    ' Write: reflect player 1 (D3)
+    PF0      = $0D    ' Write: playfield register byte 0 (D7-4)
+    PF1      = $0E    ' Write: playfield register byte 1 (D7-0)
+    PF2      = $0F    ' Write: playfield register byte 2 (D7-0)
+    RESP0    = $10    ' Write: reset player 0 (strobe)
+    RESP1    = $11    ' Write: reset player 1 (strobe)
+    RESM0    = $12    ' Write: reset missle 0 (strobe)
+    RESM1    = $13    ' Write: reset missle 1 (strobe)
+    RESBL    = $14    ' Write: reset ball (strobe)
+    AUDC0    = $15    ' Write: audio control 0 (D3-0)
+    AUDC1    = $16    ' Write: audio control 1 (D4-0)
+    AUDF0    = $17    ' Write: audio frequency 0 (D4-0)
+    AUDF1    = $18    ' Write: audio frequency 1 (D3-0)
+    AUDV0    = $19    ' Write: audio volume 0 (D3-0)
+    AUDV1    = $1A    ' Write: audio volume 1 (D3-0)
+    GRP0     = $1B    ' Write: graphics player 0 (D7-0)
+    GRP1     = $1C    ' Write: graphics player 1 (D7-0)
+    ENAM0    = $1D    ' Write: graphics (enable) missle 0 (D1)
+    ENAM1    = $1E    ' Write: graphics (enable) missle 1 (D1)
+    ENABL    = $1F    ' Write: graphics (enable) ball (D1)
+    HMP0     = $20    ' Write: horizontal motion player 0 (D7-4)
+    HMP1     = $21    ' Write: horizontal motion player 1 (D7-4)
+    HMM0     = $22    ' Write: horizontal motion missle 0 (D7-4)
+    HMM1     = $23    ' Write: horizontal motion missle 1 (D7-4)
+    HMBL     = $24    ' Write: horizontal motion ball (D7-4)
+    VDELP0   = $25    ' Write: vertical delay player 0 (D0)
+    VDELP1   = $26    ' Write: vertical delay player 1 (D0)
+    VDELBL   = $27    ' Write: vertical delay ball (D0)
+    RESMP0   = $28    ' Write: reset missle 0 to player 0 (D1)
+    RESMP1   = $29    ' Write: reset missle 1 to player 1 (D1)
+    HMOVE    = $2A    ' Write: apply horizontal motion (strobe)
+    HMCLR    = $2B    ' Write: clear horizontal motion registers (strobe)
+    CXCLR    = $2C    ' Write: clear collision latches (strobe)
+
+    CXM0P    = $00    ' Read collision: D7=(M0,P1); D6=(M0,P0)
+    CXM1P    = $01    ' Read collision: D7=(M1,P0); D6=(M1,P1)
+    CXP0FB   = $02    ' Read collision: D7=(P0,PF); D6=(P0,BL)
+    CXP1FB   = $03    ' Read collision: D7=(P1,PF); D6=(P1,BL)
+    CXM0FB   = $04    ' Read collision: D7=(M0,PF); D6=(M0,BL)
+    CXM1FB   = $05    ' Read collision: D7=(M1,PF); D6=(M1,BL)
+    CXBLPF   = $06    ' Read collision: D7=(BL,PF); D6=(unused)
+    CXPPMM   = $07    ' Read collision: D7=(P0,P1); D6=(M0,M1)
+    INPT0    = $08    ' Read pot port: D7
+    INPT1    = $09    ' Read pot port: D7
+    INPT2    = $0A    ' Read pot port: D7
+    INPT3    = $0B    ' Read pot port: D7
+    INPT4    = $0C    ' Read P0 joystick trigger: D7
+    INPT5    = $0D    ' Read P1 joystick trigger: D7
+
+DAT
+                orgh
+
+                ' align rom to 8k boundary for bank switching
+                byte    $00[((@@$ + $1FFF) & !$1FFF) - @@$]
+cartridge_rom
+                ' 2k ROMs (need to be duplicated to fill the 4k space)
+                'file    "Freeway (1981) (Activision) [!].a26"
+                'file    "Freeway (1981) (Activision) [!].a26"
+
+                ' 4k ROMs
+                'file    "Adventure (1978) (Atari) [!].a26"
+                'file    "Demon Attack (1982) (Imagic) [!].a26"
+                'file    "Frogger (1982) (Parker Bros) [!].a26"
+                'file    "Keystone Kapers (1983) (Activision) [!].a26"
+                'file    "Megamania (1982) (Activision) [!].a26"
+                'file    "Pac-Man (1981) (Atari) [!].a26"
+                'file    "Pitfall! (1982) (Activision) [!].a26"
+                'file    "River Raid (1982) (Activision) [!].a26"
+                file    "Space Invaders (1978) (Atari) [!].a26"
+
+                ' 8k ROMs (F8-type only)
+                'file    "Joust (1982) (Atari) [!].a26"
+                'file    "Kangaroo (1983) (Atari) [!].a26"
+                'file    "Moon Patrol (1983) (Atari).a26"
+                'file    "Ms. Pac-Man (1982) (Atari) [!].a26"
+                'file    "Phoenix (1982) (Atari).a26"
+                'file    "RealSports Tennis (1983) (Atari).a26"
+cartridge_rom_end
+
+CON ' License
+{{
+
+ TERMS OF USE: MIT License
+
+ Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+ associated documentation files (the "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+ following conditions:
+
+ The above copyright notice and this permission notice shall be included in all copies or substantial
+ portions of the Software.
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+ LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+}}

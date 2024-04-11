@@ -1,0 +1,761 @@
+{
+    Atari 2600 Emulator - Debugger
+    Copyright (c) 2024 by Marco Maccaferri <macca@maccasoft.com>
+}
+
+CON
+
+    CTL_CLK   = 24
+    CTL_INT   = 25
+    CTL_NMI   = 26
+    CTL_RESET = 27
+    CTL_STEP  = 28
+
+    VSYNC_LINES   = 3 + 32
+    VISIBLE_LINES = 210
+
+VAR
+
+    ' Processor Instance
+
+    long CTL    '     [0] = VSYNC
+                '     [1] = VBLANK
+                ' [15..8] = rom bank #
+                '[23..16] = last instruction cycles
+                '    [24] = clock enable
+                '    [25] = int
+                '    [26] = nmi
+                '    [27] = single step
+
+    byte REG_A  '   [7:0] = A
+    byte REG_X  '  [15:8] = X
+    byte REG_Y  ' [23:16] = Y
+    byte REG_P  ' [31:24] = P
+
+    word REG_PC '  [15:0] = PC
+    word REG_S  ' [23:16] = S
+
+    long INS_C  '  [31:8] = instruction time
+                '   [7:0] = instruction cycles
+    long CPU_C  '  [31:0] = cpu cycles
+    long CPU_T  '  [31:0] = cpu time
+
+    ' M6532
+
+    byte INTIM
+    byte M6532  '      [0] = TIMINT
+    word DIVIDER
+    long COUNTER
+
+    ' TIA
+
+    word SCAN_LN    '  [15:0] = Scan Line
+    byte PIXEL_POS  ' [23:16] = Pixel Position
+    byte unused2
+
+    byte COLUP0 ' COLU
+    byte COLUP1 '
+    byte COLUPF '
+    byte COLUBK '
+
+    long PF     ' PF
+
+    byte GRP0   ' P0
+    byte GRP0d
+    byte NUSIZ0
+    byte FLG0
+
+    byte GRP1   ' P0
+    byte GRP1d
+    byte NUSIZ1
+    byte FLG1
+
+    long HM
+    long MB
+
+    byte RESP0
+    byte RESP1
+    byte RESM0
+    byte RESM1
+    byte RESBL
+    byte filler[3]
+
+    byte AUDC0
+    byte AUDF0
+    byte AUDV0
+    byte filler1
+
+    byte AUDC1
+    byte AUDF1
+    byte AUDV1
+    byte filler2
+
+    ' Internal
+
+    long OLD_INS_C  '  [31:8] = instruction time
+                '   [7:0] = instruction cycles
+    long OLD_CPU_C  '  [31:0] = cpu cycles
+    long OLD_CPU_T  '  [31:0] = cpu time
+
+    long ram_ptr
+    long rom_ptr
+    long rom_bank
+    long vram_ptr
+    long stack[256]
+
+OBJ
+
+    ser  : "jm_fullduplexserial"
+    ansi : "jm_ansi"
+
+PUB null()
+    '' Not a top-level object
+
+PUB start(_proc, _ram, _rom, _vram)
+
+    ram_ptr := _ram
+    rom_ptr := _rom
+    vram_ptr := _vram
+    cogspin(COGEXEC_NEW, run(_proc), @stack)
+
+PUB run(_proc) | ch, addr
+
+    ser.tstart(2_000_000)
+    ser.str(ansi.cls())
+
+    CTL := 0
+    CTL.[CTL_STEP] := 1
+    coginit(COGEXEC_NEW, _proc, @CTL)
+
+    ser.str(ansi.hide_cursor())
+    ser.str(ansi.cls())
+
+    repeat
+        rom_bank := CTL.[15..8] << 8
+
+        registers()
+        dump_ram()
+
+        addr := REG_PC
+        repeat ch from 10 to 21
+            ser.str(ansi.crsr_xy(0, ch))
+            addr := disassemble(addr)
+
+        ser.str(ansi.crsr_xy(38, 10))
+        ser.fstr1(string("Scan Line:  %3d"), SCAN_LN)
+        ser.str(ansi.crsr_xy(38, 11))
+        ser.fstr1(string("Pixel Pos:  %3d"), PIXEL_POS - 68)
+
+        ser.str(ansi.crsr_xy(38, 13))
+        ser.fstr5(string("P0 [%8.8b] Pos [%3d] HM [%2d] Ref [%d] COLUP0 [$%2.2x]"), GRP0, RESP0 - 68, -(HM.[3..0] signx 3), FLG0.[0], COLUP0 << 1)
+        ser.str(ansi.crsr_xy(38, 14))
+        ser.fstr3(string("   [%8.8b] VDel [%d] NuSiz [%3.3b - "), GRP0d, FLG0.[1], NUSIZ0.[2..0])
+        case NUSIZ0.[2..0]
+            %000: ser.str("1 copy")
+            %001: ser.str("2 copies close")
+            %010: ser.str("2 copies med")
+            %011: ser.str("3 copies close")
+            %100: ser.str("2 copies wide")
+            %101: ser.str("double size")
+            %110: ser.str("3 copies med")
+            %111: ser.str("quand size")
+        ser.str(string("]"))
+
+        ser.str(ansi.crsr_xy(38, 16))
+        ser.fstr5(string("P1 [%8.8b] Pos [%3d] HM [%2d] Ref [%d] COLUP1 [$%2.2x]"), GRP1, RESP1 - 68, -(HM.[7..4] signx 3), FLG1.[0], COLUP1 << 1)
+        ser.str(ansi.crsr_xy(38, 17))
+        ser.fstr3(string("   [%8.8b] VDel [%d] NuSiz [%3.3b - "), GRP1d, FLG1.[1], NUSIZ0.[2..0])
+        case NUSIZ1.[2..0]
+            %000: ser.str("1 copy")
+            %001: ser.str("2 copies close")
+            %010: ser.str("2 copies med")
+            %011: ser.str("3 copies close")
+            %100: ser.str("2 copies wide")
+            %101: ser.str("double size")
+            %110: ser.str("3 copies med")
+            %111: ser.str("quand size")
+        ser.str(string("]"))
+
+        ser.str(ansi.crsr_xy(38, 19))
+        ser.fstr5(string("M0 [%d] Pos [%3d] HM [%2d] Size [%2d] ResP0 [%d]"), MB.[24], RESM0 - 68, -(HM.[11..8] signx 3), 1 << NUSIZ0.[5..4], MB.[27])
+        ser.str(ansi.crsr_xy(38, 20))
+        ser.fstr5(string("M1 [%d] Pos [%3d] HM [%2d] Size [%2d] ResP1 [%d]"), MB.[25], RESM1 - 68, -(HM.[15..12] signx 3), 1 << NUSIZ1.[5..4], MB.[28])
+        ser.str(ansi.crsr_xy(38, 21))
+        ser.fstr4(string("BL [%d] Pos [%3d] HM [%2d] Size [%2d]"), MB.[26], RESBL - 68, -(HM.[19..16] signx 3), 1 << PF.[29..28])
+        ser.str(ansi.crsr_xy(38, 22))
+        ser.fstr1(string("   [%d] VDel"), MB.[29])
+
+        ser.str(ansi.crsr_xy(38, 24))
+        ser.fstr5(string("PF [%4.4b %8.8b %8.8b] COLUPF [$%2.2x] COLUBK [$%2.2x]"), PF.[3..0] rev 3, PF.[11..4] rev 7, PF.[19..12] rev 7 , COLUPF << 1, COLUBK << 1)
+
+        ser.str(ansi.crsr_xy(38, 26))
+        ser.fstr4(string("INTIM [%2.2x] TIMINT [%d] INTIM Clks [%4d] DIVIDER [%4d]"), INTIM, M6532.[0], DIVIDER - COUNTER, DIVIDER)
+
+        ser.str(ansi.crsr_xy(38, 28))
+        ser.fstr2(string("AUDF [%2.2x] [%2.2x]"), AUDF0, AUDF1)
+        ser.str(ansi.crsr_xy(38, 29))
+        ser.fstr2(string("AUDC [%2.2x] [%2.2x]"), AUDC0, AUDC1)
+        ser.str(ansi.crsr_xy(38, 30))
+        ser.fstr2(string("AUDV [%2.2x] [%2.2x]"), AUDV0, AUDV1)
+
+        'if SCAN_LN >= VSYNC_LINES && SCAN_LN < (VSYNC_LINES + VISIBLE_LINES)
+        '    dump_vram((SCAN_LN - (VSYNC_LINES)) * 160)
+        'else
+        '    ser.str(ansi.crsr_xy(0, 28))
+        '    ser.str(ansi.clr_dn())
+
+
+        ch := ser.rx()
+        case ch
+            13:
+                CTL.[CTL_STEP] := CTL.[CTL_CLK] := 1
+                repeat while CTL.[CTL_CLK] == 1
+            "f","F":
+                repeat while SCAN_LN == 0
+                    CTL.[CTL_CLK] := 1
+                    repeat while CTL.[CTL_CLK] == 1
+                repeat while SCAN_LN <> 0
+                    CTL.[CTL_CLK] := 1
+                    repeat while CTL.[CTL_CLK] == 1
+            "s","S":
+                ch := SCAN_LN
+                repeat while SCAN_LN == ch
+                    CTL.[CTL_CLK] := 1
+                    repeat while CTL.[CTL_CLK] == 1
+            "r","R":
+                CTL.[CTL_STEP] ^= 1
+                CTL.[CTL_CLK] := 1
+            "c","C":
+                bytefill(vram_ptr, $80 >> 1, 160 * VISIBLE_LINES)
+
+        repeat while ser.rxcheck() <> -1
+
+PRI dump_vram(addr) | y, px, py
+
+    y := 28
+
+    px := 68
+    repeat 8
+        ser.str(ansi.crsr_xy(0, y++))
+        repeat 20
+            ser.fstr1(string(" %2.2x"), byte[vram_ptr][addr++] << 1)
+            px++
+        ser.str(ansi.clr_eol())
+
+    if PIXEL_POS >= 68
+        px := ((PIXEL_POS - 68) // 20) * 3
+        py := ((PIXEL_POS - 68) / 20) + 28
+        ser.str(ansi.crsr_xy(px, py))
+        ser.tx("[")
+        ser.str(ansi.crsr_xy(px + 3, py))
+        ser.tx("]")
+
+PRI registers()
+
+    ser.str(ansi.crsr_xy(0, 0))
+    ser.fstr1(string("PC: $%4.4x"), REG_PC)
+    ser.str(ansi.crsr_xy(0, 1))
+    ser.fstr3(string("SP: $%2.2x #%3d \%%8.8b"), REG_S, REG_S, REG_S)
+    ser.str(ansi.crsr_xy(0, 2))
+    ser.fstr3(string(" A: $%2.2x #%3d \%%8.8b"), REG_A, REG_A, REG_A)
+    ser.str(ansi.crsr_xy(0, 3))
+    ser.fstr3(string(" X: $%2.2x #%3d \%%8.8b"), REG_X, REG_X, REG_X)
+    ser.str(ansi.crsr_xy(0, 4))
+    ser.fstr3(string(" Y: $%2.2x #%3d \%%8.8b"), REG_Y, REG_Y, REG_Y)
+    ser.str(ansi.crsr_xy(0, 5))
+    ser.fstr3(string("PS: $%2.2x #%3d \%%8.8b ["), REG_P, REG_P, REG_P)
+    ser.tx((REG_P & $80) <> 0 ? "N" : "n")
+    ser.tx((REG_P & $40) <> 0 ? "V" : "v")
+    ser.tx((REG_P & $20) <> 0 ? "-" : "-")
+    ser.tx((REG_P & $10) <> 0 ? "B" : "b")
+    ser.tx((REG_P & $08) <> 0 ? "D" : "d")
+    ser.tx((REG_P & $04) <> 0 ? "I" : "i")
+    ser.tx((REG_P & $02) <> 0 ? "Z" : "z")
+    ser.tx((REG_P & $01) <> 0 ? "C" : "c")
+    ser.tx("]")
+
+    'ser.str(ansi.crsr_xy(0, 7))
+    'ser.fstr2(string("Clks: %10d [%5d]"), CPU_C, INS_C.byte[0])
+    'ser.str(ansi.crsr_xy(0, 8))
+    'ser.fstr2(string("Time: %10d [%5d]"), CPU_T, INS_C.[31..8])
+    ser.str(ansi.crsr_xy(0, 7))
+    ser.fstr2(string("Delta Clks: %10d [%10d]"), CPU_C, CPU_C - OLD_CPU_C)
+    ser.str(ansi.crsr_xy(0, 8))
+    ser.fstr2(string("Delta Time: %10d [%10d]"), CPU_T, CPU_T - OLD_CPU_T)
+
+PRI disassemble(addr) : rc
+    rc := addr + 2
+
+    ser.fstr1(string("$%4.4x: "), addr)
+    case_fast peek(addr)
+
+        $00: dump(addr, 1)
+             ser.fstr0(string("BRK"))
+             rc := addr + 1
+        $01: dump(addr, 2)
+             ser.fstr1(string("ORA ($%2.2x,X)"), peek(addr+1))
+        $02: dump(addr, 1)
+             ser.fstr0(string("*JAM"))
+             rc := addr + 1
+        $03: dump(addr, 2)
+             ser.fstr1(string("*ASO ($%2.2x,X)"), peek(addr+1))
+        $04: dump(addr, 2)
+             ser.fstr0(string("*NOP"))
+        $05: dump(addr, 2)
+             ser.fstr1(string("ORA $%2.2x"), peek(addr+1))
+        $06: dump(addr, 2)
+             ser.fstr1(string("ASL $%2.2x"), peek(addr+1))
+        $07: dump(addr, 2)
+            '
+        $08: dump(addr, 1)
+             ser.fstr0(string("PHP"))
+             rc := addr + 1
+        $09: dump(addr, 2)
+             ser.fstr1(string("ORA #$%2.2x"), peek(addr+1))
+        $0A: dump(addr, 1)
+             ser.fstr0(string("ASL"))
+             rc := addr + 1
+        $0B: dump(addr, 3)
+            '
+             rc := addr + 3
+        $0C: dump(addr, 3)
+            '
+             rc := addr + 3
+        $0D: dump(addr, 3)
+             ser.fstr2(string("ORA $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $0E: dump(addr, 3)
+             ser.fstr2(string("ASL $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $0F: dump(addr, 3)
+            '
+             rc := addr + 3
+
+        $10: dump(addr, 2)
+             ser.fstr2(string("BPL $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $11: dump(addr, 2)
+             ser.fstr1(string("ORA ($%2.2x),Y"), peek(addr+1))
+        $15: dump(addr, 2)
+             ser.fstr1(string("ORA $%2.2x,X"), peek(addr+1))
+        $16: dump(addr, 2)
+             ser.fstr1(string("ASL $%2.2x,X"), peek(addr+1))
+        $18: dump(addr, 1)
+             ser.fstr0(string("CLC"))
+             rc := addr + 1
+        $19: dump(addr, 3)
+             ser.fstr2(string("ORA $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $1D: dump(addr, 3)
+             ser.fstr2(string("ORA $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $1E: dump(addr, 3)
+             ser.fstr2(string("ASL $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $20: dump(addr, 3)
+             ser.fstr2(string("JSR #$%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $21: dump(addr, 2)
+             ser.fstr1(string("AND ($%2.2x,X)"), peek(addr+1))
+        $24: dump(addr, 2)
+             ser.fstr1(string("BIT $%2.2x"), peek(addr+1))
+        $25: dump(addr, 2)
+             ser.fstr1(string("AND $%2.2x"), peek(addr+1))
+        $26: dump(addr, 2)
+             ser.fstr1(string("ROL $%2.2x"), peek(addr+1))
+        $28: dump(addr, 1)
+             ser.fstr0(string("PLP"))
+             rc := addr + 1
+        $29: dump(addr, 2)
+             ser.fstr1(string("AND #$%2.2x"), peek(addr+1))
+        $2A: dump(addr, 1)
+             ser.fstr0(string("ROL"))
+             rc := addr + 1
+        $2C: dump(addr, 3)
+             ser.fstr2(string("BIT $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             ser.fstr1(string(" ($%2.2x)"), peek((peek(addr+2) << 8) | peek(addr+1)))
+             rc := addr + 3
+        $2D: dump(addr, 3)
+             ser.fstr2(string("AND $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $2E: dump(addr, 3)
+             ser.fstr2(string("ROL $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $30: dump(addr, 2)
+             ser.fstr2(string("BMI $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $31: dump(addr, 2)
+             ser.fstr1(string("AND ($%2.2x),Y"), peek(addr+1))
+        $35: dump(addr, 2)
+             ser.fstr1(string("AND $%2.2x,X"), peek(addr+1))
+        $36: dump(addr, 2)
+             ser.fstr1(string("ROL $%2.2x,X"), peek(addr+1))
+        $38: dump(addr, 1)
+             ser.fstr0(string("SEC"))
+             rc := addr + 1
+        $39: dump(addr, 3)
+             ser.fstr2(string("AND $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $3D: dump(addr, 3)
+             ser.fstr2(string("AND $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $3E: dump(addr, 3)
+             ser.fstr2(string("ROL $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $40: dump(addr, 1)
+             ser.fstr0(string("RTI"))
+             rc := addr + 1
+        $41: dump(addr, 2)
+             ser.fstr1(string("EOR ($%2.2x,X)"), peek(addr+1))
+        $45: dump(addr, 2)
+             ser.fstr1(string("EOR $%2.2x"), peek(addr+1))
+        $46: dump(addr, 2)
+             ser.fstr1(string("LSR $%2.2x"), peek(addr+1))
+        $48: dump(addr, 1)
+             ser.fstr0(string("PHA"))
+             rc := addr + 1
+        $49: dump(addr, 2)
+             ser.fstr1(string("EOR #$%2.2x"), peek(addr+1))
+        $4A: dump(addr, 1)
+             ser.fstr0(string("LSR"))
+             rc := addr + 1
+        $4C: dump(addr, 3)
+             ser.fstr2(string("JMP $%2.2x%2.2x    ;3"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $4D: dump(addr, 3)
+             ser.fstr2(string("EOR $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $4E: dump(addr, 3)
+             ser.fstr2(string("LSR $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $50: dump(addr, 2)
+             ser.fstr2(string("BVC $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $51: dump(addr, 2)
+             ser.fstr1(string("EOR ($%2.2x),Y"), peek(addr+1))
+        $55: dump(addr, 2)
+             ser.fstr1(string("EOR $%2.2x,X"), peek(addr+1))
+        $56: dump(addr, 2)
+             ser.fstr1(string("LSR $%2.2x,X"), peek(addr+1))
+        $58: dump(addr, 1)
+             ser.fstr0(string("CLI"))
+             rc := addr + 1
+        $59: dump(addr, 3)
+             rc := addr + 3
+             ser.fstr2(string("EOR $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+        $5D: dump(addr, 3)
+             rc := addr + 3
+             ser.fstr2(string("EOR $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+        $5E: dump(addr, 3)
+             ser.fstr2(string("LSR $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $60: dump(addr, 1)
+             ser.fstr0(string("RTS"))
+             rc := addr + 1
+        $61: dump(addr, 2)
+             ser.fstr1(string("ADC ($%2.2x,X)"), peek(addr+1))
+        $65: dump(addr, 2)
+             ser.fstr1(string("ADC $%2.2x"), peek(addr+1))
+        $66: dump(addr, 2)
+             ser.fstr1(string("ROR $%2.2x"), peek(addr+1))
+        $68: dump(addr, 1)
+             ser.fstr0(string("PLA"))
+             rc := addr + 1
+        $69: dump(addr, 2)
+             ser.fstr1(string("ADC #$%2.2x"), peek(addr+1))
+        $6A: dump(addr, 1)
+             ser.fstr0(string("ROR"))
+             rc := addr + 1
+        $6C: dump(addr, 3)
+             ser.fstr2(string("JMP ($%2.2x%2.2x)"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $6D: dump(addr, 3)
+             ser.fstr2(string("ADC $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $6E: dump(addr, 3)
+             ser.fstr2(string("ROR $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $70: dump(addr, 2)
+             ser.fstr2(string("BVS $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $71: dump(addr, 2)
+             ser.fstr1(string("ADC ($%2.2x),Y"), peek(addr+1))
+        $75: dump(addr, 2)
+             ser.fstr1(string("ADC $%2.2x,X"), peek(addr+1))
+        $76: dump(addr, 2)
+             ser.fstr1(string("ROR $%2.2x,X"), peek(addr+1))
+        $78: dump(addr, 1)
+             ser.fstr0(string("SEI"))
+             rc := addr + 1
+        $79: dump(addr, 3)
+             ser.fstr2(string("ADC $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $7D: dump(addr, 3)
+             ser.fstr2(string("ADC $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $7E: dump(addr, 3)
+             ser.fstr2(string("ROR $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $81: dump(addr, 2)
+             ser.fstr1(string("STA ($%2.2x,X)"), peek(addr+1))
+        $84: dump(addr, 2)
+             ser.fstr1(string("STY $%2.2x"), peek(addr+1))
+        $85: dump(addr, 2)
+             ser.fstr1(string("STA $%2.2x"), peek(addr+1))
+        $86: dump(addr, 2)
+             ser.fstr1(string("STX $%2.2x"), peek(addr+1))
+        $88: dump(addr, 1)
+             ser.fstr0(string("DEY"))
+             rc := addr + 1
+        $8A: dump(addr, 1)
+             ser.fstr0(string("TXA"))
+             rc := addr + 1
+        $8C: dump(addr, 3)
+             ser.fstr2(string("STY $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $8D: dump(addr, 3)
+             ser.fstr2(string("STA $%2.2x%2.2x    ;4"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $8E: dump(addr, 3)
+             ser.fstr2(string("STX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $90: dump(addr, 2)
+             ser.fstr2(string("BCC $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $91: dump(addr, 2)
+             ser.fstr1(string("STA ($%2.2x),Y"), peek(addr+1))
+        $94: dump(addr, 2)
+             ser.fstr1(string("STY $%2.2x,X"), peek(addr+1))
+        $95: dump(addr, 2)
+             ser.fstr1(string("STA $%2.2x,X"), peek(addr+1))
+        $99: dump(addr, 3)
+             ser.fstr2(string("STA $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+        $9D: dump(addr, 3)
+             ser.fstr2(string("STA $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $9E: dump(addr, 2)
+             ser.fstr1(string("STX $%2.2x,Y"), peek(addr+1))
+        $9A: dump(addr, 1)
+             rc := addr + 1
+             ser.fstr0(string("TXS"))
+        $98: dump(addr, 1)
+             ser.fstr0(string("TIA"))
+             rc := addr + 1
+
+        $A0: dump(addr, 2)
+             ser.fstr1(string("LDY #$%2.2x"), peek(addr+1))
+        $A1: dump(addr, 2)
+             ser.fstr1(string("LDA ($%2.2x,X)"), peek(addr+1))
+        $A2: dump(addr, 2)
+             ser.fstr1(string("LDX #$%2.2x"), peek(addr+1))
+        $A4: dump(addr, 2)
+             ser.fstr1(string("LDY $%2.2x"), peek(addr+1))
+        $A5: dump(addr, 2)
+             ser.fstr1(string("LDA $%2.2x      ;3"), peek(addr+1))
+        $A6: dump(addr, 2)
+             ser.fstr1(string("LDX $%2.2x"), peek(addr+1))
+        $A8: dump(addr, 1)
+             ser.fstr0(string("TAY"))
+             rc := addr + 1
+        $A9: dump(addr, 2)
+             ser.fstr1(string("LDA #$%2.2x     ;2"), peek(addr+1))
+        $AA: dump(addr, 1)
+             ser.fstr0(string("TAX"))
+             rc := addr + 1
+        $AC: dump(addr, 3)
+             ser.fstr2(string("LDY $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $AD: dump(addr, 3)
+             ser.fstr2(string("LDA $%2.2x%2.2x    ;4"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $AE: dump(addr, 3)
+             ser.fstr2(string("LDX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $B0: dump(addr, 2)
+             ser.fstr2(string("BCS $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $B1: dump(addr, 2)
+             ser.fstr1(string("LDA ($%2.2x),Y"), peek(addr+1))
+        $B4: dump(addr, 2)
+             ser.fstr1(string("LDY $%2.2x,X"), peek(addr+1))
+        $B5: dump(addr, 2)
+             ser.fstr1(string("LDA $%2.2x,X"), peek(addr+1))
+        $B6: dump(addr, 2)
+             ser.fstr1(string("LDX $%2.2x,Y"), peek(addr+1))
+        $B8: dump(addr, 1)
+             ser.fstr0(string("CLV"))
+             rc := addr + 1
+        $B9: dump(addr, 3)
+             ser.fstr2(string("LDA $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $BA: dump(addr, 1)
+             ser.fstr0(string("TSX"))
+             rc := addr + 1
+        $BC: dump(addr, 3)
+             ser.fstr2(string("LDY $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $BD: dump(addr, 3)
+             ser.fstr2(string("LDA $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $BE: dump(addr, 3)
+             ser.fstr2(string("LDX $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $C0: dump(addr, 2)
+             ser.fstr1(string("CPY #$%2.2x"), peek(addr+1))
+        $C1: dump(addr, 2)
+             ser.fstr1(string("CMP ($%2.2x,X)"), peek(addr+1))
+        $C4: dump(addr, 2)
+             ser.fstr1(string("CPY $%2.2x"), peek(addr+1))
+        $C5: dump(addr, 2)
+             ser.fstr1(string("CMP $%2.2x"), peek(addr+1))
+        $C6: dump(addr, 2)
+             ser.fstr1(string("DEC $%2.2x"), peek(addr+1))
+        $C8: dump(addr, 1)
+             ser.fstr0(string("INY"))
+             rc := addr + 1
+        $C9: dump(addr, 2)
+             ser.fstr1(string("CMP #$%2.2x"), peek(addr+1))
+        $CA: dump(addr, 1)
+             ser.fstr0(string("DEX"))
+             rc := addr + 1
+        $CC: dump(addr, 3)
+             ser.fstr2(string("CPY $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $CD: dump(addr, 3)
+             ser.fstr2(string("CMP $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $CE: dump(addr, 3)
+             ser.fstr2(string("DEC $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $D0: dump(addr, 2)
+             ser.fstr2(string("BNE $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $D1: dump(addr, 2)
+             ser.fstr1(string("CMP ($%2.2x),Y"), peek(addr+1))
+        $D5: dump(addr, 2)
+             ser.fstr1(string("CMP $%2.2x,X"), peek(addr+1))
+        $D6: dump(addr, 2)
+             ser.fstr1(string("DEC $%2.2x,X"), peek(addr+1))
+        $D8: dump(addr, 1)
+             ser.fstr0(string("CLD"))
+             rc := addr + 1
+        $D9: dump(addr, 3)
+             ser.fstr2(string("CMP $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $DD: dump(addr, 3)
+             ser.fstr2(string("CMP $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $DE: dump(addr, 2)
+             ser.fstr1(string("DEC ($%2.2x,X)"), peek(addr+1))
+
+        $E0: dump(addr, 2)
+             ser.fstr1(string("CPX #$%2.2x"), peek(addr+1))
+        $E1: dump(addr, 2)
+             ser.fstr1(string("SBC ($%2.2x,X)"), peek(addr+1))
+        $E4: dump(addr, 2)
+             ser.fstr1(string("CPX $%2.2x"), peek(addr+1))
+        $E5: dump(addr, 2)
+             ser.fstr1(string("SBC $%2.2x"), peek(addr+1))
+        $E6: dump(addr, 2)
+             ser.fstr1(string("INC $%2.2x"), peek(addr+1))
+        $E8: dump(addr, 1)
+             ser.fstr0(string("INX"))
+             rc := addr + 1
+        $E9: dump(addr, 2)
+             ser.fstr1(string("SBC #$%2.2x"), peek(addr+1))
+        $EA: dump(addr, 1)
+             ser.fstr0(string("NOP          ;2"))
+             rc := addr + 1
+        $EC: dump(addr, 3)
+             ser.fstr2(string("CPX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $EE: dump(addr, 3)
+             ser.fstr2(string("INC $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $ED: dump(addr, 3)
+             ser.fstr2(string("SBC $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+
+        $F0: dump(addr, 2)
+             ser.fstr2(string("BEQ $%4.4x (%d)"), (addr + 2) + signed(peek(addr+1)), signed(peek(addr+1)))
+        $F1: dump(addr, 2)
+             ser.fstr1(string("SBC ($%2.2x),Y"), peek(addr+1))
+        $F5: dump(addr, 2)
+             ser.fstr1(string("SBC $%2.2x,X"), peek(addr+1))
+        $F6: dump(addr, 2)
+             ser.fstr1(string("INC $%2.2x,X"), peek(addr+1))
+        $F8: dump(addr, 1)
+             ser.fstr0(string("SED"))
+             rc := addr + 1
+        $F9: dump(addr, 3)
+             ser.fstr2(string("SBC $%2.2x%2.2x,Y"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $FD: dump(addr, 3)
+             ser.fstr2(string("SBC $%2.2x%2.2x,X"), peek(addr+2), peek(addr+1))
+             rc := addr + 3
+        $FE: dump(addr, 2)
+             ser.fstr1(string("INC ($%2.2x,X)"), peek(addr+1))
+        $FF: dump(addr, 1)
+             ser.fstr0(string("HALT"))
+             rc := addr + 1
+        other: dump(addr, 3)
+               rc := addr + 3
+
+    ser.str(ansi.clr_eol())
+
+PRI dump(addr, count)
+
+    repeat count
+        ser.fstr1(string("%2.2x "), peek(addr++))
+    if count < 3
+        repeat 3 - count
+             ser.str(string("   "))
+
+PUB peek(addr) : rc
+
+    if addr.byte[1] == $01
+        return byte[ram_ptr][addr & $7F]
+    if addr.[12] == 1
+        return byte[rom_ptr][rom_bank + (addr & $FFF)]
+    if addr.[9] == 0 and addr.[7] == 1
+        return byte[ram_ptr][addr & $7F]
+
+PRI signed(n) : rc
+
+    rc := n < $80 ? n : -(256 - n)
+
+PRI dump_ram() | addr, y
+
+    addr := $00
+
+    ser.str(ansi.crsr_xy(38, 0))
+    ser.str(string("00xx  0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F"))
+
+    ser.str(ansi.crsr_xy(38, 1))
+    ser.str(string("  8  "))
+    dump($0080, 16)
+    ser.str(ansi.crsr_xy(38, 2))
+    ser.str(string("  9  "))
+    dump($0090, 16)
+    ser.str(ansi.crsr_xy(38, 3))
+    ser.str(string("  A  "))
+    dump($00A0, 16)
+    ser.str(ansi.crsr_xy(38, 4))
+    ser.str(string("  B  "))
+    dump($00B0, 16)
+    ser.str(ansi.crsr_xy(38, 5))
+    ser.str(string("  C  "))
+    dump($00C0, 16)
+    ser.str(ansi.crsr_xy(38, 6))
+    ser.str(string("  D  "))
+    dump($00D0, 16)
+    ser.str(ansi.crsr_xy(38, 7))
+    ser.str(string("  E  "))
+    dump($00E0, 16)
+    ser.str(ansi.crsr_xy(38, 8))
+    ser.str(string("  F  "))
+    dump($00F0, 16)
