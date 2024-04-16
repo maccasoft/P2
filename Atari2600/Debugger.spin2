@@ -1,6 +1,6 @@
 {
-    Atari 2600 Emulator - Debugger
-    Copyright (c) 2024 by Marco Maccaferri <macca@maccasoft.com>
+    ATARI 2600 Video Computer System Emulator
+    Copyright (c) 2022-23 by Marco Maccaferri <macca@maccasoft.com>
 }
 
 CON
@@ -111,12 +111,12 @@ OBJ
 PUB null()
     '' Not a top-level object
 
-PUB start(_proc, _ram, _rom, _vram)
+PUB start(_proc, _ram, _rom, _vram) : rc
 
     ram_ptr := _ram
     rom_ptr := _rom
     vram_ptr := _vram
-    cogspin(COGEXEC_NEW, run(_proc), @stack)
+    rc := cogspin(COGEXEC_NEW, run(_proc), @stack)
 
 PUB run(_proc) | ch, addr
 
@@ -131,7 +131,7 @@ PUB run(_proc) | ch, addr
     ser.str(ansi.cls())
 
     repeat
-        rom_bank := CTL.[15..8] << 8
+        rom_ptr := CTL.[19..0]
 
         registers()
         dump_ram()
@@ -158,7 +158,7 @@ PUB run(_proc) | ch, addr
             %100: ser.str("2 copies wide")
             %101: ser.str("double size")
             %110: ser.str("3 copies med")
-            %111: ser.str("quand size")
+            %111: ser.str("quad size")
         ser.str(string("]"))
 
         ser.str(ansi.crsr_xy(38, 16))
@@ -173,7 +173,7 @@ PUB run(_proc) | ch, addr
             %100: ser.str("2 copies wide")
             %101: ser.str("double size")
             %110: ser.str("3 copies med")
-            %111: ser.str("quand size")
+            %111: ser.str("quad size")
         ser.str(string("]"))
 
         ser.str(ansi.crsr_xy(38, 19))
@@ -187,15 +187,17 @@ PUB run(_proc) | ch, addr
 
         ser.str(ansi.crsr_xy(38, 24))
         ser.fstr5(string("PF [%4.4b %8.8b %8.8b] COLUPF [$%2.2x] COLUBK [$%2.2x]"), PF.[3..0] rev 3, PF.[11..4] rev 7, PF.[19..12] rev 7 , COLUPF << 1, COLUBK << 1)
+        ser.str(ansi.crsr_xy(38, 25))
+        ser.fstr3(string("   REF [%d] SCORE [%d] PFP [%d]"), PF.[24], PF.[25], PF.[26])
 
-        ser.str(ansi.crsr_xy(38, 26))
+        ser.str(ansi.crsr_xy(38, 27))
         ser.fstr4(string("INTIM [%2.2x] TIMINT [%d] INTIM Clks [%4d] DIVIDER [%4d]"), INTIM, M6532.[0], DIVIDER - COUNTER, DIVIDER)
 
-        ser.str(ansi.crsr_xy(38, 28))
-        ser.fstr2(string("AUDF [%2.2x] [%2.2x]"), AUDF0, AUDF1)
         ser.str(ansi.crsr_xy(38, 29))
-        ser.fstr2(string("AUDC [%2.2x] [%2.2x]"), AUDC0, AUDC1)
+        ser.fstr2(string("AUDF [%2.2x] [%2.2x]"), AUDF0, AUDF1)
         ser.str(ansi.crsr_xy(38, 30))
+        ser.fstr2(string("AUDC [%2.2x] [%2.2x]"), AUDC0, AUDC1)
+        ser.str(ansi.crsr_xy(38, 31))
         ser.fstr2(string("AUDV [%2.2x] [%2.2x]"), AUDV0, AUDV1)
 
         'if SCAN_LN >= VSYNC_LINES && SCAN_LN < (VSYNC_LINES + VISIBLE_LINES)
@@ -283,7 +285,7 @@ PRI registers()
     ser.str(ansi.crsr_xy(0, 8))
     ser.fstr2(string("Delta Time: %10d [%10d]"), CPU_T, CPU_T - OLD_CPU_T)
 
-PRI disassemble(addr) : rc
+PRI disassemble(addr) : rc | sptr
     rc := addr + 2
 
     ser.fstr1(string("$%4.4x: "), addr)
@@ -421,7 +423,7 @@ PRI disassemble(addr) : rc
              ser.fstr0(string("LSR"))
              rc := addr + 1
         $4C: dump(addr, 3)
-             ser.fstr2(string("JMP $%2.2x%2.2x    ;3"), peek(addr+2), peek(addr+1))
+             ser.fstr2(string("JMP $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
         $4D: dump(addr, 3)
              ser.fstr2(string("EOR $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
@@ -502,11 +504,23 @@ PRI disassemble(addr) : rc
         $81: dump(addr, 2)
              ser.fstr1(string("STA ($%2.2x,X)"), peek(addr+1))
         $84: dump(addr, 2)
-             ser.fstr1(string("STY $%2.2x"), peek(addr+1))
+             sptr := reg_name(peek(addr+1))
+             if sptr <> 0
+                 ser.fstr1(string("STY %s"), sptr)
+             else
+                 ser.fstr1(string("STY $%2.2x"), peek(addr+1))
         $85: dump(addr, 2)
-             ser.fstr1(string("STA $%2.2x"), peek(addr+1))
+             sptr := reg_name(peek(addr+1))
+             if sptr <> 0
+                 ser.fstr1(string("STA %s"), sptr)
+             else
+                 ser.fstr1(string("STA $%2.2x"), peek(addr+1))
         $86: dump(addr, 2)
-             ser.fstr1(string("STX $%2.2x"), peek(addr+1))
+             sptr := reg_name(peek(addr+1))
+             if sptr <> 0
+                 ser.fstr1(string("STX %s"), sptr)
+             else
+                 ser.fstr1(string("STX $%2.2x"), peek(addr+1))
         $88: dump(addr, 1)
              ser.fstr0(string("DEY"))
              rc := addr + 1
@@ -517,7 +531,7 @@ PRI disassemble(addr) : rc
              ser.fstr2(string("STY $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
         $8D: dump(addr, 3)
-             ser.fstr2(string("STA $%2.2x%2.2x    ;4"), peek(addr+2), peek(addr+1))
+             ser.fstr2(string("STA $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
         $8E: dump(addr, 3)
              ser.fstr2(string("STX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
@@ -554,14 +568,14 @@ PRI disassemble(addr) : rc
         $A4: dump(addr, 2)
              ser.fstr1(string("LDY $%2.2x"), peek(addr+1))
         $A5: dump(addr, 2)
-             ser.fstr1(string("LDA $%2.2x      ;3"), peek(addr+1))
+             ser.fstr1(string("LDA $%2.2x"), peek(addr+1))
         $A6: dump(addr, 2)
              ser.fstr1(string("LDX $%2.2x"), peek(addr+1))
         $A8: dump(addr, 1)
              ser.fstr0(string("TAY"))
              rc := addr + 1
         $A9: dump(addr, 2)
-             ser.fstr1(string("LDA #$%2.2x     ;2"), peek(addr+1))
+             ser.fstr1(string("LDA #$%2.2x"), peek(addr+1))
         $AA: dump(addr, 1)
              ser.fstr0(string("TAX"))
              rc := addr + 1
@@ -569,7 +583,7 @@ PRI disassemble(addr) : rc
              ser.fstr2(string("LDY $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
         $AD: dump(addr, 3)
-             ser.fstr2(string("LDA $%2.2x%2.2x    ;4"), peek(addr+2), peek(addr+1))
+             ser.fstr2(string("LDA $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
         $AE: dump(addr, 3)
              ser.fstr2(string("LDX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
@@ -668,7 +682,7 @@ PRI disassemble(addr) : rc
         $E9: dump(addr, 2)
              ser.fstr1(string("SBC #$%2.2x"), peek(addr+1))
         $EA: dump(addr, 1)
-             ser.fstr0(string("NOP          ;2"))
+             ser.fstr0(string("NOP"))
              rc := addr + 1
         $EC: dump(addr, 3)
              ser.fstr2(string("CPX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
@@ -707,6 +721,108 @@ PRI disassemble(addr) : rc
 
     ser.str(ansi.clr_eol())
 
+PRI reg_name(addr) : s
+
+    s := 0
+    if addr.[12] == 0 and addr.[7] == 0
+        case_fast addr & $3F
+            $00: s := string("VSYNC")
+            $01: s := string("VBLANK")
+            $02: s := string("WSYNC")
+            $03: s := string("RSYNC")
+            $04: s := string("NUSIZ0")
+            $05: s := string("NUSIZ1")
+            $06: s := string("COLUP0")
+            $07: s := string("COLUP1")
+            $08: s := string("COLUPF")
+            $09: s := string("COLUBK")
+            $0A: s := string("CTRLPF")
+            $0B: s := string("REFP0")
+            $0C: s := string("REFP1")
+            $0D: s := string("PF0")
+            $0E: s := string("PF1")
+            $0F: s := string("PF2")
+
+            $10: s := string("RESP0")
+            $11: s := string("RESP1")
+            $12: s := string("RESM0")
+            $13: s := string("RESM1")
+            $14: s := string("RESBL")
+            $15: s := string("AUDC0")
+            $16: s := string("AUDC1")
+            $17: s := string("AUDF0")
+            $18: s := string("AUDF1")
+            $19: s := string("AUDV0")
+            $1A: s := string("AUDV1")
+            $1B: s := string("GRP0")
+            $1C: s := string("GRP1")
+            $1D: s := string("ENAM0")
+            $1E: s := string("ENAM1")
+            $1F: s := string("ENABL")
+
+            $20: s := string("HMP0")
+            $21: s := string("HMP1")
+            $22: s := string("HMM0")
+            $23: s := string("HMM1")
+            $24: s := string("HMBL")
+            $25: s := string("VDELP0")
+            $26: s := string("VDELP1")
+            $27: s := string("VDELBL")
+            $28: s := string("RESMP0")
+            $29: s := string("RESMP1")
+            $2A: s := string("HMOVE")
+            $2B: s := string("HMCLR")
+            $2C: s := string("CXCLR")
+    elseif addr.[12] == 0 and addr.[8] == 0 and addr.[7] == 0
+        case_fast addr & $3F
+            $00: s := string("VSYNC|$100")
+            $01: s := string("VBLANK|$100")
+            $02: s := string("WSYNC|$100")
+            $03: s := string("RSYNC|$100")
+            $04: s := string("NUSIZ0|$100")
+            $05: s := string("NUSIZ1|$100")
+            $06: s := string("COLUP0|$100")
+            $07: s := string("COLUP1|$100")
+            $08: s := string("COLUPF|$100")
+            $09: s := string("COLUBK|$100")
+            $0A: s := string("CTRLPF|$100")
+            $0B: s := string("REFP0|$100")
+            $0C: s := string("REFP1|$100")
+            $0D: s := string("PF0|$100")
+            $0E: s := string("PF1|$100")
+            $0F: s := string("PF2|$100")
+
+            $10: s := string("RESP0|$100")
+            $11: s := string("RESP1|$100")
+            $12: s := string("RESM0|$100")
+            $13: s := string("RESM1|$100")
+            $14: s := string("RESBL|$100")
+            $15: s := string("AUDC0|$100")
+            $16: s := string("AUDC1|$100")
+            $17: s := string("AUDF0|$100")
+            $18: s := string("AUDF1|$100")
+            $19: s := string("AUDV0v")
+            $1A: s := string("AUDV1|$100")
+            $1B: s := string("GRP0|$100")
+            $1C: s := string("GRP1|$100")
+            $1D: s := string("ENAM0|$100")
+            $1E: s := string("ENAM1|$100")
+            $1F: s := string("ENABL|$100")
+
+            $20: s := string("HMP0|$100")
+            $21: s := string("HMP1|$100")
+            $22: s := string("HMM0|$100")
+            $23: s := string("HMM1|$100")
+            $24: s := string("HMBL|$100")
+            $25: s := string("VDELP0|$100")
+            $26: s := string("VDELP1|$100")
+            $27: s := string("VDELBL|$100")
+            $28: s := string("RESMP0|$100")
+            $29: s := string("RESMP1|$100")
+            $2A: s := string("HMOVE|$100")
+            $2B: s := string("HMCLR|$100")
+            $2C: s := string("CXCLR|$100")
+
 PRI dump(addr, count)
 
     repeat count
@@ -720,7 +836,7 @@ PUB peek(addr) : rc
     if addr.byte[1] == $01
         return byte[ram_ptr][addr & $7F]
     if addr.[12] == 1
-        return byte[rom_ptr][rom_bank + (addr & $FFF)]
+        return byte[rom_ptr][addr & $FFF]
     if addr.[9] == 0 and addr.[7] == 1
         return byte[ram_ptr][addr & $7F]
 

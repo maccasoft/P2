@@ -3,6 +3,12 @@
     Copyright (c) 2024 by Marco Maccaferri <macca@maccasoft.com>
 }
 
+VAR
+
+    byte fg
+    byte bg
+    byte fb_text[640 * 240]
+
 PUB null()
 
 '' This is not an application
@@ -14,18 +20,94 @@ PUB start(pn, fbptr) : rc
 '' --- pn    ... start pin group
 '' --- fbptr ... frame buffer pointer
 
+    bytefill(@fb_text, $00, 640 * 240)
+
+    fg := $87
+    bg := $80
+
     _xf := (VGA_FPIX frac CLKFREQ) >> 1
     _pn := pn & $38
     _fb_ptr := fbptr
+
+    _fb_ovl := @fb_text
+
+    'prints_at((80 - 12) / 2, 3, " Atari 2600 ")
+    'print_at(0, 29, "A")
+
     rc := coginit(COGEXEC_NEW, @driver, 0)
 
-DAT             ' SVGA 800x600@60Hz Driver
+PUB clear()
+
+    bytefill(@fb_text, $00, 640 * 240)
+
+PUB print_at(x, y, ch) | vptr, fptr, b, _fg, _bg
+
+    _fg := fg
+    _bg := bg
+
+    vptr := @fb_text + (y * 640 * 8) + x * 8
+    fptr := @font + ch * 8
+
+    org
+            mov     cnt, #8
+    .loop   rdbyte  b, fptr
+            mov     bit, #7
+            rep     @.l1, #8
+            testb   b, bit      wz
+    if_x1   wrbyte  _fg, vptr
+    if_x0   wrbyte  _bg, vptr
+            add     vptr, #1
+            sub     bit, #1
+    .l1     add     vptr, ##640-8
+            add     fptr, #1
+            djnz    cnt, #.loop
+
+    cnt     long    0
+    bit     long    0
+    end
+
+PUB prints_at(x, y, sptr)
+
+    repeat strsize(sptr)
+        print_at(x++, y, byte[sptr++])
+
+PUB set_colors(_fg, _bg)
+
+    fg := _fg
+    bg := _bg
+
+PUB box(x, y, w, h) | i, c
+
+    print_at(x, y, $DA)
+    repeat i from x + 1 to x + w - 1
+        print_at(i, y, $C4)
+    print_at(x + w - 1, y, $BF)
+
+    repeat c from y + 1 to y + h - 1
+        print_at(x, c, $B3)
+        repeat i from x + 1 to x + w - 2
+            print_at(i, c, $20)
+        print_at(x + w - 1, c, $B3)
+
+    print_at(x, y + h - 1, $C0)
+    repeat i from x + 1 to x + w - 1
+        print_at(i, y + h - 1, $C4)
+    print_at(x + w - 1, y + h - 1, $D9)
+
+PUB fill_with_color(c)
+
+    bytefill(@fb_text, c, 640 * 240)
+
+DAT
                 org     $000
 
 driver
-                add     ptrb, #@driver_lut - @driver
-                setq2   #(@driver_lut_end - @driver_lut) - 1
-                rdlong  0, ptrb
+                mov     _ch, ##@driver_lut_end - 4 - @driver_lut ' Dealing with hub addresses
+                shr     _ch, #2                        ' so byte->long for the lut cell count
+                loc     pb, #@driver_lut - @driver
+                add     pb, ptrb
+                setq2   _ch
+                rdlong  0, pb                           ' Do the hub->lut copy
 
                 setcmod #%01_0_000_0          ' enable colorspace conversion
                 setcy   ##VGA_INTENSITY << 24 ' r      set colorspace for rgb
@@ -48,72 +130,133 @@ driver
                 xor     _pn, #4 | (3 << 6)  ' leave av_base pointing to pin +4 (vertical sync)
                 drvl    _pn
 
-.field
+_field
                 drvnot  _pn                 ' vertical sync on
-                callpa  #4, #.blank         ' do vertical sync blanks
+                callpa  #4, #_blank         ' do vertical sync blanks
                 drvnot  _pn                 ' vertical sync off
 
                 rdlong  _xf, _fb_ptr   wz
         if_nz   mov     _fb, _xf
         if_nz   wrlong  #0, _fb_ptr
 
-                callpa  #23, #.blank        ' vertical blank
+                callpa  #23, #_blank        ' vertical blank
 
-                callpa  #TOP_BORDER_LINES, #.blank ' top border
+                mov     ptrb, _fb_ovl
+
+                mov     _sl, #TOP_BORDER_LINES / 2
+_top
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+                xcont   _bv, #0             ' do before-visible part of scan line
+                rep     @.l1, #160          ' do visible part of scan line
+                rdlong  _ch, ptrb++
+                xcont   _vi, _ch            ' |
+.l1
+                sub     ptrb, ##160 * 4
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+                xcont   _bv, #0             ' do before-visible part of scan line
+                rep     @.l2, #160          ' do visible part of scan line
+                rdlong  _ch, ptrb++
+                xcont   _vi, _ch            ' |
+.l2
+                djnz    _sl, #_top
 
                 mov     ptra, _fb
                 mov     _sl, #VISIBLE_LINES
 
-.line
+_line
                 rdfast  #0, ptra
                 xcont   _bs, #0             ' do before-sync part of scan line
                 xzero   _ds, #1             ' do sync part of scan line
                 xcont   _bv, #0             ' do before-visible part of scan line
-#ifdef _PAL
-                xcont   _vr, #0             ' do visible part of scan line
-#endif                                      ' |
-                rep     @.l1, #160          ' |
-                rfbyte  _ch                 ' |
-                movbyts _ch, #%%0000        ' |
-                xcont   _vi, _ch            ' |
-.l1                                         ' |
-#ifdef _PAL                                 ' |
-                xcont   _vr, #0             ' |
-#endif                                      ' |
+                rep     @.l1, #160          ' do visible part of scan line
 
+                rfbyte  _ch                 ' |
+                movbyts _ch, #%%0000        ' |
+
+                rdlong  _ch_ovl, ptrb++
+                test    _ch_ovl, b0     wz
+        if_nz   getbyte _tmp, _ch_ovl, #0
+        if_nz   setbyte _ch, _tmp, #0
+                test    _ch_ovl, b1     wz
+        if_nz   getbyte _tmp, _ch_ovl, #1
+        if_nz   setbyte _ch, _tmp, #1
+                test    _ch_ovl, b2     wz
+        if_nz   getbyte _tmp, _ch_ovl, #2
+        if_nz   setbyte _ch, _tmp, #2
+                test    _ch_ovl, b3     wz
+        if_nz   getbyte _tmp, _ch_ovl, #3
+        if_nz   setbyte _ch, _tmp, #3
+
+                xcont   _vi, _ch            ' |
+.l1
+                sub     ptrb, ##160 * 4
                 rdfast  #0, ptra
                 xcont   _bs, #0             ' do before-sync part of scan line
                 xzero   _ds, #1             ' do sync part of scan line
                 xcont   _bv, #0             ' do before-visible part of scan line
-#ifdef _PAL
-                xcont   _vr, #0             ' do visible part of scan line
-#endif
-                rep     @.l2, #160          ' |
+                rep     @.l2, #160          ' do visible part of scan line
+
                 rfbyte  _ch                 ' |
                 movbyts _ch, #%%0000        ' |
+
+                rdlong  _ch_ovl, ptrb++
+                test    _ch_ovl, b0     wz
+        if_nz   getbyte _tmp, _ch_ovl, #0
+        if_nz   setbyte _ch, _tmp, #0
+                test    _ch_ovl, b1     wz
+        if_nz   getbyte _tmp, _ch_ovl, #1
+        if_nz   setbyte _ch, _tmp, #1
+                test    _ch_ovl, b2     wz
+        if_nz   getbyte _tmp, _ch_ovl, #2
+        if_nz   setbyte _ch, _tmp, #2
+                test    _ch_ovl, b3     wz
+        if_nz   getbyte _tmp, _ch_ovl, #3
+        if_nz   setbyte _ch, _tmp, #3
+
                 xcont   _vi, _ch            ' |
-.l2                                         ' |
-#ifdef _PAL                                 ' |
-                xcont   _vr, #0             ' |
-#endif                                      ' |
+.l2
 
                 add     ptra, #160
-                djnz    _sl, #.line         ' line loop
+                djnz    _sl, #_line         ' line loop
 
-                callpa  #BOTTOM_BORDER_LINES, #.blank ' bottom border
+                mov     _sl, #BOTTOM_BORDER_LINES / 2
+_bottom
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+                xcont   _bv, #0             ' do before-visible part of scan line
+                rep     @.l1, #160          ' do visible part of scan line
+                rdlong  _ch, ptrb++
+                xcont   _vi, _ch            ' |
+.l1
+                sub     ptrb, ##160 * 4
+                xcont   _bs, #0             ' do before-sync part of scan line
+                xzero   _ds, #1             ' do sync part of scan line
+                xcont   _bv, #0             ' do before-visible part of scan line
+                rep     @.l2, #160          ' do visible part of scan line
+                rdlong  _ch, ptrb++
+                xcont   _vi, _ch            ' |
+.l2
+                djnz    _sl, #_bottom
 
-                callpa  #1, #.blank         ' do bottom blanks
+                callpa  #1, #_blank         ' do bottom blanks
 
-                jmp     #.field             ' frame loop
+                jmp     #_field             ' frame loop
 
-.blank          xcont   _bs, #0             ' do before-sync part of scan line
+_blank          xcont   _bs, #0             ' do before-sync part of scan line
                 xzero   _ds, #1             ' do sync part of scan line
                 xcont   _bv, #0             ' do before-visible part of scan line
                 xcont   _vb, #0             ' do blank part of scan line
-        _ret_   djnz    pa, #.blank         ' loop if more blanks needed
+        _ret_   djnz    pa, #_blank         ' loop if more blanks needed
 
 dacmode_s       long    P_DAC_124R_3V + P_CHANNEL ' %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
 dacmode_c       long    P_DAC_75R_2V + P_CHANNEL  ' %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
+
+b0              long    $00_00_00_FF
+b1              long    $00_00_FF_00
+b2              long    $00_FF_00_00
+b3              long    $FF_00_00_00
 
 _pn             long    VGA_BASE_PIN
 _xf             long    0 ' (VGA_FPIX frac _CLKFREQ) >> 1
@@ -140,6 +283,12 @@ _fb             long    0
 _sl             long    0
 _vx             long    0
 _ch             long    0
+
+_fb_ovl         long    0
+_ch_ovl         long    0
+_tmp            long    0
+
+                fit     $1F0
 
 DAT
                 org     $200
@@ -180,7 +329,31 @@ driver_lut
                 long    $2C3000_00, $4C501C_00, $687034_00, $848C4C_00, $9CA864_00, $B4C078_00, $CCD488_00, $E0EC9C_00
                 long    $442800_00, $644818_00, $846830_00, $A08444_00, $B89C58_00, $D0B46C_00, $E8CC7C_00, $FCE08C_00
 #endif
+
+text_palette                        ' h rgb
+{$80}           long    $000000_00  ' 0 000     0
+                long    $0000AA_00  ' 0 001     1
+                long    $00AA00_00  ' 0 010     2
+                long    $00AAAA_00  ' 0 011     3
+                long    $AA0000_00  ' 0 100     4
+                long    $AA00AA_00  ' 0 101     5
+                long    $AA5500_00  ' 0 110     6
+                long    $AAAAAA_00  ' 0 111     7
+                long    $555555_00  ' 1 000     8
+                long    $5555FF_00  ' 1 001     9
+                long    $55FF55_00  ' 1 010     A
+                long    $55FFFF_00  ' 1 011     B
+                long    $FF5555_00  ' 1 100     C
+                long    $FF55FF_00  ' 1 101     D
+                long    $FFFF55_00  ' 1 110     E
+                long    $FFFFFF_00  ' 1 111     F
+
 driver_lut_end
+
+DAT
+                orgh
+
+font            file    "CGA.F08"
 
 CON ' VGA constants
 

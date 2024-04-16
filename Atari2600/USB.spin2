@@ -15,7 +15,7 @@ CON
   CLKFREQ_PTR = $44
 
   USB_BASE_PIN  = 16
-  USB_ENABLE_OFFSET = -1 ' Set -1 if not present
+  USB_ENABLE_OFFSET = 0 ' Set -1 if not present
   USB_DMINUS_OFFSET = 2 ' Must end up on an even pin. D+ is always this +1
 
   ACTIVITY_LED  = -1
@@ -173,7 +173,7 @@ PUB peek_key() : r | tail
   else
     return keyq_data[tail]
 
-#endif
+#endif ' KEYQUEUE_SIZE > 0
 
 OBJ '' Mouse API
     '' Set HAVE_MOUSE to enable
@@ -213,7 +213,7 @@ PUB mouse_set_limits(xlim,ylim)
 PUB mouse_set_outptr(ptr)
   mouse_outptr := ptr
 
-#endif
+#endif ' HAVE_MOUSE
 
 OBJ '' HIDPad API
     '' Set HAVE_HIDPAD to enable.
@@ -263,7 +263,7 @@ PUB hidpad_hat(dev,hatnum) : r
 PUB get_hidpad_buffer() : r
   return @hidpad_report
 
-#endif
+#endif ' HAVE_HIDPAD
 
 OBJ '' EmuPad API
     '' Set EMUPAD_MAX_PLAYER to enable
@@ -278,7 +278,7 @@ PUB set_emupad_ptr(ptr) ' Call before starting!
 PUB get_emupad_rule_buffer() : r
   return @emupad_rule_buffer
 
-#endif
+#endif ' EMUPAD_MAX_PLAYER > 0
 
 OBJ '' Raw buffer getters (for advanced/debug use)
 
@@ -3887,7 +3887,7 @@ emupad_rule_buffer
 #if EMUPAD_BUILTIN_RULES
 file "padmap_builtin.dat"
 #endif
-byte 0[@emupad_rule_buffer + EMUPAD_MAX_RULES*_EMUPAD_RULE_SIZE - $]
+byte 0[emupad_rule_buffer + EMUPAD_MAX_RULES*_EMUPAD_RULE_SIZE - $]
 '' Default rule directly follows!
 byte long -1, 255, 1,2,3,4,5,6,7,8,9,10
 #endif

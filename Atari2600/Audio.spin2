@@ -1,5 +1,5 @@
 {
-    Atari 2600 Emulator - Audio Driver
+    Atari 2600 Emulator - VGA Driver
     Copyright (c) 2024 by Marco Maccaferri <macca@maccasoft.com>
 }
 
@@ -7,11 +7,11 @@ PUB null()
 
 '' This is not an application
 
-PUB start(_pn, _aud)
+PUB start(_pn, _aud) : rc
 
     sampleRate := CLKFREQ / SAMPLE_RATE
     basePin := _pn addpins 1
-    coginit(COGEXEC_NEW, @audio_driver, _aud)
+    rc := coginit(COGEXEC_NEW, @audio_driver, _aud)
 
 DAT
                 org     $000
@@ -142,7 +142,7 @@ mainLoop
 .tonecur        long    0
 
 .mix            testb   currentSample, #0   wz
-                getbyte arg1, _AUD0, #2         ' AUDV0
+                getnib  arg1, _AUD0, #4         ' AUDV0
                 alts    arg1, #amplitudeTable
                 sumz    mixOut, 0-0
 
@@ -255,7 +255,7 @@ _ch1
 .tonecur        long    0
 
 .mix            testb   currentSample, #1   wz
-                getbyte arg1, _AUD1, #2         ' AUDV1
+                getnib  arg1, _AUD1, #4         ' AUDV1
                 alts    arg1, #amplitudeTable
                 sumz    mixOut, 0-0
 
@@ -297,7 +297,7 @@ _AUD0           long    $00_00_00_00
 _AUD1           long    $00_00_00_00
                 '           || || ++ (B0) AUDCx
                 '           || ++--- (B1) AUDFx
-                '           ++------ (B2) AUDVx
+                '           ++------ (B2,N4) AUDVx
 
 dividerCnt0     res     1
 dividerCnt1     res     1
