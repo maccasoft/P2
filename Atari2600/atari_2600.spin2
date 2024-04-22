@@ -285,6 +285,8 @@ _no_m0
         if_nc   wfbyte  t_pixel
 
                 incmod  t_cnt4, #4-1        wc
+        if_c    mov     t_pf, t_pf+2
+        if_c    mov     t_pf+1, t_pf+3
         if_c    incmod  t_cnt20, #20-1      wc
         if_c    bitnot  _pfs, #9                ' toggle left(0)/right(1) playfields
         if_c    bitnot  _pfs+1, #0              ' toggle left(0)/right(1) colors
@@ -314,7 +316,8 @@ _skip           incmod  _HC, #228-1     wc
 
                 orgf    ($ + 1) & !1   ' must be aligned on even address
 t_pf            long    %00000000000000000000, %00000000000000000000 ' |
-t_pf_colu       long    $00, $00                                     ' |
+                long    %00000000000000000000, %00000000000000000000
+t_pf_colu       long    $00, $00
 t_cnt4          long    0
 t_cnt20         long    0
 
@@ -1323,7 +1326,7 @@ _write          ' ea = address
                 execf   t5
 
 .rom            and     t5, i_rom_mask
-                cmp     t5, i_rom_bs_base   wz  ' Uncomment for 8K F8 ROM
+'                cmp     t5, i_rom_bs_base   wz  ' Uncomment for 8K F8 ROM
 '        if_ne   cmp     t5, i_rom_bs_top    wz  ' |
 '        if_e    testb   t5, #0              wc  ' |
 '        if_e    bitc    rom_addr, #12           ' |
@@ -1407,15 +1410,21 @@ t_pf2           setbyte _PF, t1, #2         ' | | c |   c=PF2
                 getbyte r1, _PF, #2         ' PF2
                 shl     r1, #12             ' |
                 or      r0, r1              ' PF2+PF1+PF0
-                mov     t_pf+0, r0      wz
-
-                muxz    tia_pfbl_0, tia_pf_disable    ' disable pf (with skipf) if all zero
-                muxz    tia_bl_draw, tia_pf_disable ' |
+                mov     t_pf+2, r0      wz
 
                 testb   _PF, #24        wc  ' REF
         if_1x   rev     r0                  ' |
         if_1x   shr     r0, #12             ' |
-        _ret_   mov     t_pf+1, r0
+                mov     t_pf+3, r0
+
+                cmp     _HC, #68        wc
+        if_b    mov     t_pf+0, t_pf+2
+        if_b    mov     t_pf+1, t_pf+3
+
+'                muxz    tia_pfbl_0, tia_pf_disable    ' disable pf (with skipf) if all zero
+'                muxz    tia_bl_draw, tia_pf_disable ' |
+
+                ret
 
 t_grp0          setbyte _P0, t1, #1         ' GRP0d
                 testb   _P0, #25        wc  ' VDELP0
@@ -6378,6 +6387,7 @@ cartridge_rom
 
                 'file    "Asteroids (1981) (Atari) [!].a26"     ' 8K F8 ROM need to uncomment the bank switch code
                 'file    "Ms. Pac-Man (1982) (Atari) [!].a26"
+                'file    "Phoenix (1982) (Atari).a26"
 
 cartridge_rom_end
 
