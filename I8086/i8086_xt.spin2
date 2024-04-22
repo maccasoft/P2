@@ -70,6 +70,12 @@ dma_mode        long    %00000000_00000000_00000000_00000000    ' DMA mode regis
 
                 ' CGA I/O registers
 cga_io_03D4     byte    $00         ' MC6845 Address
+cga_io_03DA     byte    %00000000   ' Read: Status Register
+                                    '   0: retrace.  1=display in vert or horiz retrace.
+                                    '   1: 1=light pen trigger is triggered; 0=armed
+                                    '   2: 1=light pen switch is open; 0=closed
+                                    '   3: 1=vertical sync pulse is occurring.  Display is
+                                    '                 in vertical retrace--access won't cause "snow"
 cga_io_03D8     byte    %00000000   ' Mode Select Register (BIOS keeps current value at 40:0065)
                                     '   0: width (text modes): 0=40 clms; 1=80 clms
                                     '   1: 1=enable graphics modes; 0=text modes
@@ -84,12 +90,6 @@ cga_io_03D9     byte    %00000000   ' Write: Color Select Register
                                     '   4: intensity. Text: bkgd intensity
                                     '                 Mid-res graphics: pixel intensity
                                     '   5: blue. Select grafx palette 0 or 1 (1 adds blue)
-cga_io_03DA     byte    %00000000   ' Read: Status Register
-                                    '   0: retrace.  1=display in vert or horiz retrace.
-                                    '   1: 1=light pen trigger is triggered; 0=armed
-                                    '   2: 1=light pen switch is open; 0=closed
-                                    '   3: 1=vertical sync pulse is occurring.  Display is
-                                    '                 in vertical retrace--access won't cause "snow"
 
                 ' MC6845 registers
 cga_io_mc6845                   '         Unit        R/W         Name                  Size    40x25   80x25   Graphics
@@ -3106,9 +3106,18 @@ video_driver
                 xor     cga_pin_base, #4 | (3 << 6) ' leave av_base pointing to pin +4 (vertical sync)
                 drvl    cga_pin_base                ' vertical polarity (drvh=negative, drvl=positive)
 
+                mov     ptra, cga_chr_p             ' adjust font bitmap for rendering
+                rep     @.chloop, #(8 * 256 / 4) -1 ' |
+                rdlong  cga_tmp0, ptra              ' |
+                rev     cga_tmp0                    ' |
+                movbyts cga_tmp0, #%%0123           ' |
+                wrlong  cga_tmp0, ptra++            ' |
+.chloop
+
 .frame_loop
-                rdbyte  cga_03D8, #@cga_io_03D8 ' Mode Select Register
-                rdbyte  cga_03D9, #@cga_io_03D9 ' Color Select Register
+                rdword  cga_tmp0, #@cga_io_03D8
+                getbyte cga_03D8, cga_tmp0, #0      ' Mode Select Register
+                getbyte cga_03D9, cga_tmp0, #1      ' Color Select Register
 
                 testb   cga_03D8, #CGA_MODE_ENABLE  wz
         if_x0   setword cga_flags, #cga_blank, #0
@@ -3158,8 +3167,9 @@ video_driver
                 jmp     #.end_config
 
 .text_mode
-                rdbyte  cga_mc6845_10, #@cga_io_mc6845 + 10 ' cursor start scanline
-                rdbyte  cga_mc6845_11, #@cga_io_mc6845 + 11 ' cursor end scanline
+                rdword  cga_tmp0, #@cga_io_mc6845 + 10
+                getbyte cga_mc6845_10, cga_tmp0, #0         ' cursor start scanline
+                getbyte cga_mc6845_11, cga_tmp0, #1         ' cursor end scanline
 
                 testb   cga_03D8, #CGA_MODE_80COL   wz
         if_x0   setword cga_flags, #cga_text_40x25, #0
@@ -3184,14 +3194,22 @@ video_driver
                 and     cga_mc6845_10, #%000_11111
                 and     cga_mc6845_11, #%000_11111
 
-                rdword  cga_ramptr, #@cga_io_mc6845 + 12 ' start of displayed page
-                movbyts cga_ramptr, #%%3301
+                rdlong  cga_tmp0, #@cga_io_mc6845 + 12
+                movbyts cga_tmp0, #%%2301
+
+                getword cga_ramptr, cga_tmp0, #0        ' start of displayed page
                 and     cga_ramptr, ##%00_111111_11111111
                 add     cga_ramptr, cga_ram_p
 
-                rdword  cga_cpos, #@cga_io_mc6845 + 14  ' cursor offset address in vid mem
-                movbyts cga_cpos, #%%3301
+                getword cga_cpos, cga_tmp0, #1          ' cursor offset address in vid mem
                 and     cga_cpos, ##%00_111111_11111111
+
+                drvnot  cga_pin_base                ' vertical sync on
+                callpa  #2, #.blank
+                drvnot  cga_pin_base                ' vertical sync off
+
+                callpa  #35, #.blank             ' back porch + top border
+                bitl    cga_03DA, #3
 
                 mov     cga_cptr, #0
                 mov     cga_lcnt, #200
@@ -3207,16 +3225,7 @@ video_driver
                 djnz    cga_lcnt, #.line_loop
 
                 bith    cga_03DA, #3
-                wrbyte  cga_03DA, #@cga_io_03DA
-                callpa  #12, #.blank                ' front porch
-
-                drvnot  cga_pin_base                ' vertical sync on
-                callpa  #2, #.blank
-                drvnot  cga_pin_base                ' vertical sync off
-
-                callpa  #35, #.blank                ' back porch
-                bitl    cga_03DA, #3
-                wrbyte  cga_03DA, #@cga_io_03DA
+                callpa  #12, #.blank              ' bottom border + front porch
 
                 jmp     #.frame_loop
 
@@ -3224,7 +3233,7 @@ video_driver
                 bith    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
                 xcont   cga_bs, #0                  ' do before-sync part of scan line
-                xcont   cga_ds, #1                  ' do sync part of scan line
+                xzero   cga_ds, #1                  ' do sync part of scan line
                 xcont   cga_as, #0                  ' do before-visible part of scan line
                 bitl    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
@@ -3237,7 +3246,7 @@ cga_blank
                 bith    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
                 xcont   cga_bs, #0                  ' do before-sync part of scan line
-                xcont   cga_ds, #1                  ' do sync part of scan line
+                xzero   cga_ds, #1                  ' do sync part of scan line
                 xcont   cga_as, #0                  ' do before-visible part of scan line
                 bitl    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
@@ -3246,7 +3255,7 @@ cga_blank
                 bith    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
                 xcont   cga_bs, #0                  ' do before-sync part of scan line
-                xcont   cga_ds, #1                  ' do sync part of scan line
+                xzero   cga_ds, #1                  ' do sync part of scan line
                 xcont   cga_as, #0                  ' do before-visible part of scan line
                 bitl    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
@@ -3255,49 +3264,34 @@ cga_blank
 ' Text 80x25
 
 cga_text_80x25
-                call    #cga_emit_line80
-                sub     cga_cptr, #80
-                call    #cga_emit_line80
-                sub     cga_cptr, #80
-
-                add     cga_chr_p, #1
-
-                incmod  cga_lofs, #8 - 1   wc
-        if_c    add     cga_cptr, #80
-        if_c    add     cga_ramptr, #80 * 2
-        if_c    sub     cga_chr_p, #8
-
-                ret
-
-cga_emit_line80
+                mov     pb, #2
+.l1
                 rdfast  #0, cga_ramptr
 
                 bith    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
                 xcont   cga_bs, #0                  ' do before-sync part of scan line
-                xcont   cga_ds, #1                  ' do sync part of scan line
+                xzero   cga_ds, #1                  ' do sync part of scan line
                 xcont   cga_as, #0                  ' do before-visible part of scan line
                 bitl    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
 
                 mov     pa, #80 / 4
-.loop
+.l2
                 mov     cga_lut0, #%0000_00000
                 mov     cga_lut1, #%0000_00001
                 setnib  cga_dv8, #%0000, #4
 
-                rep     @.reploop, #4
-
+                rep     @.l3, #4
                 rfword  cga_chattr
 
                 getbyte cga_tmp0, cga_chattr, #0
                 shl     cga_tmp0, #3
                 add     cga_tmp0, cga_chr_p
                 rdbyte  cga_bmp, cga_tmp0
-                rev     cga_bmp
-                shr     cga_bmp, #24
 
-                bitl    cga_chattr, #15             wcz
+                testb   cga_03D9, #CGA_MODE_BLINK   wc
+        if_1x   bitl    cga_chattr, #15             wcz
                 testb   cga_flags, #CGA_BLINK1_ON   andc
         if_c    mov     cga_bmp, #0
 
@@ -3308,65 +3302,62 @@ cga_emit_line80
 
                 getnib  cga_tmp0, cga_chattr, #3    ' background
                 altd    cga_tmp0, #cga_palette      '
-                wrlut   0 - 0, cga_lut0             '
+                wrlut   0-0, cga_lut0             '
                 getnib  cga_tmp0, cga_chattr, #2    ' foreground
                 altd    cga_tmp0, #cga_palette      '
-                wrlut   0 - 0, cga_lut1    '
+                wrlut   0-0, cga_lut1    '
                 xcont   cga_dv8, cga_bmp
 
                 add     cga_cptr, #1
                 add     cga_lut0, #%0001_00000
                 add     cga_lut1, #%0001_00000
                 add     cga_dv8, ##$1_0000
-.reploop
-        _ret_   djnz    pa, #.loop
+.l3
+                djnz    pa, #.l2
 
-' Text 40x25
-
-cga_text_40x25
-                call    #cga_emit_line40
-                sub     cga_cptr, #40
-                call    #cga_emit_line40
-                sub     cga_cptr, #40
+                sub     cga_cptr, #80
+                djnz    pb, #.l1
 
                 add     cga_chr_p, #1
 
-                incmod  cga_lofs, #8 - 1    wc
-        if_c    add     cga_cptr, #40
-        if_c    add     cga_ramptr, #40 * 2
+                incmod  cga_lofs, #8 - 1   wc
+        if_c    add     cga_cptr, #80
+        if_c    add     cga_ramptr, #80 * 2
         if_c    sub     cga_chr_p, #8
 
                 ret
 
-cga_emit_line40
+' Text 40x25
+
+cga_text_40x25
+                mov     pb, #2
+.l1
                 rdfast  #0, cga_ramptr
 
                 bith    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
                 xcont   cga_bs, #0                  ' do before-sync part of scan line
-                xcont   cga_ds, #1                  ' do sync part of scan line
+                xzero   cga_ds, #1                  ' do sync part of scan line
                 xcont   cga_as, #0                  ' do before-visible part of scan line
                 bitl    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
 
                 mov     pa, #40 / 4
-.loop
+.l2
                 mov     cga_lut0, #%0000_00000
                 mov     cga_lut1, #%0000_00001
                 setnib  cga_dv16, #%0000, #4
 
-                rep     @.reploop, #4
-
+                rep     @.l3, #4
                 rfword  cga_chattr
 
                 getbyte cga_tmp0, cga_chattr, #0
                 shl     cga_tmp0, #3
                 add     cga_tmp0, cga_chr_p
                 rdbyte  cga_bmp, cga_tmp0
-                rev     cga_bmp
-                shr     cga_bmp, #24
 
-                bitl    cga_chattr, #15             wcz
+                testb   cga_03D9, #CGA_MODE_BLINK   wc
+        if_1x   bitl    cga_chattr, #15             wcz
                 testb   cga_flags, #CGA_BLINK1_ON   andc
         if_c    mov     cga_bmp, #0
 
@@ -3390,26 +3381,38 @@ cga_emit_line40
                 add     cga_lut0, #%0001_00000
                 add     cga_lut1, #%0001_00000
                 add     cga_dv16, ##$1_0000
-.reploop
-        _ret_   djnz    pa, #.loop
+.l3
+                djnz    pa, #.l2
+
+                sub     cga_cptr, #40
+                djnz    pb, #.l1
+
+                add     cga_chr_p, #1
+
+                incmod  cga_lofs, #8 - 1    wc
+        if_c    add     cga_cptr, #40
+        if_c    add     cga_ramptr, #40 * 2
+        if_c    sub     cga_chr_p, #8
+
+                ret
 
 ' Graphics 320x200x2bpp
 
 cga_graphics_320x200
                 mov     pb, #2
-.loop2
+.l1
                 rdfast  #0, cga_ramptr
 
                 bith    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
                 xcont   cga_bs, #0                  ' do before-sync part of scan line
-                xcont   cga_ds, #1                  ' do sync part of scan line
+                xzero   cga_ds, #1                  ' do sync part of scan line
                 xcont   cga_as, #0                  ' do before-visible part of scan line
                 bitl    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
 
                 mov     pa, #320 / 4
-.loop1
+.l2
                 rfbyte  cga_tmp0
                 testb   cga_tmp0, #7  wc
                 testb   cga_tmp0, #6  wz
@@ -3432,9 +3435,9 @@ cga_graphics_320x200
                 muxz    cga_bmp, cga_muxz33
 
                 xcont   cga_dv8b, cga_bmp
-                djnz    pa, #.loop1
+                djnz    pa, #.l2
 
-                djnz    pb, #.loop2
+                djnz    pb, #.l1
 
                 sub     cga_ramptr, cga_ram_p
                 bitnot  cga_ramptr, #13     wcz
@@ -3454,26 +3457,26 @@ cga_muxz33      long    %0101__0000__0000__0000
 
 cga_graphics_640x200
                 mov     pb, #2
-.loop2
+.l1
                 rdfast  #0, cga_ramptr
 
                 bith    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
                 xcont   cga_bs, #0                  ' do before-sync part of scan line
-                xcont   cga_ds, #1                  ' do sync part of scan line
+                xzero   cga_ds, #1                  ' do sync part of scan line
                 xcont   cga_as, #0                  ' do before-visible part of scan line
                 bitl    cga_03DA, #0
                 wrbyte  cga_03DA, #@cga_io_03DA
 
                 mov     pa, #640 / 8
-.loop1
+.l2
                 rfbyte  cga_bmp
                 rev     cga_bmp
                 shr     cga_bmp, #24
                 xcont   cga_dv8, cga_bmp
-                djnz    pa, #.loop1
+                djnz    pa, #.l2
 
-                djnz    pb, #.loop2
+                djnz    pb, #.l1
 
                 sub     cga_ramptr, cga_ram_p
                 bitnot  cga_ramptr, #13     wcz
