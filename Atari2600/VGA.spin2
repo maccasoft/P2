@@ -131,16 +131,6 @@ driver
                 drvl    _pn
 
 _field
-                drvnot  _pn                 ' vertical sync on
-                callpa  #4, #_blank         ' do vertical sync blanks
-                drvnot  _pn                 ' vertical sync off
-
-                rdlong  _xf, _fb_ptr   wz
-        if_nz   mov     _fb, _xf
-        if_nz   wrlong  #0, _fb_ptr
-
-                callpa  #23, #_blank        ' vertical blank
-
                 mov     ptrb, _fb_ovl
 
                 mov     _sl, #TOP_BORDER_LINES / 2
@@ -240,7 +230,17 @@ _bottom
 .l2
                 djnz    _sl, #_bottom
 
-                callpa  #1, #_blank         ' do bottom blanks
+                callpa  #10, #_blank        ' front porch
+
+                drvnot  _pn                 ' vertical sync on
+                callpa  #2, #_blank         ' |
+                drvnot  _pn                 ' vertical sync off
+
+                rdlong  _xf, _fb_ptr   wz
+        if_nz   mov     _fb, _xf
+        if_nz   wrlong  #0, _fb_ptr
+
+                callpa  #33, #_blank        ' back porch
 
                 jmp     #_field             ' frame loop
 
@@ -261,15 +261,6 @@ b3              long    $FF_00_00_00
 _pn             long    VGA_BASE_PIN
 _xf             long    0 ' (VGA_FPIX frac _CLKFREQ) >> 1
 _fb_ptr         long    0
-#ifdef _PAL
-_bs             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 +  40   ' streamer command: before sync
-_ds             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 + 128   ' streamer command: sync
-_bv             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 +  88   ' streamer command: before visible
-_vb             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 + 800   ' streamer command: blank
-
-_vi             long    X_IMM_4X8_LUT    | X_DACS_3_2_1_0 +   4   ' streamer command: visible
-_vr             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 +  80   ' streamer command: border
-#else
 _bs             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 +  16   ' streamer command: before sync
 _ds             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 +  96   ' streamer command: sync
 _bv             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 +  48   ' streamer command: before visible
@@ -277,7 +268,6 @@ _vb             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 + 640   ' streamer com
 
 _vi             long    X_IMM_4X8_LUT    | X_DACS_3_2_1_0 +   4   ' streamer command: visible
 '_vr             long    X_IMM_1X32_4DAC8 | X_DACS_3_2_1_0 +   0   ' streamer command: border
-#endif
 
 _fb             long    0
 _sl             long    0
@@ -294,24 +284,6 @@ DAT
                 org     $200
 
 driver_lut
-#ifdef _PAL
-                long    $000000_00, $282828_00, $505050_00, $747474_00, $949494_00, $B4B4B4_00, $D0D0D0_00, $F1F1F1_00
-                long    $000000_00, $282828_00, $505050_00, $747474_00, $949494_00, $B4B4B4_00, $D0D0D0_00, $F1F1F1_00
-                long    $805800_00, $947020_00, $A8843C_00, $BC9C58_00, $CCAC70_00, $DCC084_00, $ECD09C_00, $FCE0B0_00
-                long    $445C00_00, $5C7820_00, $74903C_00, $8CAC58_00, $A0C070_00, $B0D484_00, $C4E89C_00, $D4FCB0_00
-                long    $703400_00, $885020_00, $A0683C_00, $B48458_00, $C89870_00, $DCAC84_00, $ECC09C_00, $FCD4B0_00
-                long    $006414_00, $208034_00, $3C9850_00, $58B06C_00, $70C484_00, $84D89C_00, $9CE8B4_00, $B0FCC8_00
-                long    $700014_00, $882034_00, $A03C50_00, $B4586C_00, $C87084_00, $DC849C_00, $EC9CB4_00, $FCB0C8_00
-                long    $005C5C_00, $207474_00, $3C8C8C_00, $58A4A4_00, $70B8B8_00, $84C8C8_00, $9CDCDC_00, $B0ECEC_00
-                long    $70005C_00, $842074_00, $943C88_00, $A8589C_00, $B470B0_00, $C484C0_00, $D09CD0_00, $E0B0E0_00
-                long    $003C70_00, $1C5888_00, $3874A0_00, $508CB4_00, $68A4C8_00, $7CB8DC_00, $90CCEC_00, $A4E0FC_00
-                long    $580070_00, $6C2088_00, $803CA0_00, $9458B4_00, $A470C8_00, $B484DC_00, $C49CEC_00, $D4B0FC_00
-                long    $002070_00, $1C3C88_00, $3858A0_00, $5074B4_00, $6888C8_00, $7CA0DC_00, $90B4EC_00, $A4C8FC_00
-                long    $3C0080_00, $542094_00, $6C3CA8_00, $8058BC_00, $9470CC_00, $A884DC_00, $B89CEC_00, $C8B0FC_00
-                long    $000088_00, $20209C_00, $3C3CB0_00, $5858C0_00, $7070D0_00, $8484E0_00, $9C9CEC_00, $B0B0FC_00
-                long    $000000_00, $282828_00, $505050_00, $747474_00, $949494_00, $B4B4B4_00, $D0D0D0_00, $F1F1F1_00
-                long    $000000_00, $282828_00, $505050_00, $747474_00, $949494_00, $B4B4B4_00, $D0D0D0_00, $F1F1F1_00
-#else
                 long    $000000_00, $404040_00, $6C6C6C_00, $909090_00, $B0B0B0_00, $C8C8C8_00, $DCDCDC_00, $F4F4F4_00
                 long    $444400_00, $646410_00, $848424_00, $A0A034_00, $B8B840_00, $D0D050_00, $E8E85C_00, $FCFC68_00
                 long    $702800_00, $844414_00, $985C28_00, $AC783C_00, $BC8C4C_00, $CCA05C_00, $DCB468_00, $ECC878_00
@@ -328,7 +300,6 @@ driver_lut
                 long    $143800_00, $345C1C_00, $507C38_00, $6C9850_00, $84B468_00, $9CCC7C_00, $B4E490_00, $C8FCA4_00
                 long    $2C3000_00, $4C501C_00, $687034_00, $848C4C_00, $9CA864_00, $B4C078_00, $CCD488_00, $E0EC9C_00
                 long    $442800_00, $644818_00, $846830_00, $A08444_00, $B89C58_00, $D0B46C_00, $E8CC7C_00, $FCE08C_00
-#endif
 
 text_palette                        ' h rgb
 {$80}           long    $000000_00  ' 0 000     0
@@ -359,14 +330,7 @@ CON ' VGA constants
 
     VGA_BASE_PIN = 48
     VGA_INTENSITY = 80    '0..128
-#ifdef _PAL
-    VGA_FPIX = 40_000_000
-    VISIBLE_LINES = 228
-    TOP_BORDER_LINES = (600 - (VISIBLE_LINES * 2)) / 2
-    BOTTOM_BORDER_LINES = 600 - (VISIBLE_LINES * 2) - TOP_BORDER_LINES
-#else
     VGA_FPIX = 25_175_000
     VISIBLE_LINES = 210
     TOP_BORDER_LINES = (480 - (VISIBLE_LINES * 2)) / 2
     BOTTOM_BORDER_LINES = 480 - (VISIBLE_LINES * 2) - TOP_BORDER_LINES
-#endif

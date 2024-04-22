@@ -6,8 +6,7 @@
 }
 CON
 
-    _CLKFREQ = 340_000_000
-    _NTSC
+    _CLKFREQ = 320_000_000
     '_DEBUGGER
 
     VGA_BASE_PIN = 48
