@@ -528,13 +528,25 @@ PRI disassemble(addr) : rc | sptr
              ser.fstr0(string("TXA"))
              rc := addr + 1
         $8C: dump(addr, 3)
-             ser.fstr2(string("STY $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             sptr := reg_name(peek(addr+1))
+             if sptr <> 0
+                 ser.fstr1(string("STY %s"), sptr)
+             else
+                ser.fstr2(string("STY $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
         $8D: dump(addr, 3)
-             ser.fstr2(string("STA $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             sptr := reg_name(peek(addr+1))
+             if sptr <> 0
+                 ser.fstr1(string("STA %s"), sptr)
+             else
+                ser.fstr2(string("STA $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
         $8E: dump(addr, 3)
-             ser.fstr2(string("STX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
+             sptr := reg_name(peek(addr+1))
+             if sptr <> 0
+                 ser.fstr1(string("STX %s"), sptr)
+             else
+                ser.fstr2(string("STX $%2.2x%2.2x"), peek(addr+2), peek(addr+1))
              rc := addr + 3
 
         $90: dump(addr, 2)
@@ -724,56 +736,7 @@ PRI disassemble(addr) : rc | sptr
 PRI reg_name(addr) : s
 
     s := 0
-    if addr.[12] == 0 and addr.[7] == 0
-        case_fast addr & $3F
-            $00: s := string("VSYNC")
-            $01: s := string("VBLANK")
-            $02: s := string("WSYNC")
-            $03: s := string("RSYNC")
-            $04: s := string("NUSIZ0")
-            $05: s := string("NUSIZ1")
-            $06: s := string("COLUP0")
-            $07: s := string("COLUP1")
-            $08: s := string("COLUPF")
-            $09: s := string("COLUBK")
-            $0A: s := string("CTRLPF")
-            $0B: s := string("REFP0")
-            $0C: s := string("REFP1")
-            $0D: s := string("PF0")
-            $0E: s := string("PF1")
-            $0F: s := string("PF2")
-
-            $10: s := string("RESP0")
-            $11: s := string("RESP1")
-            $12: s := string("RESM0")
-            $13: s := string("RESM1")
-            $14: s := string("RESBL")
-            $15: s := string("AUDC0")
-            $16: s := string("AUDC1")
-            $17: s := string("AUDF0")
-            $18: s := string("AUDF1")
-            $19: s := string("AUDV0")
-            $1A: s := string("AUDV1")
-            $1B: s := string("GRP0")
-            $1C: s := string("GRP1")
-            $1D: s := string("ENAM0")
-            $1E: s := string("ENAM1")
-            $1F: s := string("ENABL")
-
-            $20: s := string("HMP0")
-            $21: s := string("HMP1")
-            $22: s := string("HMM0")
-            $23: s := string("HMM1")
-            $24: s := string("HMBL")
-            $25: s := string("VDELP0")
-            $26: s := string("VDELP1")
-            $27: s := string("VDELBL")
-            $28: s := string("RESMP0")
-            $29: s := string("RESMP1")
-            $2A: s := string("HMOVE")
-            $2B: s := string("HMCLR")
-            $2C: s := string("CXCLR")
-    elseif addr.[12] == 0 and addr.[8] == 0 and addr.[7] == 0
+    if addr.[12] == 0 and addr.[8] == 1 and addr.[7] == 0
         case_fast addr & $3F
             $00: s := string("VSYNC|$100")
             $01: s := string("VBLANK|$100")
@@ -822,6 +785,55 @@ PRI reg_name(addr) : s
             $2A: s := string("HMOVE|$100")
             $2B: s := string("HMCLR|$100")
             $2C: s := string("CXCLR|$100")
+    elseif addr.[12] == 0 and addr.[7] == 0
+        case_fast addr & $3F
+            $00: s := string("VSYNC")
+            $01: s := string("VBLANK")
+            $02: s := string("WSYNC")
+            $03: s := string("RSYNC")
+            $04: s := string("NUSIZ0")
+            $05: s := string("NUSIZ1")
+            $06: s := string("COLUP0")
+            $07: s := string("COLUP1")
+            $08: s := string("COLUPF")
+            $09: s := string("COLUBK")
+            $0A: s := string("CTRLPF")
+            $0B: s := string("REFP0")
+            $0C: s := string("REFP1")
+            $0D: s := string("PF0")
+            $0E: s := string("PF1")
+            $0F: s := string("PF2")
+
+            $10: s := string("RESP0")
+            $11: s := string("RESP1")
+            $12: s := string("RESM0")
+            $13: s := string("RESM1")
+            $14: s := string("RESBL")
+            $15: s := string("AUDC0")
+            $16: s := string("AUDC1")
+            $17: s := string("AUDF0")
+            $18: s := string("AUDF1")
+            $19: s := string("AUDV0")
+            $1A: s := string("AUDV1")
+            $1B: s := string("GRP0")
+            $1C: s := string("GRP1")
+            $1D: s := string("ENAM0")
+            $1E: s := string("ENAM1")
+            $1F: s := string("ENABL")
+
+            $20: s := string("HMP0")
+            $21: s := string("HMP1")
+            $22: s := string("HMM0")
+            $23: s := string("HMM1")
+            $24: s := string("HMBL")
+            $25: s := string("VDELP0")
+            $26: s := string("VDELP1")
+            $27: s := string("VDELBL")
+            $28: s := string("RESMP0")
+            $29: s := string("RESMP1")
+            $2A: s := string("HMOVE")
+            $2B: s := string("HMCLR")
+            $2C: s := string("CXCLR")
 
 PRI dump(addr, count)
 

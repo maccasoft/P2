@@ -222,11 +222,11 @@ PRI showMenu() | ptr, selection, src, size, i
     debug_cog := -1
 
     video.set_colors($87, $80)
-    video.box(18, 8, 44, 18)
+    video.box(18, 6, 44, 20)
 
     ptr := @rom0
     repeat while long[ptr] <> 0
-        video.prints_at(19, selection + 9, ptr + 4)
+        video.prints_at(19, selection + 7, ptr + 4)
         ptr += long[ptr]
         selection++
 
@@ -243,12 +243,12 @@ PRI showMenu() | ptr, selection, src, size, i
 
     repeat
         video.set_colors($80, $87)
-        video.prints_at(19, selection + 9, ptr + 4)
+        video.prints_at(19, selection + 7, ptr + 4)
 
         if usb.keystate(usb.KEY_UP) or pad0.[usb.EMUPAD_UP_BIT] or pad1.[usb.EMUPAD_UP_BIT]
             if selection > 0
                 video.set_colors($87, $80)
-                video.prints_at(19, selection + 9, ptr + 4)
+                video.prints_at(19, selection + 7, ptr + 4)
 
                 selection--
 
@@ -262,7 +262,7 @@ PRI showMenu() | ptr, selection, src, size, i
         if usb.keystate(usb.KEY_DOWN) or pad0.[usb.EMUPAD_DOWN_BIT] or pad1.[usb.EMUPAD_DOWN_BIT]
             if long[ptr + long[ptr]] <> 0
                 video.set_colors($87, $80)
-                video.prints_at(19, selection + 9, ptr + 4)
+                video.prints_at(19, selection + 7, ptr + 4)
 
                 selection++
 
@@ -315,7 +315,7 @@ DAT             ' M6507
 m6507
                 loc     pb, #@m6507_lut - @m6507
                 add     pb, ptrb
-                setq2   ##(@m6507_lut_end - 4 - @m6507_lut) / 4
+                setq2   #(@m6507_lut_end - @m6507_lut - 4) / 4
                 rdlong  0, pb
 
                 mov     ea, ##$0FFC         ' read reset vector (atari rom)
@@ -328,8 +328,6 @@ m6507
                 jmp     #.resume1
 #endif
 .loop
-                'getct   ct                  ' start counter (debug)
-                'mov     _I, #0              ' reset instruction timing (debug)
                 call    #\_fetch            ' fetch instruction
 
                 shl     t1, #2              ' decode instruction
@@ -610,9 +608,31 @@ m6532_timint    long    %1111111_000 ' b -> 10 clk
 ' Instructions
 '
 
+t_vsync         testb   t1, #1          wc
+                bitc    _SYSF, #0       wcz
+        if_nc   ret     wcz
+
+                rdlong  _SW, ppa_addr
+                rdlong  _INPT, tia_inptp
+
+#ifdef _DEBUGGER
+                wrfast  #0, tia_fb0
+#else
+                bitnot  _SYSF, #31      wcz ' c=old display buffer
+        if_0x   wrlong  tia_fb0, tia_fbp    ' old is fb1, display fb0
+        if_0x   wrfast  #0, tia_fb1         ' write to fb1
+        if_1x   wrlong  tia_fb1, tia_fbp    ' old is fb0, display fb1
+        if_1x   wrfast  #0, tia_fb0         ' write to fb0
+#endif
+.w              rdlong  r0, tia_fbp     wz  ' wait buffer ack
+        if_nz   jmp     #.w                 ' |
+
+                mov     _VC, #0
+        _ret_   setd    tia_clock, #0
+
 i_wsync         callpa  #3, #_inc_cycles
                 cmp     _HC, #0         wz
-        if_nz   jmp     #i_wsync
+        if_nz   jmp     #\i_wsync
                 ret
                                             '       C NVZC
 i_branch        call    #\_fetch            ' BCC: %0_1110_0
@@ -808,9 +828,6 @@ t_setup_position
                 getbyte r0
                 jmp     r0
 
-t_resm0         call    #\get_resx
-                add     r0, #4
-                mov     tia_resm0, r0
 t_resm0_update
                 getbyte r0, _P0, #2         ' NUSIZ (D2-D0)
                 mov     pa, tia_resm0
@@ -820,9 +837,6 @@ t_resm0_update2
                 sets    _m0_res+1, t3
         _ret_   sets    _m0_res+2, t4
 
-t_resm1         call    #\get_resx
-                add     r0, #4
-                mov     tia_resm1, r0
 t_resm1_update
                 getbyte r0, _P1, #2         ' NUSIZ (D2-D0)
                 mov     pa, tia_resm1
@@ -832,32 +846,21 @@ t_resm1_update2
                 sets    _m1_res+1, t3
         _ret_   sets    _m1_res+2, t4
 
-t_res           call    #\get_resx          ' a b e
-t_res_p0o       add     r0, #5              ' a | |
-t_res_p1o       add     r0, #5              ' | b |
-                add     r0, #4              ' | | e
-                mov     tia_resp0, r0       ' a | |
-                jmp     #t_update_p0        ' a | |  RESP0:    %001100
-                mov     tia_resp1, r0       '   b |
-                jmp     #t_update_p1        '   b |  RESP1:  %00111010
-        _ret_   setbyte _bl_res, r0, #0     '     e  RESBL: %011110110
-
-i_brk           incmod  _PC, i_ffff
-                getbyte t1, _PC, #1         ' PCH -> (S)
-                call    #_push_t1
-                getbyte t1, _PC, #0         ' PCL -> (S)
-                call    #_push_t1
-                getbyte t1, _P, #0          ' P -> (S)
-                bith    t1, #REGP_B         ' B=1
-                call    #_push_t1
-
-                bith    _P, #REGP_I         ' I=1
-
-                mov     _PC, ##$FFFE        ' read interrupt vector
-                call    #\_fetch2           ' |
-                getword _PC, t4, #0         ' |
-                mov     pa, #3              ' |
-                jmp     #_inc_cycles        ' |
+t_res           call    #\get_resx          ' a b c d e
+t_res_p0o       add     r0, #5              ' a | | | |
+t_res_p1o       add     r0, #5              ' | b | | |
+                add     r0, #4              ' | | c d e
+                cmpsub  r0, #228        wc  ' a b c d e
+        if_c    add     r0, #68             ' a b c d e
+                mov     tia_resp0, r0       ' a | | | |
+                jmp     #t_update_p0        ' a | | | |  RESP0:        %00001100
+                mov     tia_resp1, r0       '   b | | |
+                jmp     #t_update_p1        '   b | | |  RESP1:      %0011001010
+                mov     tia_resm0, r0       '     c | |
+                jmp     #t_resm0_update     '     c | |  RESM0:    %001111000110
+                mov     tia_resm1, r0       '       d |
+                jmp     #t_resm1_update     '       d |  RESM1:  %00111111000110
+        _ret_   setbyte _bl_res, r0, #0     '         e  RESBL: %011111111000110
 
 i_jmp_imm       call    #\_fetch2
         _ret_   getword _PC, t4, #0
@@ -1131,7 +1134,7 @@ r0              res     1
 r1              res     1
 r2              res     1
 
-                                ' 21 longs unused
+                                ' 3 longs unused
                 fit     $1F6    ' ($1F0) ijmp/iret registers not used
 
 DAT             ' M6507 LUT
@@ -1143,6 +1146,23 @@ m6507_lut
 '
 ' Instructions
 '
+
+i_brk           incmod  _PC, i_ffff
+                getbyte t1, _PC, #1         ' PCH -> (S)
+                call    #_push_t1
+                getbyte t1, _PC, #0         ' PCL -> (S)
+                call    #_push_t1
+                getbyte t1, _P, #0          ' P -> (S)
+                bith    t1, #REGP_B         ' B=1
+                call    #_push_t1
+
+                bith    _P, #REGP_I         ' I=1
+
+                mov     _PC, ##$FFFE        ' read interrupt vector
+                call    #\_fetch2           ' |
+                getword _PC, t4, #0         ' |
+                mov     pa, #3              ' |
+                jmp     #_inc_cycles        ' |
 
 i_cmp_abs       call    #\_fetch_abs        ' %xxx_0_1_1111110
 i_cmp_abs_x     call    #\_fetch_abs_x      ' %xxx_0_1_111110
@@ -1577,32 +1597,6 @@ _write          ' ea = address
 ' TIA Port Write
 '
 
-t_vsync         testb   t1, #1          wc
-                bitc    _SYSF, #0       wcz
-        if_nc   ret     wcz
-
-                rdlong  _SW, ppa_addr
-                rdlong  _INPT, tia_inptp
-                'testp   #RESET_PIN      wc
-                'bitc    _SW, #16+0
-                'testp   #SELECT_PIN     wc
-                'bitc    _SW, #16+1
-
-#ifdef _DEBUGGER
-                wrfast  #0, tia_fb0
-#else
-                bitnot  _SYSF, #31      wcz ' c=old display buffer
-        if_0x   wrlong  tia_fb0, tia_fbp    ' old is fb1, display fb0
-        if_0x   wrfast  #0, tia_fb1         ' write to fb1
-        if_1x   wrlong  tia_fb1, tia_fbp    ' old is fb0, display fb1
-        if_1x   wrfast  #0, tia_fb0         ' write to fb0
-#endif
-.w              rdlong  r0, tia_fbp     wz  ' wait buffer ack
-        if_nz   jmp     #.w                 ' |
-
-                mov     _VC, #0
-        _ret_   setd    tia_clock, #0
-
 t_vblank        testb   t1, #1          wc
         _ret_   bitc    _SYSF, #1
 
@@ -1709,13 +1703,15 @@ t_refp          testb   t1, #3          wz  ' a b | |
                 bitz    _P1, #24            '   b   |
                 jmp     #\t_update_p1       '   b   d   b=REFP1:   %00110
 
-t_vdelp0        testb   t1, #0          wz
-                bitz    _P0, #25
-                jmp     #\t_update_p0
-
-t_vdelp1        testb   t1, #0          wz
-                bitz    _P1, #25
-                jmp     #\t_update_p1
+t_vdel          testb   t1, #0          wz  ' a b   c   a=VDELP0:       %000
+                bitz    _P0, #25            ' a |   |   b=VDELP1:     %00110
+                jmp     #\t_update_p0       ' a |   |   c=VDELBL: %000011110
+                bitz    _P1, #25            '   b   |
+                jmp     #\t_update_p1       '   b   |
+                bitz    _MB, #29            '       c
+        if_x1   testb   _MB, #26        wc  '       c   ENABL
+        if_x0   testb   _MB, #30        wc  '       c   ENABLd
+        _ret_   muxnc   tia_pfbl_0, tia_bl_disable' c   BALL ENABLED
 
 
 t_enam0         testb   t1, #1          wz
@@ -1765,12 +1761,6 @@ t_enabl         testb   t1, #1          wz
                 testb   _MB, #29        wc  ' VDELBL
         if_0x   muxnz   tia_pfbl_0, tia_bl_disable ' BALL ENABLED
         _ret_   bitz    _MB, #30            ' ENABLd
-
-t_vdelbl        testb   t1, #0          wz
-                bitz    _MB, #29
-        if_x1   testb   _MB, #26        wc  ' ENABL
-        if_x0   testb   _MB, #30        wc  ' ENABLd
-        _ret_   muxnc   tia_pfbl_0, tia_bl_disable ' BALL ENABLED
 
 t_cxclr
         _ret_   mov     _COLL, #0
@@ -1824,7 +1814,7 @@ get_resx
         if_be   add     r0, #158
         _ret_   add     r0, #68
 
-                fit     $400                ' 18 longs unused
+                fit     $400                ' 7 longs unused
 
 m6507_lut_end
 
@@ -2416,11 +2406,11 @@ tia_write_table
 {0E}            long    t_pf1     |                %10 << 10 ' PF1    : playfield register byte 1 (D7-0)
 {0F}            long    t_pf2     |                 %0 << 10 ' PF2    : playfield register byte 2 (D7-0)
 
-{10}            long    t_res     |            %001100 << 10 ' RESP0  : reset player 0 (strobe)
-{11}            long    t_res     |          %00111010 << 10 ' RESP1  : reset player 1 (strobe)
-{12}            long    t_resm0   |                 %0 << 10 ' RESM0  : reset missle 0 (strobe)
-{13}            long    t_resm1   |                 %0 << 10 ' RESM1  : reset missle 1 (strobe)
-{14}            long    t_res     |         %011110110 << 10 ' RESBL  : reset ball (strobe)
+{10}            long    t_res     |          %00001100 << 10 ' RESP0  : reset player 0 (strobe)
+{11}            long    t_res     |        %0011001010 << 10 ' RESP1  : reset player 1 (strobe)
+{12}            long    t_res     |      %001111000110 << 10 ' RESM0  : reset missle 0 (strobe)
+{13}            long    t_res     |    %00111111000110 << 10 ' RESM1  : reset missle 1 (strobe)
+{14}            long    t_res     |   %011111111000110 << 10 ' RESBL  : reset ball (strobe)
 {15}            long    t_aud0    |           %0_110_0 << 10 ' AUDC0  : audio control 0 (D3-0)
 {16}            long    t_aud1    |           %0_110_0 << 10 ' AUDC1  : audio control 1 (D4-0)
 {17}            long    t_aud0    |           %0_101_0 << 10 ' AUDF0  : audio frequency 0 (D4-0)
@@ -2439,9 +2429,9 @@ tia_write_table
 {22}            long    t_hm      |              %0110 << 10 ' HMM0   : horizontal motion missle 0 (D7-4)
 {23}            long    t_hm      |             %01110 << 10 ' HMM1   : horizontal motion missle 1 (D7-4)
 {24}            long    t_hm      |            %011110 << 10 ' HMBL   : horizontal motion ball (D7-4)
-{25}            long    t_vdelp0  |                 %0 << 10 ' VDELP0 : vertical delay player 0 (D0)
-{26}            long    t_vdelp1  |                 %0 << 10 ' VDELP1 : vertical delay player 1 (D0)
-{27}            long    t_vdelbl  |                 %0 << 10 ' VDELBL : vertical delay ball (D0)
+{25}            long    t_vdel    |               %000 << 10 ' VDELP0 : vertical delay player 0 (D0)
+{26}            long    t_vdel    |             %00110 << 10 ' VDELP1 : vertical delay player 1 (D0)
+{27}            long    t_vdel    |         %000011110 << 10 ' VDELBL : vertical delay ball (D0)
 
 {28}            long    t_resmp0  |                 %0 << 10 ' RESMP0 : reset missle 0 to player 0 (D1)
 {29}            long    t_resmp1  |                 %0 << 10 ' RESMP1 : reset missle 1 to player 1 (D1)
@@ -2555,76 +2545,86 @@ rom0            long    @.end - @rom0
 .end
 
 rom1            long    @.end - @rom1
+                byte    " Centipede                  (1982, Atari) ", $00
+                file    "Centipede (1982) (Atari) [!].a26"
+.end
+
+rom2            long    @.end - @rom2
                 byte    " Demon Attack              (1982, Imagic) ", $00
                 file    "Demon Attack (1982) (Imagic) [!].a26"
 .end
 
-rom2            long    @.end - @rom2
+rom3            long    @.end - @rom3
                 byte    " Freeway               (1981, Activision) ", $00
                 file    "Freeway (1981) (Activision) [!].a26"
 .end
 
-rom3            long    @.end - @rom3
+rom4            long    @.end - @rom4
                 byte    " Frogger              (1982, Parker Bros) ", $00
                 file    "Frogger (1982) (Parker Bros) [!].a26"
 .end
 
-rom4            long    @.end - @rom4
+rom5            long    @.end - @rom5
                 byte    " H.E.R.O.              (1984, Activision) ", $00
                 file    "H.E.R.O. (1984) (Activision) [!].a26"
 .end
 
-rom5            long    @.end - @rom5
+rom6            long    @.end - @rom6
                 byte    " Joust                      (1982, Atari) ", $00
                 file    "Joust (1982) (Atari) [!].a26"
 .end
 
-rom6            long    @.end - @rom6
+rom7            long    @.end - @rom7
                 byte    " Kangaroo                   (1983, Atari) ", $00
                 file    "Kangaroo (1983) (Atari) [!].a26"
 .end
 
-rom7            long    @.end - @rom7
+rom8            long    @.end - @rom8
                 byte    " Keystone Kapers       (1983, Activision) ", $00
                 file    "Keystone Kapers (1983) (Activision) [!].a26"
 .end
 
-rom8            long    @.end - @rom8
+rom9            long    @.end - @rom9
                 byte    " Megamania             (1982, Activision) ", $00
                 file    "Megamania (1982) (Activision) [!].a26"
 .end
 
-rom9            long    @.end - @rom9
+rom10           long    @.end - @rom10
                 byte    " Missile Command            (1981, Atari) ", $00
                 file    "Missile Command (1981) (Atari) [!].a26"
 .end
 
-rom10           long    @.end - @rom10
+rom11           long    @.end - @rom11
                 byte    " Moon Patrol                (1983, Atari) ", $00
                 file    "Moon Patrol (1983) (Atari).a26"
 .end
 
-rom11           long    @.end - @rom11
+rom12           long    @.end - @rom12
                 byte    " Ms. Pac-Man                (1982, Atari) ", $00
                 file    "Ms. Pac-Man (1982) (Atari) [!].a26"
 .end
 
-rom12           long    @.end - @rom12
+rom13           long    @.end - @rom13
+                byte    " Phoenix                    (1982, Atari) ", $00
+                file    "Phoenix (1982) (Atari).a26"
+.end
+
+rom14           long    @.end - @rom14
                 byte    " Pitfall!              (1982, Activision) ", $00
                 file    "Pitfall! (1982) (Activision) [!].a26"
 .end
 
-rom13           long    @.end - @rom13
+rom15           long    @.end - @rom15
                 byte    " Pole Position              (1983, Atari) ", $00
                 file    "Pole Position (1983) (Atari) [!].a26"
 .end
 
-rom14           long    @.end - @rom14
+rom16           long    @.end - @rom16
                 byte    " River Raid            (1982, Activision) ", $00
                 file    "River Raid (1982) (Activision) [!].a26"
 .end
 
-rom15           long    @.end - @rom15
+rom17           long    @.end - @rom17
                 byte    " Space Invaders             (1978, Atari) ", $00
                 file    "Space Invaders (1978) (Atari) [!].a26"
 .end
